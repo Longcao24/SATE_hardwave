@@ -1,0 +1,894 @@
+{
+  "segments": [
+    {
+      "end": 4.44,
+      "text": "Hey tell me this story.",
+      "start": 3.48,
+      "words": [
+        {
+          "end": 3.56,
+          "word": "Hey",
+          "start": 3.48
+        },
+        {
+          "end": 3.74,
+          "word": "tell",
+          "start": 3.58
+        },
+        {
+          "end": 3.87,
+          "word": "me",
+          "start": 3.74
+        },
+        {
+          "end": 4.08,
+          "word": "this",
+          "start": 3.87
+        },
+        {
+          "end": 4.42,
+          "word": "story.",
+          "start": 4.08
+        }
+      ],
+      "pauses": [],
+      "speaker": "SPEAKER_01",
+      "morphemes": [],
+      "fillerwords": [],
+      "repetitions": [],
+      "morpheme_omissions": []
+    },
+    {
+      "end": 7.08,
+      "text": "",
+      "start": 4.42,
+      "words": [],
+      "pauses": [
+        {
+          "end": 7.08,
+          "start": 4.42,
+          "duration": 2.66
+        }
+      ],
+      "speaker": "PAUSE",
+      "excluded": false,
+      "morphemes": [],
+      "fillerwords": [],
+      "repetitions": [],
+      "morpheme_omissions": []
+    },
+    {
+      "end": 7.92,
+      "text": "A rabbit.",
+      "start": 7.08,
+      "words": [
+        {
+          "end": 7.16,
+          "word": "A",
+          "start": 7.08
+        },
+        {
+          "end": 7.92,
+          "word": "rabbit.",
+          "start": 7.22
+        }
+      ],
+      "pauses": [],
+      "speaker": "SPEAKER_00",
+      "excluded": true,
+      "morphemes": [],
+      "fillerwords": [],
+      "repetitions": [],
+      "morpheme_omissions": []
+    },
+    {
+      "end": 8.66,
+      "text": "",
+      "start": 7.92,
+      "words": [],
+      "pauses": [
+        {
+          "end": 8.66,
+          "start": 7.92,
+          "duration": 0.74
+        }
+      ],
+      "speaker": "PAUSE",
+      "morphemes": [],
+      "fillerwords": [],
+      "repetitions": [],
+      "morpheme_omissions": []
+    },
+    {
+      "end": 12.62,
+      "text": "Some help with the [UM] with",
+      "start": 8.66,
+      "words": [
+        {
+          "end": 9.28,
+          "word": "Some",
+          "start": 8.66
+        },
+        {
+          "end": 9.74,
+          "word": "help",
+          "start": 9.28
+        },
+        {
+          "end": 10.16,
+          "word": "with",
+          "start": 9.76
+        },
+        {
+          "end": 10.6,
+          "word": "the",
+          "start": 10.16
+        },
+        {
+          "end": 11.22,
+          "word": "[UM]",
+          "start": 10.64
+        },
+        {
+          "end": 12.24,
+          "word": "with",
+          "start": 11.82
+        }
+      ],
+      "pauses": [
+        {
+          "end": 11.82,
+          "start": 11.22,
+          "duration": 0.6
+        }
+      ],
+      "speaker": "SPEAKER_00",
+      "morphemes": [],
+      "fillerwords": [
+        {
+          "end": 11.22,
+          "start": 10.64,
+          "content": "[UM]",
+          "duration": 0.58
+        }
+      ],
+      "repetitions": [],
+      "morpheme_omissions": [
+        {
+          "word": "help",
+          "index": 1,
+          "lemma": "help",
+          "morpheme_form": "<OMI>",
+          "inflectional_morpheme": "3rd Person Singular"
+        }
+      ]
+    },
+    {
+      "end": 14.32,
+      "text": "the dog.",
+      "start": 12.62,
+      "words": [
+        {
+          "end": 13.28,
+          "word": "the",
+          "start": 12.62
+        },
+        {
+          "end": 14.32,
+          "word": "dog.",
+          "start": 13.74
+        }
+      ],
+      "pauses": [
+        {
+          "end": 12.62,
+          "start": 12.24,
+          "duration": 0.38
+        },
+        {
+          "end": 13.74,
+          "start": 13.28,
+          "duration": 0.46
+        }
+      ],
+      "speaker": "SPEAKER_00",
+      "morphemes": [],
+      "fillerwords": [],
+      "repetitions": [],
+      "morpheme_omissions": []
+    },
+    {
+      "end": 15.08,
+      "text": "",
+      "start": 14.32,
+      "words": [],
+      "pauses": [
+        {
+          "end": 15.08,
+          "start": 14.32,
+          "duration": 0.76
+        }
+      ],
+      "speaker": "PAUSE",
+      "morphemes": [],
+      "fillerwords": [],
+      "repetitions": [],
+      "morpheme_omissions": []
+    },
+    {
+      "end": 18.96,
+      "text": "And you want some help to with me.",
+      "start": 15.08,
+      "words": [
+        {
+          "end": 15.68,
+          "word": "And",
+          "start": 15.08
+        },
+        {
+          "end": 16.58,
+          "word": "you",
+          "start": 16.34
+        },
+        {
+          "end": 16.86,
+          "word": "want",
+          "start": 16.58
+        },
+        {
+          "end": 17.15,
+          "word": "some",
+          "start": 16.86
+        },
+        {
+          "end": 17.64,
+          "word": "help",
+          "start": 17.15
+        },
+        {
+          "end": 18.26,
+          "word": "to",
+          "start": 17.78
+        },
+        {
+          "end": 18.61,
+          "word": "with",
+          "start": 18.32
+        },
+        {
+          "end": 18.96,
+          "word": "me.",
+          "start": 18.61
+        }
+      ],
+      "pauses": [
+        {
+          "end": 16.34,
+          "start": 15.68,
+          "duration": 0.66
+        }
+      ],
+      "speaker": "SPEAKER_00",
+      "morphemes": [],
+      "fillerwords": [],
+      "repetitions": [],
+      "morpheme_omissions": []
+    },
+    {
+      "end": 21.5,
+      "text": "You know how to make a sand castle.",
+      "start": 19.12,
+      "words": [
+        {
+          "end": 19.3,
+          "word": "You",
+          "start": 19.12
+        },
+        {
+          "end": 19.51,
+          "word": "know",
+          "start": 19.3
+        },
+        {
+          "end": 19.73,
+          "word": "how",
+          "start": 19.51
+        },
+        {
+          "end": 19.95,
+          "word": "to",
+          "start": 19.73
+        },
+        {
+          "end": 20.32,
+          "word": "make",
+          "start": 19.95
+        },
+        {
+          "end": 20.54,
+          "word": "a",
+          "start": 20.32
+        },
+        {
+          "end": 20.92,
+          "word": "sand",
+          "start": 20.54
+        },
+        {
+          "end": 21.5,
+          "word": "castle.",
+          "start": 20.96
+        }
+      ],
+      "pauses": [],
+      "speaker": "SPEAKER_00",
+      "morphemes": [],
+      "fillerwords": [],
+      "repetitions": [],
+      "morpheme_omissions": []
+    },
+    {
+      "end": 22.21,
+      "text": "Okay.",
+      "start": 21.55,
+      "words": [
+        {
+          "end": 22.19,
+          "word": "Okay.",
+          "start": 21.55
+        }
+      ],
+      "pauses": [],
+      "speaker": "SPEAKER_00",
+      "morphemes": [],
+      "fillerwords": [],
+      "repetitions": [],
+      "morpheme_omissions": []
+    },
+    {
+      "end": 25.21,
+      "text": "",
+      "start": 22.19,
+      "words": [],
+      "pauses": [
+        {
+          "end": 25.21,
+          "start": 22.19,
+          "duration": 3.02
+        }
+      ],
+      "speaker": "PAUSE",
+      "morphemes": [],
+      "fillerwords": [],
+      "repetitions": [],
+      "morpheme_omissions": []
+    },
+    {
+      "end": 29.21,
+      "text": "And he [UM] the rabbit make [UH] sand castle.",
+      "start": 25.21,
+      "words": [
+        {
+          "end": 25.43,
+          "word": "And",
+          "start": 25.21
+        },
+        {
+          "end": 25.85,
+          "word": "he",
+          "start": 25.43
+        },
+        {
+          "end": 26.38,
+          "word": "[UM]",
+          "start": 25.95
+        },
+        {
+          "end": 26.6,
+          "word": "the",
+          "start": 26.38
+        },
+        {
+          "end": 27.16,
+          "word": "rabbit",
+          "start": 26.6
+        },
+        {
+          "end": 27.69,
+          "word": "make",
+          "start": 27.16
+        },
+        {
+          "end": 28.09,
+          "word": "[UH]",
+          "start": 27.69
+        },
+        {
+          "end": 28.65,
+          "word": "sand",
+          "start": 28.15
+        },
+        {
+          "end": 29.19,
+          "word": "castle.",
+          "start": 28.67
+        }
+      ],
+      "pauses": [],
+      "speaker": "SPEAKER_00",
+      "morphemes": [],
+      "fillerwords": [
+        {
+          "end": 26.38,
+          "start": 25.95,
+          "content": "[UM]",
+          "duration": 0.43
+        },
+        {
+          "end": 28.09,
+          "start": 27.69,
+          "content": "[UH]",
+          "duration": 0.4
+        }
+      ],
+      "repetitions": [],
+      "morpheme_omissions": [
+        {
+          "word": "make",
+          "index": 5,
+          "lemma": "make",
+          "morpheme_form": "<OMI>",
+          "inflectional_morpheme": "3rd Person Singular"
+        }
+      ]
+    },
+    {
+      "end": 34.51,
+      "text": "",
+      "start": 29.19,
+      "words": [],
+      "pauses": [
+        {
+          "end": 34.51,
+          "start": 29.19,
+          "duration": 5.32
+        }
+      ],
+      "speaker": "PAUSE",
+      "morphemes": [],
+      "fillerwords": [],
+      "repetitions": [],
+      "morpheme_omissions": []
+    },
+    {
+      "end": 41.3,
+      "text": "The rabbit dumped all the sand to the the sand castle.",
+      "salt":"The rabbit dumped all the sand to the the sand castle.",
+      "start": 34.51,
+      "words": [
+        {
+          "end": 34.59,
+          "word": "The",
+          "start": 34.51
+        },
+        {
+          "end": 35.27,
+          "word": "rabbit",
+          "start": 34.65
+        },
+        {
+          "end": 35.77,
+          "word": "dumped",
+          "start": 35.27
+        },
+        {
+          "end": 36.26,
+          "word": "all",
+          "start": 35.85
+        },
+        {
+          "end": 36.51,
+          "word": "the",
+          "start": 36.26
+        },
+        {
+          "end": 37.15,
+          "word": "sand",
+          "start": 36.53
+        },
+        {
+          "end": 37.75,
+          "word": "to",
+          "start": 37.23
+        },
+        {
+          "end": 38.35,
+          "word": "the",
+          "start": 37.85
+        },
+        {
+          "end": 40.31,
+          "word": "the",
+          "start": 39.73
+        },
+        {
+          "end": 40.71,
+          "word": "sand",
+          "start": 40.33
+        },
+        {
+          "end": 41.27,
+          "word": "castle.",
+          "start": 40.71
+        }
+      ],
+      "pauses": [
+        {
+          "end": 39.73,
+          "start": 38.35,
+          "duration": 1.38
+        }
+      ],
+      "speaker": "SPEAKER_00",
+      "morphemes": [
+        {
+          "word": "dumped",
+          "index": 2,
+          "lemma": "dump",
+          "morpheme_form": "/ed",
+          "inflectional_morpheme": "Past Tense"
+        }
+      ],
+      "fillerwords": [],
+      "repetitions": [
+        {
+          "words": [
+            7
+          ],
+          "content": "the",
+          "mark_location": 7
+        }
+      ],
+      "morpheme_omissions": []
+    },
+    {
+      "end": 43.56,
+      "text": "",
+      "start": 41.27,
+      "words": [],
+      "pauses": [
+        {
+          "end": 43.56,
+          "start": 41.27,
+          "duration": 2.29
+        }
+      ],
+      "speaker": "PAUSE",
+      "morphemes": [],
+      "fillerwords": [],
+      "repetitions": [],
+      "morpheme_omissions": []
+    },
+    {
+      "end": 55.8,
+      "text": "And he's that [UH] densely [UM] wrote the dogs, the dog sand castle.",
+      "start": 43.56,
+      "words": [
+        {
+          "end": 44,
+          "word": "And",
+          "start": 43.56
+        },
+        {
+          "end": 45.46,
+          "word": "he's",
+          "start": 44.66
+        },
+        {
+          "end": 46.18,
+          "word": "that",
+          "start": 45.7
+        },
+        {
+          "end": 47.23,
+          "word": "[UH]",
+          "start": 47
+        },
+        {
+          "end": 48.14,
+          "word": "densely",
+          "start": 47.23
+        },
+        {
+          "end": 49.04,
+          "word": "[UM]",
+          "start": 48.56
+        },
+        {
+          "end": 50.04,
+          "word": "wrote",
+          "start": 49.46
+        },
+        {
+          "end": 51.46,
+          "word": "the",
+          "start": 50.62
+        },
+        {
+          "end": 52.18,
+          "word": "dogs,",
+          "start": 51.54
+        },
+        {
+          "end": 53.01,
+          "word": "the",
+          "start": 52.74
+        },
+        {
+          "end": 53.58,
+          "word": "dog",
+          "start": 53.01
+        },
+        {
+          "end": 55.28,
+          "word": "sand",
+          "start": 54.86
+        },
+        {
+          "end": 55.78,
+          "word": "castle.",
+          "start": 55.32
+        }
+      ],
+      "pauses": [
+        {
+          "end": 44.66,
+          "start": 44,
+          "duration": 0.66
+        },
+        {
+          "end": 47,
+          "start": 46.18,
+          "duration": 0.82
+        },
+        {
+          "end": 48.56,
+          "start": 48.14,
+          "duration": 0.42
+        },
+        {
+          "end": 49.46,
+          "start": 49.04,
+          "duration": 0.42
+        },
+        {
+          "end": 50.62,
+          "start": 50.04,
+          "duration": 0.58
+        },
+        {
+          "end": 52.74,
+          "start": 52.18,
+          "duration": 0.56
+        },
+        {
+          "end": 54.86,
+          "start": 53.58,
+          "duration": 1.28
+        }
+      ],
+      "speaker": "SPEAKER_00",
+      "excluded": false,
+      "morphemes": [
+        {
+          "word": "he's",
+          "index": 1,
+          "lemma": "he",
+          "morpheme_form": "'s",
+          "inflectional_morpheme": "Contraction"
+        },
+        {
+          "word": "wrote",
+          "index": 7,
+          "lemma": "write",
+          "morpheme_form": "<IRR>",
+          "inflectional_morpheme": "Past Participle"
+        },
+        {
+          "word": "dogs",
+          "index": 9,
+          "lemma": "dog",
+          "morpheme_form": "/s",
+          "inflectional_morpheme": "Plural"
+        }
+      ],
+      "fillerwords": [
+        {
+          "end": 47.23,
+          "start": 47,
+          "content": "[UH]",
+          "duration": 0.23
+        },
+        {
+          "end": 49.04,
+          "start": 48.56,
+          "content": "[UM]",
+          "duration": 0.48
+        }
+      ],
+      "repetitions": [],
+      "morpheme_omissions": []
+    },
+    {
+      "end": 61.12,
+      "text": "",
+      "start": 55.78,
+      "words": [],
+      "pauses": [
+        {
+          "end": 61.12,
+          "start": 55.78,
+          "duration": 5.34
+        }
+      ],
+      "speaker": "PAUSE",
+      "morphemes": [],
+      "fillerwords": [],
+      "repetitions": [],
+      "morpheme_omissions": []
+    },
+    {
+      "end": 71.97,
+      "text": "The dog never [UM] make a sound cancel and he cried and the bunny rabbit [UM] be sorry.",
+      "start": 61.12,
+      "words": [
+        {
+          "end": 61.27,
+          "word": "The",
+          "start": 61.12
+        },
+        {
+          "end": 61.8,
+          "word": "dog",
+          "start": 61.27
+        },
+        {
+          "end": 62.64,
+          "word": "never",
+          "start": 61.8
+        },
+        {
+          "end": 63.16,
+          "word": "[UM]",
+          "start": 62.72
+        },
+        {
+          "end": 63.97,
+          "word": "make",
+          "start": 63.46
+        },
+        {
+          "end": 64.14,
+          "word": "a",
+          "start": 63.97
+        },
+        {
+          "end": 64.46,
+          "word": "sound",
+          "start": 64.14
+        },
+        {
+          "end": 65.08,
+          "word": "cancel",
+          "start": 64.48
+        },
+        {
+          "end": 65.61,
+          "word": "and",
+          "start": 65.26
+        },
+        {
+          "end": 65.88,
+          "word": "he",
+          "start": 65.61
+        },
+        {
+          "end": 66.58,
+          "word": "cried",
+          "start": 65.92
+        },
+        {
+          "end": 67.42,
+          "word": "and",
+          "start": 66.88
+        },
+        {
+          "end": 67.92,
+          "word": "the",
+          "start": 67.52
+        },
+        {
+          "end": 68.4,
+          "word": "bunny",
+          "start": 68
+        },
+        {
+          "end": 69.04,
+          "word": "rabbit",
+          "start": 68.4
+        },
+        {
+          "end": 70.52,
+          "word": "[UM]",
+          "start": 69.96
+        },
+        {
+          "end": 71.5,
+          "word": "be",
+          "start": 71.22
+        },
+        {
+          "end": 71.94,
+          "word": "sorry.",
+          "start": 71.56
+        }
+      ],
+      "pauses": [
+        {
+          "end": 63.46,
+          "start": 63.16,
+          "duration": 0.3
+        },
+        {
+          "end": 66.88,
+          "start": 66.58,
+          "duration": 0.3
+        },
+        {
+          "end": 69.96,
+          "start": 69.04,
+          "duration": 0.92
+        },
+        {
+          "end": 71.22,
+          "start": 70.52,
+          "duration": 0.7
+        }
+      ],
+      "speaker": "SPEAKER_00",
+      "morphemes": [
+        {
+          "word": "cried",
+          "index": 10,
+          "lemma": "cry",
+          "morpheme_form": "/ed",
+          "inflectional_morpheme": "Past Tense"
+        }
+      ],
+      "fillerwords": [
+        {
+          "end": 63.16,
+          "start": 62.72,
+          "content": "[UM]",
+          "duration": 0.44
+        },
+        {
+          "end": 70.52,
+          "start": 69.96,
+          "content": "[UM]",
+          "duration": 0.56
+        }
+      ],
+      "repetitions": [],
+      "morpheme_omissions": [
+        {
+          "word": "make",
+          "index": 4,
+          "lemma": "make",
+          "morpheme_form": "<OMI>",
+          "inflectional_morpheme": "3rd Person Singular"
+        }
+      ]
+    }
+  ]
+}

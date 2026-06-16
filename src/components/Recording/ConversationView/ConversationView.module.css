@@ -1,0 +1,1274 @@
+/* Main container */
+.conversationView {
+  padding: 32px 48px;
+  flex: 1;
+  overflow-y: auto;
+  background: white;
+  height: 100%;
+}
+
+/* Edit Toolbar Styles */
+.editToolbar {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid #e5e7eb;
+  margin: -32px -48px 24px;
+  padding: 12px 48px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.editToolbarContainer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.editToolbarLeft {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  flex: 1;
+}
+
+.editToolbarRight {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.editToolbarSection {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.editToolbarDivider {
+  width: 1px;
+  height: 24px;
+  background: #e5e7eb;
+  margin: 0 8px;
+}
+
+.editToolbarStatus {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: #f3f4f6;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #6b7280;
+  font-weight: 500;
+}
+
+/* Mode toggle buttons */
+.modeToggleBtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid #d1d5db;
+  background: white;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  color: #374151;
+  transition: all 0.15s ease;
+  position: relative;
+}
+
+.modeToggleBtn:hover:not(:disabled) {
+  background: #f3f4f6;
+  border-color: #9ca3af;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.modeToggleBtn.active {
+  background: #3b82f6;
+  border-color: #3b82f6;
+  color: white;
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
+}
+
+.modeToggleBtn:disabled {
+  background: #f3f4f6;
+  color: #9ca3af;
+  cursor: not-allowed;
+  border-color: #e5e7eb;
+  transform: none;
+  box-shadow: none;
+}
+
+.keyboardShortcut {
+  margin-left: auto;
+  padding: 2px 4px;
+  background: rgba(0, 0, 0, 0.1);
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: monospace;
+  opacity: 0.7;
+}
+
+.modeToggleBtn.active .keyboardShortcut {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* Edit Mode Visual Feedback */
+.segmentText.editable {
+  position: relative;
+  border-radius: 6px;
+  transition: all 0.15s ease;
+}
+
+.segmentText.editable:hover {
+  background: rgba(59, 130, 246, 0.05);
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.1);
+}
+
+/* Removed double-click to edit tooltip */
+/* .segmentText.editable::after {
+  content: '💡 Double-click to edit';
+  position: absolute;
+  top: -8px;
+  right: 8px;
+  font-size: 11px;
+  color: #6b7280;
+  background: white;
+  padding: 2px 6px;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.segmentText.editable:hover::after {
+  opacity: 1;
+} */
+
+.segmentText.editing {
+  background: #fef3c7;
+  border: 2px solid #f59e0b;
+  padding: 12px;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(245, 158, 11, 0.2);
+}
+
+/* .segmentText.editing::after {
+  content: '✏️ Editing in SALT format';
+  opacity: 1;
+  color: #92400e;
+  background: #fef3c7;
+  border: 1px solid #f59e0b;
+} */
+
+/* Segment Edit Mode Styles */
+.conversationSegment.editModeActive {
+  cursor: pointer;
+  position: relative;
+}
+
+.conversationSegment.editModeActive:hover {
+  transform: translateY(-1px);
+}
+
+.conversationSegment.editModeActive::before {
+  /* content: '🔧 Double-click for advanced editing'; */
+  position: absolute;
+  top: -12px;
+  right: 12px;
+  font-size: 11px;
+  color: #16a34a;
+  background: white;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid #22c55e;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.conversationSegment.editModeActive:hover::before {
+  opacity: 1;
+}
+
+/* Welcome Message Styles */
+.welcomeContainer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 400px;
+  padding: 48px;
+}
+
+.welcomeContent {
+  text-align: center;
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+.welcomeIcon {
+  margin-bottom: 24px;
+  display: flex;
+  justify-content: center;
+  font-size: 48px;
+}
+
+.welcomeTitle {
+  font-size: 32px;
+  font-weight: 700;
+  color: #1F2937;
+  margin-bottom: 8px;
+}
+
+.welcomeSubtitle {
+  font-size: 18px;
+  color: #6B7280;
+  margin-bottom: 32px;
+  font-weight: 500;
+}
+
+.welcomeDescription {
+  margin-bottom: 40px;
+}
+
+.welcomeDescription p {
+  font-size: 16px;
+  color: #374151;
+  margin-bottom: 20px;
+  line-height: 1.6;
+}
+
+.welcomeFeatures {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  text-align: left;
+  display: inline-block;
+}
+
+.welcomeFeatures li {
+  font-size: 15px;
+  color: #4B5563;
+  margin-bottom: 8px;
+  line-height: 1.5;
+}
+
+.welcomeActions {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  align-items: center;
+}
+
+.actionHint {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 24px;
+  background: #F9FAFB;
+  border: 1px solid #E5E7EB;
+  border-radius: 12px;
+  font-size: 15px;
+  color: #374151;
+  min-width: 300px;
+  justify-content: flex-start;
+}
+
+.actionIcon {
+  font-size: 20px;
+  width: 24px;
+  text-align: center;
+}
+
+.actionHint strong {
+  color: #1F2937;
+  font-weight: 600;
+}
+
+/* Pause segment styles */
+.pauseSegment {
+  margin: 8px 0;
+  padding: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pauseSegment:hover {
+  transform: none;
+}
+
+.pauseSegment.active {
+  background: none;
+  border: none;
+  box-shadow: none;
+}
+
+.pauseSegment.excluded {
+  opacity: 0.6;
+}
+
+.pauseContent {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  position: relative;
+  padding: 6px 16px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 20px;
+  font-size: 12px;
+  color: #64748b;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.pauseContent::before,
+.pauseContent::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  width: 100px;
+  height: 1px;
+  background: #e2e8f0;
+  border-top: 1px dashed #cbd5e1;
+}
+
+.pauseContent::before {
+  right: 100%;
+  margin-right: 8px;
+}
+
+.pauseContent::after {
+  left: 100%;
+  margin-left: 8px;
+}
+
+.pauseSegment:hover .pauseContent {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+  color: #475569;
+}
+
+.pauseSegment.active .pauseContent {
+  background: #dbeafe;
+  border-color: #3b82f6;
+  color: #1e40af;
+  font-weight: 600;
+}
+
+.pauseIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: currentColor;
+}
+
+.pauseInfo {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pauseDuration {
+  font-size: 12px;
+  font-weight: 600;
+  color: currentColor;
+}
+
+.pauseLabel {
+  font-size: 11px;
+  color: currentColor;
+  opacity: 0.8;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.pauseTime {
+  font-size: 11px;
+  color: currentColor;
+  font-family: monospace;
+  opacity: 0.7;
+}
+
+.pauseEditControls {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 8px;
+  background: rgba(34, 197, 94, 0.05);
+  border-radius: 6px;
+  border: 1px solid rgba(34, 197, 94, 0.2);
+}
+
+/* Segment Styles */
+.conversationSegment {
+  margin-bottom: 24px;
+  padding: 20px;
+  background: #fafafa;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  transition: all 0.15s ease;
+  position: relative;
+  word-break: normal;
+  word-wrap: normal;
+  overflow: hidden;
+}
+
+.conversationSegment:hover {
+  background: #f5f5f5;
+  border-color: #d1d5db;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.conversationSegment.active {
+  background: #eff6ff;
+  border-color: #3b82f6;
+  border-width: 2px;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
+  transform: translateY(-1px);
+}
+
+.conversationSegment.excluded {
+  background: rgba(107, 114, 128, 0.05);
+  border-color: #9ca3af;
+  opacity: 0.6;
+}
+
+.conversationSegment.excluded::before {
+  content: 'EXCLUDED';
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: rgba(107, 114, 128, 0.8);
+  color: white;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+.conversationSegment.utteranceError {
+  background: rgba(239, 68, 68, 0.05);
+  border-left: 4px solid #ef4444;
+  padding: 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.conversationSegment.utteranceError:hover {
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.conversationSegment.selectedForMerge {
+  border-color: #f97316;
+  border-width: 2px;
+  box-shadow: 0 0 0 1px rgba(249, 115, 22, 0.2);
+  background: rgba(249, 115, 22, 0.02);
+}
+
+.conversationSegment.selectedForMerge:hover {
+  background: rgba(249, 115, 22, 0.05);
+}
+
+.conversationSegment.editModeActive {
+  cursor: pointer;
+}
+
+.conversationSegment.editModeActive:hover {
+  transform: translateY(-1px);
+}
+
+.conversationSegment.splitModeActive {
+  cursor: pointer;
+}
+
+.conversationSegment.excludeModeActive {
+  cursor: pointer;
+}
+
+.conversationSegment.dragging {
+  opacity: 0.5;
+  transform: rotate(2deg);
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+  z-index: 1000;
+}
+
+.conversationSegment.dragOver {
+  border-color: #3b82f6;
+  border-width: 2px;
+  border-style: dashed;
+  background: rgba(59, 130, 246, 0.1);
+  transform: scale(1.02);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
+
+.conversationSegment.dragOver::before {
+  content: 'Drop here to merge';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: #3b82f6;
+  color: white;
+  padding: 8px 16px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  z-index: 10;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+}
+
+/* Segment inner structure */
+.segmentInfo {
+  margin-bottom: 16px;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.speakerSection {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.speaker {
+  font-weight: 600;
+  color: #374151;
+  font-size: 14px;
+  display: inline-block;
+  padding: 2px 8px;
+  margin-right: 8px;
+}
+
+.speaker.selected {
+  background: rgba(59, 130, 246, 0.1);
+  color: #3b82f6;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+/* Excluded utterance indicator - shows (+) before speaker in edit mode */
+.excludedIndicator {
+  color: #6b7280;
+  font-weight: 600;
+  font-size: 12px;
+  margin-right: 2px;
+  padding: 2px 4px;
+  background: rgba(107, 114, 128, 0.15);
+  border-radius: 3px;
+  cursor: help;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.time {
+  font-size: 12px;
+  color: #6B7280;
+  cursor: pointer;
+  font-family: monospace;
+}
+
+.time:hover {
+  color: #3b82f6;
+}
+
+.editControls {
+  display: flex;
+  gap: 4px;
+}
+
+.editBtn, .splitBtn, .excludeBtn, .addBtn, .deleteBtn, .playBtn, .speakerBtn {
+  padding: 4px;
+  border: none;
+  background: rgba(107, 114, 128, 0.1);
+  border-radius: 4px;
+  cursor: pointer;
+  color: #6b7280;
+  transition: all 0.15s ease;
+}
+
+.editBtn:hover, .splitBtn:hover, .excludeBtn:hover, .addBtn:hover, .deleteBtn:hover, .playBtn:hover, .speakerBtn:hover {
+  background: rgba(59, 130, 246, 0.1);
+  color: #3b82f6;
+}
+
+.playBtn {
+  background: rgba(34, 197, 94, 0.1);
+  color: #22c55e;
+}
+
+.playBtn:hover {
+  background: rgba(34, 197, 94, 0.2);
+  color: #16a34a;
+}
+
+.editBtn.active {
+  background: rgba(34, 197, 94, 0.1);
+  color: #22c55e;
+}
+
+.editBtn.active:hover {
+  background: rgba(34, 197, 94, 0.2);
+  color: #16a34a;
+}
+
+.addBtn:hover {
+  background: rgba(34, 197, 94, 0.1);
+  color: #22c55e;
+}
+
+.deleteBtn:hover {
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+}
+
+.splitBtn.active {
+  background: rgba(249, 115, 22, 0.1);
+  color: #f97316;
+}
+
+.excludeBtn.excluded {
+  background: rgba(107, 114, 128, 0.2);
+  color: #374151;
+}
+
+.excludeBtn.excluded:hover {
+  background: rgba(34, 197, 94, 0.1);
+  color: #22c55e;
+}
+
+.speakerBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border: none;
+  background: rgba(5, 150, 105, 0.1);
+  color: #059669;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.speakerBtn:hover {
+  background: rgba(5, 150, 105, 0.2);
+  color: #047857;
+}
+
+/* Selection checkboxes */
+.selectionCheckbox, .mergeCheckbox, .segmentCheckbox {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: #6b7280;
+  transition: all 0.15s ease;
+}
+
+.selectionCheckbox:hover {
+  color: #3b82f6;
+  background: rgba(59, 130, 246, 0.1);
+  border-radius: 4px;
+}
+
+.selectionCheckbox.selected {
+  color: #3b82f6;
+}
+
+.mergeCheckbox:hover:not(:disabled) {
+  color: #f97316;
+  background: rgba(249, 115, 22, 0.1);
+  border-radius: 4px;
+}
+
+.mergeCheckbox.selected {
+  color: #f97316;
+  background: rgba(249, 115, 22, 0.2);
+  border-radius: 4px;
+}
+
+.mergeCheckbox:disabled {
+  color: #d1d5db;
+  cursor: not-allowed;
+}
+
+.segmentCheckbox:hover {
+  color: #3b82f6;
+  background: rgba(59, 130, 246, 0.1);
+  border-radius: 4px;
+}
+
+.segmentCheckbox.checked {
+  color: #3b82f6;
+  background: rgba(59, 130, 246, 0.2);
+  border-radius: 4px;
+}
+
+/* Segment text */
+.segmentText {
+  line-height: 2;
+  font-size: 16px;
+  color: #111827;
+  word-wrap: normal;
+  word-break: keep-all;
+  white-space: normal;
+  display: block;
+  width: 100%;
+  padding: 8px 0;
+  overflow-wrap: anywhere;
+}
+
+.segmentText.editable {
+  cursor: text;
+}
+
+.segmentText.editing {
+  background: #f9fafb;
+  padding: 8px;
+  border-radius: 4px;
+  border: 2px solid #3b82f6;
+}
+
+.editHint {
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: #6b7280;
+  background: #f3f4f6;
+  padding: 6px 10px;
+  border-radius: 4px;
+}
+
+.splitInstructions {
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: #f97316;
+  background: rgba(249, 115, 22, 0.1);
+  padding: 6px 10px;
+  border-radius: 4px;
+}
+
+.inlineEditToolbar {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.inlineEditBtn {
+  padding: 6px 12px;
+  border: 1px solid #d1d5db;
+  background: white;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.15s ease;
+}
+
+.inlineEditBtn.save {
+  background: #3b82f6;
+  border-color: #3b82f6;
+  color: white;
+}
+
+.inlineEditBtn.save:hover {
+  background: #2563eb;
+  border-color: #2563eb;
+}
+
+.inlineEditBtn.cancel {
+  background: white;
+  border-color: #d1d5db;
+  color: #374151;
+}
+
+.inlineEditBtn.cancel:hover {
+  background: #f9fafb;
+}
+
+/* Word styles */
+.word {
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  display: inline-block;
+  padding: 2px 4px;
+  margin: 1px 3px;
+  cursor: pointer;
+  vertical-align: baseline;
+  line-height: 1.4;
+  position: relative;
+  white-space: nowrap;
+  word-break: keep-all;
+  border-radius: 3px;
+  font-weight: 400;
+  /* Reserve space for border to prevent layout shifts */
+  border: 1px solid transparent;
+}
+
+.word.annotated {
+  padding: 3px 6px;
+  border-radius: 4px;
+  margin: 1px 3px;
+}
+
+.word.active {
+  background: linear-gradient(135deg, #3B82F6 0%, #2563eb 100%);
+  color: white;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.4);
+  z-index: 10;
+  position: relative;
+  /* Use the same border space as base word to prevent layout shift */
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  /* Ensure consistent spacing */
+  margin: 1px 3px;
+  padding: 2px 4px;
+}
+
+.word.selected {
+  background: linear-gradient(135deg, #10B981 0%, #059669 100%);
+  color: white;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.4);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  /* Ensure consistent spacing */
+  margin: 1px 3px;
+  padding: 2px 4px;
+}
+
+.word:hover:not(.active):not(.selected) {
+  background-color: rgba(59, 130, 246, 0.08);
+  transform: translateY(-1px);
+  box-shadow: 0 1px 3px rgba(59, 130, 246, 0.2);
+}
+
+.word.hasContextMenu {
+  cursor: context-menu;
+}
+
+/* Annotation-specific word styles */
+.word.annotated:not(.active):not(.selected) {
+  background-color: rgba(59, 130, 246, 0.05);
+  border-bottom: 2px solid rgba(59, 130, 246, 0.3);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  /* Maintain consistent spacing */
+  margin: 1px 3px;
+  padding: 3px 6px;
+}
+
+.word.annotated:not(.active):not(.selected):hover {
+  background-color: rgba(59, 130, 246, 0.1);
+  border-bottom-color: rgba(59, 130, 246, 0.5);
+}
+
+/* Smooth transitions for all word states */
+.word {
+  will-change: background-color, box-shadow, transform, border-color;
+}
+
+/* Ensure consistent spacing and prevent layout shifts */
+.word.active,
+.word.selected {
+  /* Spacing is now handled in individual rules above */
+}
+
+/* Improve readability for active words */
+.word.active {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.word.selected {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+/* Focus states for accessibility */
+.word:focus-visible {
+  outline: 2px solid #3B82F6;
+  outline-offset: 2px;
+}
+
+/* Improved word spacing and layout */
+.word + .word {
+  margin-left: 0;
+}
+
+/* Ensure words don't break awkwardly */
+.word {
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+/* Add consistent spacing between words in the text container */
+.segmentText {
+  word-spacing: 0.1em;
+  letter-spacing: 0.01em;
+}
+
+.splitPoint {
+  color: #f97316;
+  font-weight: bold;
+  margin: 0 4px;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 2px;
+  transition: background-color 0.15s ease;
+}
+
+.splitPoint:hover {
+  background-color: rgba(249, 115, 22, 0.1);
+}
+
+.pauseAnnotation {
+  font-size: 12px;
+  font-weight: 500;
+  margin: 0 4px;
+  opacity: 0.8;
+  display: inline-block;
+  white-space: nowrap;
+}
+
+.conversationSegment.excluded::before {
+  content: 'EXCLUDED';
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: rgba(107, 114, 128, 0.8);
+  color: white;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+/* Pause Segment Styles */
+.pauseSegment {
+  margin: 8px 0;
+  padding: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pauseContent {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  position: relative;
+  padding: 6px 16px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 20px;
+  font-size: 12px;
+  color: #64748b;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.pauseContent::before,
+.pauseContent::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  width: 100px;
+  height: 1px;
+  background: #e2e8f0;
+  border-top: 1px dashed #cbd5e1;
+}
+
+.pauseContent::before {
+  right: 100%;
+  margin-right: 8px;
+}
+
+.pauseContent::after {
+  left: 100%;
+  margin-left: 8px;
+}
+
+.pauseSegment:hover .pauseContent {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+  color: #475569;
+}
+
+.pauseSegment.active .pauseContent {
+  background: #dbeafe;
+  border-color: #3b82f6;
+  color: #1e40af;
+  font-weight: 600;
+}
+
+/* Word and Annotation Styles */
+.word {
+  transition: all 0.15s ease;
+  display: inline;
+  padding: 2px 0;
+  cursor: pointer;
+}
+
+.word.annotated {
+  padding: 3px 6px;
+  border-radius: 4px;
+  margin: 0 1px;
+}
+
+.word.active {
+  background-color: #3B82F6 !important;
+  color: white !important;
+  font-weight: 600;
+  transform: scale(1.05);
+  box-shadow: 0 2px 4px rgba(59, 130, 246, 0.3);
+  z-index: 10;
+  position: relative;
+}
+
+.word:hover:not(.active) {
+  background-color: rgba(59, 130, 246, 0.1) !important;
+}
+
+.word.selected {
+  background-color: #10B981 !important;
+  color: white !important;
+  font-weight: 600;
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.3);
+}
+
+/* Split point indicator */
+.splitPoint {
+  color: #f97316;
+  font-weight: bold;
+  margin: 0 4px;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 2px;
+  transition: background-color 0.15s ease;
+}
+
+.splitPoint:hover {
+  background-color: rgba(249, 115, 22, 0.1);
+}
+
+/* Pause annotation */
+.pauseAnnotation {
+  font-size: 12px;
+  font-weight: 500;
+  margin: 0 4px;
+  opacity: 0.8;
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 2px 4px;
+}
+
+/* Drag and Drop Styles */
+.dragging {
+  opacity: 0.5;
+  transform: rotate(2deg);
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+  z-index: 1000;
+}
+
+.dragOver {
+  border-color: #3b82f6;
+  border-width: 2px;
+  border-style: dashed;
+  background: rgba(59, 130, 246, 0.1);
+  transform: scale(1.02);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
+
+.dragOver::before {
+  content: 'Drop here to merge';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: #3b82f6;
+  color: white;
+  padding: 8px 16px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  z-index: 10;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+}
+
+/* Note Section Styles */
+.noteSection {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed #e5e7eb;
+}
+
+.noteLabel {
+  font-size: 13px;
+  font-weight: 600;
+  color: #6b7280;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
+}
+
+.noteDisplay {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #f9fafb;
+  border-radius: 6px;
+  border: 1px solid #e5e7eb;
+  min-height: 40px;
+  transition: all 0.15s ease;
+}
+
+.noteDisplay:hover {
+  background: #f3f4f6;
+  border-color: #d1d5db;
+}
+
+.noteText {
+  flex: 1;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #374151;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.noteEmpty {
+  flex: 1;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #9ca3af;
+  font-style: italic;
+}
+
+.noteEditBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: #6b7280;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.noteEditBtn:hover {
+  background: #e5e7eb;
+  color: #374151;
+}
+
+.noteEditContainer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.noteTextarea {
+  width: 100%;
+  padding: 10px 12px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #374151;
+  background: white;
+  border: 2px solid #3b82f6;
+  border-radius: 6px;
+  resize: vertical;
+  min-height: 80px;
+  font-family: inherit;
+  transition: border-color 0.15s ease;
+  outline: none;
+}
+
+.noteTextarea:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.noteTextarea::placeholder {
+  color: #9ca3af;
+}
+
+.noteEditButtons {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.noteBtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  outline: none;
+}
+
+.noteSaveBtn {
+  background: #10b981;
+  color: white;
+}
+
+.noteSaveBtn:hover {
+  background: #059669;
+  box-shadow: 0 2px 4px rgba(16, 185, 129, 0.2);
+}
+
+.noteCancelBtn {
+  background: #f3f4f6;
+  color: #6b7280;
+}
+
+.noteCancelBtn:hover {
+  background: #e5e7eb;
+  color: #374151;
+}

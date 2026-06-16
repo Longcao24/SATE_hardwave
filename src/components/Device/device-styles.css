@@ -1,0 +1,135 @@
+/* ---- SATE Device Panel Styles ---- */
+
+.device-panel {
+  @apply bg-white rounded-3xl shadow-xl border border-gray-100 overflow-hidden relative;
+  /* subtle glassmorphism inner shadow */
+  box-shadow: 0 20px 40px -15px rgba(0,0,0,0.05), inset 0 1px 0 rgba(255,255,255,0.6);
+}
+
+.device-panel-empty {
+  @apply bg-white rounded-3xl border border-gray-200 p-10 flex flex-col items-center justify-center text-center;
+  min-height: 400px;
+}
+
+.device-panel-header {
+  @apply px-6 py-5 border-b border-gray-100 flex items-start justify-between bg-gray-50/50 backdrop-blur-sm;
+}
+
+.device-hero {
+  @apply px-6 py-10 flex flex-col items-center justify-center relative bg-gradient-to-b from-transparent to-gray-50/30;
+}
+
+/* Status Ring */
+.device-status-ring {
+  @apply relative w-32 h-32 flex items-center justify-center rounded-full;
+}
+
+.device-ring-track {
+  @apply absolute inset-0 rounded-full border-[6px] border-gray-100;
+}
+
+.device-ring-accent {
+  @apply absolute inset-0 rounded-full border-[6px] border-transparent;
+  border-top-color: #3b82f6;
+  border-right-color: #3b82f6;
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.device-ring-spinning {
+  opacity: 1;
+  animation: device-spin 1.5s linear infinite;
+}
+
+.device-ring-dot {
+  @apply w-12 h-12 rounded-full shadow-lg relative z-10 transition-colors duration-500;
+}
+
+.device-dot--recording { @apply bg-red-500 shadow-red-500/40; }
+.device-dot--uploading { @apply bg-blue-500 shadow-blue-500/40; }
+.device-dot--online { @apply bg-green-500 shadow-green-500/40; }
+.device-dot--offline { @apply bg-amber-400 shadow-amber-400/40; }
+
+.device-dot-pulse {
+  animation: device-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes device-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes device-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.8; transform: scale(0.95); }
+}
+
+/* Record Button */
+.device-record-btn {
+  @apply mt-8 px-8 py-3.5 rounded-full font-bold text-white shadow-lg shadow-blue-500/25 
+         transition-all duration-300 hover:shadow-xl hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none;
+  background: linear-gradient(135deg, #2563eb, #3b82f6);
+}
+
+.device-record-btn:disabled {
+  background: #9ca3af;
+  box-shadow: none;
+}
+
+/* Quick Actions */
+.device-actions-row {
+  @apply grid grid-cols-3 gap-3 px-6 pb-6;
+}
+
+.device-action-card {
+  @apply flex flex-col items-center justify-center p-4 rounded-2xl border border-gray-100 bg-white shadow-sm hover:border-blue-200 hover:shadow-md hover:bg-blue-50/30 transition-all text-center disabled:opacity-50 disabled:cursor-not-allowed;
+}
+
+.device-action-label {
+  @apply text-xs font-bold text-gray-900 mt-2;
+}
+
+.device-action-sub {
+  @apply text-[10px] font-medium text-gray-500 uppercase tracking-wide mt-0.5;
+}
+
+/* Banners */
+.device-offline-banner {
+  @apply mx-6 mb-6 p-4 rounded-xl bg-amber-50 border border-amber-100 flex items-start gap-3;
+}
+
+.device-error-banner {
+  @apply mx-6 mb-6 p-4 rounded-xl bg-red-50 border border-red-100 flex items-start gap-3;
+}
+
+.device-toast {
+  @apply absolute top-4 left-1/2 -translate-x-1/2 bg-gray-900 text-white text-xs font-medium px-4 py-2 rounded-full shadow-lg z-20;
+  animation: device-toast-slide 0.3s ease-out forwards;
+}
+
+@keyframes device-toast-slide {
+  from { opacity: 0; transform: translate(-50%, -10px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+/* Sessions List */
+.device-sessions-list {
+  @apply border border-gray-100 rounded-2xl bg-white overflow-hidden divide-y divide-gray-50;
+}
+
+.device-session-row {
+  @apply flex items-center justify-between p-4 hover:bg-gray-50 transition-colors;
+}
+
+.device-play-btn {
+  @apply flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-blue-600 bg-blue-50 hover:bg-blue-100 transition-colors;
+}
+
+.device-play-btn--active {
+  @apply bg-blue-600 text-white hover:bg-blue-700;
+}
+
+/* Device Card (Dashboard) */
+.device-card {
+  @apply block w-full p-4 rounded-2xl border border-gray-200 bg-white shadow-sm hover:border-blue-300 hover:shadow-md transition-all text-left;
+}

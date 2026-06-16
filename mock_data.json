@@ -1,0 +1,738 @@
+{
+    "segments": [
+      {
+        "end": 7.948,
+        "fillerwords": [
+          {
+            "content": "",
+            "duration": null,
+            "end": null,
+            "start": null
+          }
+        ],
+        "morphemes": [],
+        "speaker": "Child",
+        "start": 3.423,
+        "text": "um a rabbit",
+        "text_clean": "um a rabbit",
+        "text_token": "um <FILLER> <PAUSE> a rabbit",
+        "words": [
+          {
+            "end": null,
+            "start": null,
+            "word": "um"
+          },
+          {
+            "end": 4.268,
+            "start": 3.423,
+            "word": "a"
+          },
+          {
+            "end": 7.948,
+            "start": 4.328,
+            "word": "rabbit"
+          }
+        ]
+      },
+      {
+        "end": 14.221,
+        "fillerwords": [
+          {
+            "content": "",
+            "duration": null,
+            "end": null,
+            "start": null
+          }
+        ],
+        "morphemes": [],
+        "pauses": [
+          {
+            "duration": 0.04,
+            "end": 13.178,
+            "start": 13.138
+          }
+        ],
+        "repetitions": [
+          {
+            "content": "with the um",
+            "mark_location": 4,
+            "words": [
+              2,
+              3,
+              4
+            ]
+          }
+        ],
+        "speaker": "Child",
+        "start": 8.705,
+        "text": "some help with the um with the dog",
+        "text_clean": "some help with the dog",
+        "text_token": "some help <REPSTART> with the um <FILLER> <REPEND> <REPETITION> with the <PAUSE> dog",
+        "words": [
+          {
+            "end": 9.226,
+            "start": 8.705,
+            "word": "some"
+          },
+          {
+            "end": 9.628,
+            "start": 9.327,
+            "word": "help"
+          },
+          {
+            "end": 10.049,
+            "start": 9.808,
+            "word": "with"
+          },
+          {
+            "end": 10.53,
+            "start": 10.249,
+            "word": "the"
+          },
+          {
+            "end": null,
+            "start": null,
+            "word": "um"
+          },
+          {
+            "end": 12.175,
+            "start": 11.954,
+            "word": "with"
+          },
+          {
+            "end": 13.138,
+            "start": 12.696,
+            "word": "the"
+          },
+          {
+            "end": 14.221,
+            "start": 13.178,
+            "word": "dog"
+          }
+        ]
+      },
+      {
+        "end": 17.55,
+        "morphemes": [],
+        "pauses": [
+          {
+            "duration": 1.12,
+            "end": 15.344,
+            "start": 14.221
+          },
+          {
+            "duration": 0.04,
+            "end": 15.504,
+            "start": 15.464
+          }
+        ],
+        "speaker": "Child",
+        "start": 14.221,
+        "text": "and he want some help",
+        "text_clean": "and he want some help",
+        "text_token": "<PAUSE> and <PAUSE> he want some help",
+        "words": [
+          {
+            "end": 15.464,
+            "start": 15.344,
+            "word": "and"
+          },
+          {
+            "end": 16.567,
+            "start": 15.504,
+            "word": "he"
+          },
+          {
+            "end": 16.848,
+            "start": 16.627,
+            "word": "want"
+          },
+          {
+            "end": 17.169,
+            "start": 16.948,
+            "word": "some"
+          },
+          {
+            "end": 17.55,
+            "start": 17.189,
+            "word": "help"
+          }
+        ]
+      },
+      {
+        "end": 22.36,
+        "morphemes": [],
+        "pauses": [
+          {
+            "duration": 0.2,
+            "end": 18.415,
+            "start": 18.213
+          },
+          {
+            "duration": 0.5,
+            "end": 19.32,
+            "start": 18.817
+          }
+        ],
+        "speaker": "Child",
+        "start": 17.851,
+        "text": "two with me know how to make a sandcastle",
+        "text_clean": "two with me know how to make a sandcastle",
+        "text_token": "two <PAUSE> with me <PAUSE> know how to make a sandcastle",
+        "words": [
+          {
+            "end": 18.213,
+            "start": 17.851,
+            "word": "two"
+          },
+          {
+            "end": 18.616,
+            "start": 18.415,
+            "word": "with"
+          },
+          {
+            "end": 18.817,
+            "start": 18.696,
+            "word": "me"
+          },
+          {
+            "end": 19.502,
+            "start": 19.32,
+            "word": "know"
+          },
+          {
+            "end": 19.703,
+            "start": 19.542,
+            "word": "how"
+          },
+          {
+            "end": 19.924,
+            "start": 19.783,
+            "word": "to"
+          },
+          {
+            "end": 20.287,
+            "start": 20.025,
+            "word": "make"
+          },
+          {
+            "end": 20.528,
+            "start": 20.428,
+            "word": "a"
+          },
+          {
+            "end": 22.36,
+            "start": 20.649,
+            "word": "sandcastle"
+          }
+        ]
+      },
+      {
+        "end": 33.328,
+        "fillerwords": [
+          {
+            "content": "",
+            "duration": null,
+            "end": null,
+            "start": null
+          }
+        ],
+        "morphemes": [],
+        "revisions": [
+          {
+            "content": "he um",
+            "mark_location": 2,
+            "words": [
+              1,
+              2
+            ]
+          }
+        ],
+        "speaker": "Child",
+        "start": 25.057,
+        "text": "and he um the rabbit make a sandcastle",
+        "text_clean": "and the rabbit make a sandcastle",
+        "text_token": "and <REVSTART> he um <FILLER> <REVEND> <REVISION> the rabbit make a sandcastle",
+        "words": [
+          {
+            "end": 25.358,
+            "start": 25.057,
+            "word": "and"
+          },
+          {
+            "end": 25.78,
+            "start": 25.438,
+            "word": "he"
+          },
+          {
+            "end": null,
+            "start": null,
+            "word": "um"
+          },
+          {
+            "end": 26.563,
+            "start": 26.462,
+            "word": "the"
+          },
+          {
+            "end": 27.165,
+            "start": 26.663,
+            "word": "rabbit"
+          },
+          {
+            "end": 27.587,
+            "start": 27.245,
+            "word": "make"
+          },
+          {
+            "end": 28.45,
+            "start": 28.008,
+            "word": "a"
+          },
+          {
+            "end": 33.328,
+            "start": 28.47,
+            "word": "sandcastle"
+          }
+        ]
+      },
+      {
+        "end": 44.027,
+        "morphemes": [],
+        "pauses": [
+          {
+            "duration": 2.01,
+            "end": 40.213,
+            "start": 38.206
+          }
+        ],
+        "repetitions": [
+          {
+            "content": "the",
+            "mark_location": 7,
+            "words": [
+              7
+            ]
+          }
+        ],
+        "speaker": "Child",
+        "start": 34.473,
+        "text": "the rabbit dump all the sand to the the sandcastle",
+        "text_clean": "the rabbit dump all the sand to the sandcastle",
+        "text_token": "the rabbit dump all the sand to <REPSTART> the <REPEND> <REPETITION> <PAUSE> the sandcastle",
+        "words": [
+          {
+            "end": 34.634,
+            "start": 34.473,
+            "word": "the"
+          },
+          {
+            "end": 35.256,
+            "start": 34.754,
+            "word": "rabbit"
+          },
+          {
+            "end": 35.677,
+            "start": 35.376,
+            "word": "dump"
+          },
+          {
+            "end": 36.219,
+            "start": 36.099,
+            "word": "all"
+          },
+          {
+            "end": 36.5,
+            "start": 36.259,
+            "word": "the"
+          },
+          {
+            "end": 37.082,
+            "start": 36.621,
+            "word": "sand"
+          },
+          {
+            "end": 37.765,
+            "start": 37.363,
+            "word": "to"
+          },
+          {
+            "end": 38.206,
+            "start": 37.986,
+            "word": "the"
+          },
+          {
+            "end": 40.334,
+            "start": 40.213,
+            "word": "the"
+          },
+          {
+            "end": 44.027,
+            "start": 40.414,
+            "word": "sandcastle"
+          }
+        ]
+      },
+      {
+        "end": 53.443,
+        "fillerwords": [
+          {
+            "content": "",
+            "duration": null,
+            "end": null,
+            "start": null
+          }
+        ],
+        "morphemes": [
+          {
+            "index": 7,
+            "inflectional_morpheme": "Past Tense",
+            "lemma": "break",
+            "morpheme_form": "<IRR>",
+            "word": "broke"
+          }
+        ],
+        "pauses": [
+          {
+            "duration": 0.76,
+            "end": 47.154,
+            "start": 46.39
+          }
+        ],
+        "revisions": [
+          {
+            "content": "he is",
+            "mark_location": 1,
+            "words": [
+              0,
+              1
+            ]
+          },
+          {
+            "content": "he",
+            "mark_location": 2,
+            "words": [
+              2
+            ]
+          },
+          {
+            "content": "his",
+            "mark_location": 8,
+            "words": [
+              8
+            ]
+          },
+          {
+            "content": "the dog's",
+            "mark_location": 10,
+            "words": [
+              9,
+              10
+            ]
+          }
+        ],
+        "speaker": "Child",
+        "start": 44.682,
+        "text": "he is he that a densely um broke his the dog's the dog",
+        "text_clean": "that a densely um broke the dog",
+        "text_token": "<REVSTART> he is <NONCOMPLE> <REVEND> <REVISION> <REVSTART> he <REVEND> <REVISION> that <PAUSE> a densely um <FILLER> <PAUSE> broke <REVSTART> his <REVEND> <REVISION> <REVSTART> the dog's <REVEND> <REVISION> the dog",
+        "words": [
+          {
+            "end": 45.204,
+            "start": 44.682,
+            "word": "he"
+          },
+          {
+            "end": 45.265,
+            "start": 45.225,
+            "word": "is"
+          },
+          {
+            "end": 46.028,
+            "start": 45.807,
+            "word": "he"
+          },
+          {
+            "end": 46.39,
+            "start": 46.109,
+            "word": "that"
+          },
+          {
+            "end": 47.214,
+            "start": 47.154,
+            "word": "a"
+          },
+          {
+            "end": 48.018,
+            "start": 47.294,
+            "word": "densely"
+          },
+          {
+            "end": null,
+            "start": null,
+            "word": "um"
+          },
+          {
+            "end": 49.907,
+            "start": 49.585,
+            "word": "broke"
+          },
+          {
+            "end": 51.052,
+            "start": 50.75,
+            "word": "his"
+          },
+          {
+            "end": 51.554,
+            "start": 51.434,
+            "word": "the"
+          },
+          {
+            "end": 52.057,
+            "start": 51.635,
+            "word": "dog's"
+          },
+          {
+            "end": 53.021,
+            "start": 52.901,
+            "word": "the"
+          },
+          {
+            "end": 53.443,
+            "start": 53.081,
+            "word": "dog"
+          }
+        ]
+      },
+      {
+        "end": 55.852,
+        "morphemes": [],
+        "speaker": "Child",
+        "start": 54.824,
+        "text": "the sandcastle",
+        "text_clean": "the sandcastle",
+        "text_token": "the sandcastle",
+        "words": [
+          {
+            "end": 54.985,
+            "start": 54.824,
+            "word": "the"
+          },
+          {
+            "end": 55.852,
+            "start": 55.005,
+            "word": "sandcastle"
+          }
+        ]
+      },
+      {
+        "end": 59.805,
+        "morphemes": [],
+        "pauses": [
+          {
+            "duration": 2.46,
+            "end": 58.313,
+            "start": 55.852
+          },
+          {
+            "duration": 0.04,
+            "end": 58.494,
+            "start": 58.454
+          }
+        ],
+        "speaker": "Child",
+        "start": 55.852,
+        "text": "and he",
+        "text_clean": "and he",
+        "text_token": "<PAUSE> and <PAUSE> he",
+        "words": [
+          {
+            "end": 58.454,
+            "start": 58.313,
+            "word": "and"
+          },
+          {
+            "end": 59.805,
+            "start": 58.494,
+            "word": "he"
+          }
+        ]
+      },
+      {
+        "end": 64.96,
+        "fillerwords": [
+          {
+            "content": "",
+            "duration": null,
+            "end": null,
+            "start": null
+          }
+        ],
+        "morphemes": [],
+        "speaker": "Child",
+        "start": 61.085,
+        "text": "the dog never um make a sandcastle",
+        "text_clean": "the dog never um make a sandcastle",
+        "text_token": "the dog never um <FILLER> make a sandcastle",
+        "words": [
+          {
+            "end": 61.266,
+            "start": 61.085,
+            "word": "the"
+          },
+          {
+            "end": 61.768,
+            "start": 61.326,
+            "word": "dog"
+          },
+          {
+            "end": 62.671,
+            "start": 61.908,
+            "word": "never"
+          },
+          {
+            "end": null,
+            "start": null,
+            "word": "um"
+          },
+          {
+            "end": 63.956,
+            "start": 63.595,
+            "word": "make"
+          },
+          {
+            "end": 64.117,
+            "start": 64.056,
+            "word": "a"
+          },
+          {
+            "end": 64.96,
+            "start": 64.197,
+            "word": "sandcastle"
+          }
+        ]
+      },
+      {
+        "end": 66.486,
+        "morphemes": [],
+        "pauses": [
+          {
+            "duration": 0.48,
+            "end": 65.442,
+            "start": 64.96
+          }
+        ],
+        "speaker": "Child",
+        "start": 64.96,
+        "text": "and he cry",
+        "text_clean": "and he cry",
+        "text_token": "<PAUSE> and he cry",
+        "words": [
+          {
+            "end": 65.542,
+            "start": 65.442,
+            "word": "and"
+          },
+          {
+            "end": 65.843,
+            "start": 65.663,
+            "word": "he"
+          },
+          {
+            "end": 66.486,
+            "start": 66.064,
+            "word": "cry"
+          }
+        ]
+      },
+      {
+        "end": 70.521,
+        "fillerwords": [
+          {
+            "content": "",
+            "duration": null,
+            "end": null,
+            "start": null
+          }
+        ],
+        "morphemes": [],
+        "pauses": [
+          {
+            "duration": 0.6,
+            "end": 67.088,
+            "start": 66.486
+          }
+        ],
+        "speaker": "Child",
+        "start": 66.486,
+        "text": "and they are bunny rabbit um",
+        "text_clean": "and they are bunny rabbit um",
+        "text_token": "<PAUSE> and they are <NONCOMPLE> bunny rabbit <PAUSE> um <FILLER>",
+        "words": [
+          {
+            "end": 67.228,
+            "start": 67.088,
+            "word": "and"
+          },
+          {
+            "end": 67.871,
+            "start": 67.65,
+            "word": "they"
+          },
+          {
+            "end": 68.112,
+            "start": 68.052,
+            "word": "are"
+          },
+          {
+            "end": 68.413,
+            "start": 68.132,
+            "word": "bunny"
+          },
+          {
+            "end": 70.521,
+            "start": 68.493,
+            "word": "rabbit"
+          },
+          {
+            "end": null,
+            "start": null,
+            "word": "um"
+          }
+        ]
+      },
+      {
+        "end": 73.052,
+        "morphemes": [],
+        "pauses": [
+          {
+            "duration": 0.02,
+            "end": 72.032,
+            "start": 72.012
+          }
+        ],
+        "speaker": "Child",
+        "start": 71.277,
+        "text": "please sorry I",
+        "text_clean": "please sorry I",
+        "text_token": "please sorry <PAUSE> I",
+        "words": [
+          {
+            "end": 71.501,
+            "start": 71.277,
+            "word": "please"
+          },
+          {
+            "end": 72.012,
+            "start": 71.604,
+            "word": "sorry"
+          },
+          {
+            "end": 73.052,
+            "start": 72.032,
+            "word": "I"
+          }
+        ]
+      }
+    ]
+  }

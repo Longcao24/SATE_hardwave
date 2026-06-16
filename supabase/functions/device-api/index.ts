@@ -77,7 +77,9 @@ serve(async (req) => {
   if (subPath.startsWith('/api')) subPath = subPath.slice(4) || '/';
   const method = req.method;
 
-  if (subPath === '/register' && method === 'POST') {
+  // Firmware posts /api/devices/register (mock-server convention) -> after the
+  // /api strip that is /devices/register; accept both it and /register.
+  if ((subPath === '/register' || subPath === '/devices/register') && method === 'POST') {
     return await handleDeviceRegister(supabase, req);
   }
 
@@ -389,7 +391,7 @@ async function storeSessionRecord(
 
 async function listSessions(supabase: any, userId: string, deviceSerial: string | null) {
   let query = supabase.from('sate_device_sessions')
-    .select('id, device_serial, patient_id, session_number, sample_rate, bytes, created_at')
+    .select('id, device_serial, patient_id, session_number, sample_rate, bytes, created_at, processed, processed_at, recording_id, process_error')
     .eq('user_id', userId).order('created_at', { ascending: false });
   if (deviceSerial) query = query.eq('device_serial', deviceSerial);
   const { data, error } = await query.limit(20);

@@ -18,7 +18,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-const AI_PROCESS_URL = Deno.env.get('AI_PROCESS_URL') || 'https://sate.ngrok.io/process';
+const AI_PROCESS_URL = Deno.env.get('AI_PROCESS_URL') || 'https://sate-v1-5.ngrok.io/process';
 const BATCH_LIMIT = 5;
 
 function json(data: unknown, status = 200) {
@@ -115,9 +115,14 @@ async function processOne(supabase: any, s: any): Promise<string> {
     file_size: wavBytes.length,
     duration: analysis.totalDuration || 0,
     patient_id: patientUuid,
-    recording_name: `SATE Device ${s.device_serial} #${s.session_number}`,
+    // Use the exact name the device sent to the server (its WAV file name),
+    // not a reformatted label — the recording shows up named as the device made it.
+    recording_name: fileName,
     protocol: 'device',
     notes: 'Auto-imported from SATE hardware device',
+    // First time the SLP opens this device recording the web app pops a form to
+    // set a real file name + protocol; cleared once they save.
+    needs_review: true,
   }).select('id').single();
   if (insErr) {
     await supabase.storage.from('recordings').remove([recPath]);
