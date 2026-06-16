@@ -1,6 +1,6 @@
-import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { DevicePanel } from './DevicePanel';
+import { FirmwareUpdateBanner } from './FirmwareUpdateBanner';
 import { Button } from '@/components/ui/button';
 import { ArrowLeft, Mic } from 'lucide-react';
 
@@ -38,6 +38,7 @@ export function DevicePage() {
 
         {/* Device Panel */}
         <div className="max-w-2xl">
+          <FirmwareUpdateBanner />
           <DevicePanel />
         </div>
       </div>

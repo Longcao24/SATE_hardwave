@@ -122,6 +122,9 @@ serve(async (req) => {
     if (deviceIdMatch && method === 'DELETE') {
       return await removeDevice(supabase, user.id, deviceIdMatch[1]);
     }
+    if (subPath === '/firmware/latest' && method === 'GET') {
+      return await getLatestFirmware(supabase);
+    }
     if (subPath === '/patients' && method === 'GET') {
       return await listPatients(supabase, user.id, url.searchParams.get('slp'));
     }
@@ -221,6 +224,10 @@ async function handleDeviceHeartbeat(supabase: any, req: Request, deviceId: stri
   const updates: Record<string, unknown> = { online: true, last_seen: new Date().toISOString() };
   if (url.searchParams.has('pending')) updates.pending_sessions = Number(url.searchParams.get('pending'));
   if (url.searchParams.has('state')) updates.state = url.searchParams.get('state');
+  // Firmware reports its running version + OTA phase each heartbeat so the
+  // dashboard can detect available updates and show update progress.
+  if (url.searchParams.has('fw')) updates.fw = url.searchParams.get('fw');
+  if (url.searchParams.has('ota')) updates.ota_state = url.searchParams.get('ota');
   await supabase.from('sate_devices').update(updates).eq('id', deviceId);
 
   const { data: cmds } = await supabase.from('sate_device_commands')
@@ -230,9 +237,13 @@ async function handleDeviceHeartbeat(supabase: any, req: Request, deviceId: stri
     await supabase.from('sate_device_commands').update({ consumed: true })
       .eq('device_id', deviceId).eq('consumed', false);
   }
+  // OTA: an `ota` command stashes { url, version } in the jsonb `patient` col;
+  // the firmware reads the sibling `ota` field, downloads the .bin and flashes.
+  const otaCmd = cmds?.find((c: any) => c.op === 'ota');
   return json({
     commands: (cmds || []).map((c: any) => c.op),
     active_patient: cmds?.find((c: any) => c.op === 'record')?.patient || null,
+    ota: otaCmd?.patient || null,
   });
 }
 
@@ -256,6 +267,13 @@ async function removeDevice(supabase: any, userId: string, deviceId: string) {
     .delete().eq('id', deviceId).eq('user_id', userId);
   if (error) throw new Error(error.message);
   return noContent();
+}
+
+async function getLatestFirmware(supabase: any) {
+  const { data } = await supabase.from('sate_firmware')
+    .select('version, url, notes, created_at')
+    .order('created_at', { ascending: false }).limit(1).maybeSingle();
+  return json(data || null);
 }
 
 async function listPatients(supabase: any, userId: string, slp: string | null) {

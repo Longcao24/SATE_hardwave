@@ -7,6 +7,7 @@ import type {
   RemoteCommand,
   UploadedSession,
   DevicePatient,
+  FirmwareInfo,
 } from './deviceTypes';
 import { supabase } from '@/lib/supabase';
 
@@ -94,6 +95,19 @@ export const deviceApiService = {
     await req(`/devices/${id}/commands`, {
       method: 'POST',
       body: JSON.stringify(patient ? { op, patient } : { op }),
+    });
+  },
+
+  /** The latest firmware image available for the fleet (or null if none set). */
+  async getLatestFirmware(): Promise<FirmwareInfo | null> {
+    return req<FirmwareInfo | null>('/firmware/latest');
+  },
+
+  /** Queue an OTA firmware update on a recorder (downloads + flashes the .bin). */
+  async updateFirmware(id: string, fw: { url: string; version: string }): Promise<void> {
+    await req(`/devices/${id}/commands`, {
+      method: 'POST',
+      body: JSON.stringify({ op: 'ota', patient: { url: fw.url, version: fw.version } }),
     });
   },
 

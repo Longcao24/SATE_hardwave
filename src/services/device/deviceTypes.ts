@@ -32,9 +32,23 @@ export interface ManagedDevice {
   pending_sessions: number;
   /** Live activity, reported in the recorder's heartbeat */
   state?: DeviceLiveState;
+  /** OTA phase reported by firmware: 'idle' normally, 'updating' mid-flash. */
+  ota_state?: string;
   /** Clinician the recorder is assigned to (set at registration) */
   slp?: string;
   slp_id?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Firmware (GET /api/firmware/latest)
+// ---------------------------------------------------------------------------
+
+/** The latest firmware image the fleet should run. */
+export interface FirmwareInfo {
+  version: string;
+  url: string;
+  notes?: string | null;
+  created_at?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -67,7 +81,8 @@ export type RemoteCommand =
   | 'sync_now'
   | 'reload_patients'
   | 'reboot'
-  | 'record';
+  | 'record'
+  | 'ota';
 
 // ---------------------------------------------------------------------------
 // Device-format patient (simpler than the Supabase CRM patient)

@@ -1,7 +1,7 @@
 // RecordSessionModal — modal for starting a remote recording on the SATE Recorder.
 // Lets the SLP pick a patient and session type before sending the "record" command.
 
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useDeviceContext } from '@/contexts/DeviceProvider';
 import { X, Mic, User, Activity } from 'lucide-react';
 

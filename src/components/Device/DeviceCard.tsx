@@ -1,7 +1,6 @@
 // DeviceCard — compact device summary for the Dashboard grid.
 // Shows status dot, name, pending sessions, and firmware version.
 
-import React from 'react';
 import type { ManagedDevice } from '@/services/device/deviceTypes';
 import { timeAgo } from '@/hooks/useDevices';
 import { Wifi, WifiOff, Radio, Upload } from 'lucide-react';

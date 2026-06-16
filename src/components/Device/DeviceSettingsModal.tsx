@@ -1,7 +1,7 @@
 // DeviceSettingsModal — admin panel for a recorder device.
 // Rename, view firmware/serial/IP, unlink with confirmation.
 
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useDeviceContext } from '@/contexts/DeviceProvider';
 import { X, Edit3, Trash2, Cpu, Wifi, Hash, Clock, AlertTriangle } from 'lucide-react';
 import { timeAgo } from '@/hooks/useDevices';

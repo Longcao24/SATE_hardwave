@@ -1,4 +1,3 @@
-import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDeviceContext } from '@/contexts/DeviceProvider';
 import { DeviceCard } from '@/components/Device/DeviceCard';

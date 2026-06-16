@@ -9,7 +9,22 @@ import type {
   UploadedSession,
   RemoteCommand,
   DevicePatient,
+  FirmwareInfo,
 } from '@/services/device/deviceTypes';
+
+// OTA lifecycle for the selected device, derived from its heartbeat fields.
+export type OtaStatus =
+  | 'current'     // running the latest firmware
+  | 'available'   // a newer firmware exists
+  | 'queued'      // update command sent, device hasn't started yet
+  | 'installing'  // device is downloading + flashing
+  | 'rebooting'   // device dropped offline to boot the new image
+  | 'done'        // device came back on the target version
+  | 'failed';     // never started within the timeout (e.g. bad/missing image)
+
+// If a queued update hasn't started this long after sending, treat it as failed
+// (common cause: the firmware image URL 404s, so the device can't download it).
+const OTA_TIMEOUT_MS = 120000;
 
 // ---------------------------------------------------------------------------
 // Context shape
@@ -44,6 +59,16 @@ interface DeviceContextValue {
   isConnected: boolean;
   /** Force an immediate refresh. */
   refresh: () => Promise<void>;
+  /** Latest firmware available for the fleet (null while unknown). */
+  latestFirmware: FirmwareInfo | null;
+  /** True when the selected device is not on the latest firmware. */
+  firmwareUpdateAvailable: boolean;
+  /** OTA lifecycle for the selected device. */
+  otaStatus: OtaStatus;
+  /** Queue an OTA update to the latest firmware on the selected device. */
+  updateFirmware: () => Promise<void>;
+  /** Dismiss a finished/failed OTA banner. */
+  clearOta: () => void;
 }
 
 const DeviceContext = createContext<DeviceContextValue | null>(null);
@@ -63,6 +88,10 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   const [activeCommand, setActiveCommand] = useState<RemoteCommand | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
+  const [latestFirmware, setLatestFirmware] = useState<FirmwareInfo | null>(null);
+  const [otaTarget, setOtaTarget] = useState<string | null>(null);
+  const [otaStartedAt, setOtaStartedAt] = useState<number | null>(null);
+  const [otaTick, setOtaTick] = useState(0); // forces re-eval of the timeout
   const mountedRef = useRef(true);
 
   const selectedDevice = devices.find((d) => d.id === selectedId) ?? devices[0] ?? null;
@@ -112,9 +141,67 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     };
   }, [refresh]);
 
+  // ---- Firmware ----
+  // Fetch the latest available firmware once the API is reachable, then refresh
+  // it periodically so a freshly published release shows up without a reload.
+  useEffect(() => {
+    if (!isConnected) return;
+    let cancelled = false;
+    const load = () => {
+      deviceApiService
+        .getLatestFirmware()
+        .then((fw) => { if (!cancelled) setLatestFirmware(fw); })
+        .catch(() => { /* non-fatal */ });
+    };
+    load();
+    const timer = setInterval(load, 60000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [isConnected]);
+
+  // Clear the in-flight target a few seconds after the device reports it landed,
+  // so the "Updated" confirmation shows briefly then collapses.
+  useEffect(() => {
+    if (otaTarget && selectedDevice && selectedDevice.fw === otaTarget) {
+      const t = setTimeout(() => { setOtaTarget(null); setOtaStartedAt(null); }, 6000);
+      return () => clearTimeout(t);
+    }
+  }, [otaTarget, selectedDevice]);
+
+  // While an update is in flight, tick every few seconds so the timeout -> failed
+  // transition fires even if nothing else re-renders.
+  useEffect(() => {
+    if (!otaTarget) return;
+    const t = setInterval(() => setOtaTick((n) => n + 1), 3000);
+    return () => clearInterval(t);
+  }, [otaTarget]);
+
   // ---- Actions ----
   const selectDevice = useCallback((id: string) => {
     setSelectedId(id);
+  }, []);
+
+  const updateFirmware = useCallback(async () => {
+    if (!selectedDevice || !latestFirmware) return;
+    setOtaTarget(latestFirmware.version);
+    setOtaStartedAt(Date.now());
+    setError(null);
+    try {
+      await deviceApiService.updateFirmware(selectedDevice.id, {
+        url: latestFirmware.url,
+        version: latestFirmware.version,
+      });
+      await refresh();
+    } catch (e: any) {
+      setError(e?.message ?? 'Firmware update failed');
+      setOtaTarget(null);
+      setOtaStartedAt(null);
+      throw e;
+    }
+  }, [selectedDevice, latestFirmware, refresh]);
+
+  const clearOta = useCallback(() => {
+    setOtaTarget(null);
+    setOtaStartedAt(null);
   }, []);
 
   const sendCommand = useCallback(
@@ -173,6 +260,24 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  // ---- Derived OTA state for the selected device ----
+  const firmwareUpdateAvailable = !!(
+    latestFirmware && selectedDevice && selectedDevice.fw !== latestFirmware.version
+  );
+
+  void otaTick; // referenced so the periodic tick recomputes the timeout below
+  let otaStatus: OtaStatus = 'current';
+  if (otaTarget && selectedDevice) {
+    const timedOut = otaStartedAt != null && Date.now() - otaStartedAt > OTA_TIMEOUT_MS;
+    if (selectedDevice.fw === otaTarget) otaStatus = 'done';
+    else if (selectedDevice.ota_state === 'updating') otaStatus = 'installing';
+    else if (!selectedDevice.online) otaStatus = 'rebooting';
+    else if (timedOut) otaStatus = 'failed';
+    else otaStatus = 'queued';
+  } else if (firmwareUpdateAvailable) {
+    otaStatus = 'available';
+  }
+
   const value: DeviceContextValue = {
     devices,
     selectedDevice,
@@ -188,6 +293,11 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     error,
     isConnected,
     refresh,
+    latestFirmware,
+    firmwareUpdateAvailable,
+    otaStatus,
+    updateFirmware,
+    clearOta,
   };
 
   return <DeviceContext.Provider value={value}>{children}</DeviceContext.Provider>;
