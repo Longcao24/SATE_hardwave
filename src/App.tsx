@@ -17,6 +17,7 @@ import { PaymentCancel } from './components/Stripe/PaymentCancel';
 import { UserProfilePage } from './components/Profile/UserProfilePage';
 import InviteCodesPage from './components/Profile/InviteCodesPage';
 import { DevicePage } from './components/Device/DevicePage';
+import { AdminPage } from './components/Admin/AdminPage';
 
 // Protected Route component
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -130,6 +131,16 @@ function App() {
         }
       />
       
+      {/* Admin Route (system-wide; page self-guards to admins) */}
+      <Route
+        path="/admin"
+        element={
+          <ProtectedRoute>
+            <AdminPage />
+          </ProtectedRoute>
+        }
+      />
+
       {/* User Profile Route */}
       <Route
         path="/profile"

@@ -7,7 +7,7 @@ import { useDeviceContext } from '@/contexts/DeviceProvider';
 import { useDeviceStatus } from '@/hooks/useDevices';
 import { RecordSessionModal } from './RecordSessionModal';
 import { DeviceSettingsModal } from './DeviceSettingsModal';
-import { DeviceSessionStatus } from './DeviceSessionStatus';
+import { DeviceFrame } from './DeviceFrame';
 import {
   RefreshCw,
   Settings,
@@ -25,7 +25,6 @@ export function DevicePanel() {
     devices,
     selectedDevice,
     selectDevice,
-    sessions,
     sendCommand,
     isLoading,
     isSendingCommand,
@@ -168,15 +167,40 @@ export function DevicePanel() {
         </button>
       </div>
 
-      {/* ---- Hero: animated status ring ---- */}
+      {/* ---- Hero: the real recorder, live on its screen ---- */}
       <div className="device-hero">
-        <div className={`device-status-ring ${isBusy ? 'device-status-ring--active' : 'device-status-ring--idle'}`}>
-          <div className="device-ring-track" />
-          <div className={`device-ring-accent ${isBusy ? 'device-ring-spinning' : ''}`} />
-          <div
-            className={`device-ring-dot ${isRecording ? 'device-dot--recording device-dot-pulse' : isUploading ? 'device-dot--uploading' : isOnline ? 'device-dot--online' : 'device-dot--offline'}`}
-          />
-        </div>
+        <DeviceFrame width={300}>
+          <div className="w-full h-full flex flex-col items-center justify-center px-3 py-4 text-center">
+            <span className="text-[11px] font-bold tracking-widest text-gray-400 uppercase">
+              SATE
+            </span>
+            <div
+              className={`mt-3 flex items-center justify-center rounded-full ${
+                isRecording ? 'bg-red-50' : isUploading ? 'bg-blue-50' : isOnline ? 'bg-green-50' : 'bg-gray-100'
+              }`}
+              style={{ width: 64, height: 64 }}
+            >
+              {isRecording ? (
+                <Activity className="w-7 h-7 text-red-500 animate-pulse" />
+              ) : isUploading ? (
+                <Upload className="w-7 h-7 text-blue-500 animate-bounce" />
+              ) : isOnline ? (
+                <Mic className="w-7 h-7 text-green-600" />
+              ) : (
+                <WifiOff className="w-7 h-7 text-gray-400" />
+              )}
+            </div>
+            <span
+              className="mt-3 text-sm font-bold leading-tight"
+              style={{ color: statusColorMap[statusColor] }}
+            >
+              {statusLabel}
+            </span>
+            <span className="mt-1 text-[11px] text-gray-400 truncate max-w-full">
+              {selectedDevice?.name || 'Recorder'}
+            </span>
+          </div>
+        </DeviceFrame>
         <p className="text-gray-500 text-sm mt-5 text-center">
           {isRecording
             ? 'Capturing audio on the recorder…'
@@ -275,11 +299,6 @@ export function DevicePanel() {
           <p className="text-red-600 text-xs">{error}</p>
         </div>
       )}
-
-      {/* ---- Sessions: live status only (Received → Processing → Ready) ----
-          Auto-processed; no manual sync/import. Clicking a Ready row opens the
-          recording in the normal report view. */}
-      <DeviceSessionStatus sessions={sessions} />
 
       {/* ---- Modals ---- */}
       <RecordSessionModal

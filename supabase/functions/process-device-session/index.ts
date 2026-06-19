@@ -118,11 +118,12 @@ async function processOne(supabase: any, s: any): Promise<string> {
     // Use the exact name the device sent to the server (its WAV file name),
     // not a reformatted label — the recording shows up named as the device made it.
     recording_name: fileName,
-    protocol: 'device',
+    // Device recordings are shown directly: protocol auto-filled, name kept as
+    // the device's WAV file name. No review form — needs_review stays false so
+    // the report opens straight away.
+    protocol: 'auto',
     notes: 'Auto-imported from SATE hardware device',
-    // First time the SLP opens this device recording the web app pops a form to
-    // set a real file name + protocol; cleared once they save.
-    needs_review: true,
+    needs_review: false,
   }).select('id').single();
   if (insErr) {
     await supabase.storage.from('recordings').remove([recPath]);

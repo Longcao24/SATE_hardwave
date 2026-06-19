@@ -17,6 +17,9 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3';
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  // DELETE (unlink) and PATCH (rename) are not CORS-safelisted, so the browser
+  // preflight needs them listed explicitly or it fails with "Failed to fetch".
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
 };
 
 function json(data: unknown, status = 200) {
@@ -97,6 +100,17 @@ serve(async (req) => {
     }
   }
 
+  // Device fetches its own patient roster with its device key (fetchPatients).
+  // listPatients below needs a user JWT, which the recorder doesn't have, so
+  // resolve the device's owner here and return that user's patients.
+  if (subPath === '/patients' && method === 'GET' && authHeader.startsWith('Bearer key-')) {
+    const deviceId = authHeader.replace('Bearer key-', '');
+    const { data: device } = await supabase.from('sate_devices')
+      .select('user_id').eq('id', deviceId).single();
+    if (!device) return err('Device not found', 404);
+    return await listPatients(supabase, device.user_id, url.searchParams.get('slp'));
+  }
+
   const { data: { user }, error: userError } = await supabase.auth.getUser(token);
   if (userError || !user) {
     return err('Unauthorized', 401);
@@ -124,6 +138,35 @@ serve(async (req) => {
     }
     if (subPath === '/firmware/latest' && method === 'GET') {
       return await getLatestFirmware(supabase);
+    }
+    if (subPath === '/firmware' && method === 'POST') {
+      return await publishFirmware(supabase, req);
+    }
+
+    // ---- Admin (system-wide management) ----------------------------------
+    // Gated on the caller's email being in sate_admins. Everything here spans
+    // ALL users, so it must never be reachable by a normal account.
+    if (subPath.startsWith('/admin')) {
+      const admin = await isAdmin(supabase, user.email);
+      if (subPath === '/admin/me' && method === 'GET') {
+        return json({ isAdmin: admin });
+      }
+      if (!admin) return err('Forbidden', 403);
+      if (subPath === '/admin/devices' && method === 'GET') {
+        return await adminListDevices(supabase);
+      }
+      if (subPath === '/admin/firmware' && method === 'GET') {
+        return await adminListFirmware(supabase);
+      }
+      const fwMatch = subPath.match(/^\/admin\/firmware\/([^/]+)$/);
+      if (fwMatch && method === 'DELETE') {
+        return await adminDeleteFirmware(supabase, fwMatch[1]);
+      }
+      const devMatch = subPath.match(/^\/admin\/devices\/([^/]+)$/);
+      if (devMatch && method === 'DELETE') {
+        return await adminDeleteDevice(supabase, devMatch[1]);
+      }
+      return err('Not found', 404);
     }
     if (subPath === '/patients' && method === 'GET') {
       return await listPatients(supabase, user.id, url.searchParams.get('slp'));
@@ -221,6 +264,14 @@ async function sendCommand(supabase: any, userId: string, deviceId: string, req:
 
 async function handleDeviceHeartbeat(supabase: any, req: Request, deviceId: string) {
   const url = new URL(req.url);
+  // If the SLP removed this recorder from their account, the row is gone. Tell
+  // the device to reset itself back to first-time setup. This is the ONLY path
+  // that unprovisions a recorder - holding BOOT just changes Wi-Fi now.
+  const { data: exists } = await supabase.from('sate_devices')
+    .select('id').eq('id', deviceId).maybeSingle();
+  if (!exists) {
+    return json({ unclaimed: true, commands: [] });
+  }
   const updates: Record<string, unknown> = { online: true, last_seen: new Date().toISOString() };
   if (url.searchParams.has('pending')) updates.pending_sessions = Number(url.searchParams.get('pending'));
   if (url.searchParams.has('state')) updates.state = url.searchParams.get('state');
@@ -274,6 +325,106 @@ async function getLatestFirmware(supabase: any) {
     .select('version, url, notes, created_at')
     .order('created_at', { ascending: false }).limit(1).maybeSingle();
   return json(data || null);
+}
+
+// Publish a new firmware release from the web app: upload the .bin to the public
+// `firmware` Storage bucket (service role, so it always succeeds) and record it
+// in sate_firmware. getLatestFirmware then serves it, and the device update
+// banner appears for any recorder running an older version. Body = raw .bin;
+// version + notes ride in the query string.
+async function publishFirmware(supabase: any, req: Request) {
+  const url = new URL(req.url);
+  const version = (url.searchParams.get('version') || '').trim();
+  const notes = (url.searchParams.get('notes') || '').trim();
+  if (!version) return err('A version is required (e.g. 1.1.0)');
+  const bin = new Uint8Array(await req.arrayBuffer());
+  if (bin.length < 1024) return err('That firmware file looks empty or too small');
+
+  const path = `sate_${version}.bin`;
+  const { error: upErr } = await supabase.storage.from('firmware')
+    .upload(path, bin, { contentType: 'application/octet-stream', upsert: true });
+  if (upErr) return err('Storage upload failed: ' + upErr.message, 500);
+
+  const { data: pub } = supabase.storage.from('firmware').getPublicUrl(path);
+  const fwUrl = pub?.publicUrl;
+  if (!fwUrl) return err('Could not resolve a public URL for the upload', 500);
+
+  // Insert a fresh row; getLatestFirmware orders by created_at, so the newest
+  // wins. Re-publishing a version overwrites its .bin (upsert above) and adds a
+  // new row - no unique-constraint requirement on `version`.
+  const { data, error } = await supabase.from('sate_firmware')
+    .insert({ version, url: fwUrl, notes: notes || null })
+    .select('version, url, notes, created_at').single();
+  if (error) return err('Could not save the firmware record: ' + error.message, 500);
+  return json(data);
+}
+
+// ---- Admin -----------------------------------------------------------------
+
+async function isAdmin(supabase: any, email?: string | null): Promise<boolean> {
+  if (!email) return false;
+  const { data } = await supabase.from('sate_admins')
+    .select('email').eq('email', email.toLowerCase()).maybeSingle();
+  return !!data;
+}
+
+// Map every device's owner user_id -> email so the admin table reads clearly.
+async function ownerEmailMap(supabase: any): Promise<Record<string, string>> {
+  const map: Record<string, string> = {};
+  try {
+    let page = 1;
+    // perPage max 1000; paginate defensively for larger fleets.
+    for (;;) {
+      const { data, error } = await supabase.auth.admin.listUsers({ page, perPage: 1000 });
+      if (error || !data?.users?.length) break;
+      for (const u of data.users) map[u.id] = u.email || '';
+      if (data.users.length < 1000) break;
+      page++;
+    }
+  } catch { /* best effort - fall back to slp name in the UI */ }
+  return map;
+}
+
+async function adminListDevices(supabase: any) {
+  // Flip stale rows offline, same as the per-user list, then return everything.
+  const cutoff = new Date(Date.now() - 45000).toISOString();
+  await supabase.from('sate_devices')
+    .update({ online: false, state: 'idle' })
+    .lt('last_seen', cutoff).eq('online', true);
+  const { data, error } = await supabase.from('sate_devices')
+    .select('*').order('created_at', { ascending: true });
+  if (error) throw new Error(error.message);
+  const emails = await ownerEmailMap(supabase);
+  return json((data || []).map((d: any) => ({ ...d, owner_email: emails[d.user_id] || '' })));
+}
+
+async function adminListFirmware(supabase: any) {
+  const { data, error } = await supabase.from('sate_firmware')
+    .select('id, version, url, notes, created_at')
+    .order('created_at', { ascending: false });
+  if (error) throw new Error(error.message);
+  return json(data || []);
+}
+
+async function adminDeleteFirmware(supabase: any, id: string) {
+  const { data: row } = await supabase.from('sate_firmware')
+    .select('url').eq('id', id).maybeSingle();
+  // Best-effort remove the .bin from storage (path is the trailing file name).
+  if (row?.url) {
+    const file = row.url.split('/firmware/')[1];
+    if (file) await supabase.storage.from('firmware').remove([file]).catch(() => {});
+  }
+  const { error } = await supabase.from('sate_firmware').delete().eq('id', id);
+  if (error) throw new Error(error.message);
+  return noContent();
+}
+
+async function adminDeleteDevice(supabase: any, deviceId: string) {
+  // No user_id filter: an admin can unlink any device. The recorder learns it
+  // was removed on its next heartbeat ({unclaimed:true}) and resets to setup.
+  const { error } = await supabase.from('sate_devices').delete().eq('id', deviceId);
+  if (error) throw new Error(error.message);
+  return noContent();
 }
 
 async function listPatients(supabase: any, userId: string, slp: string | null) {

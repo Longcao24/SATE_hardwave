@@ -8,6 +8,8 @@ import type {
   UploadedSession,
   DevicePatient,
   FirmwareInfo,
+  AdminDevice,
+  AdminFirmware,
 } from './deviceTypes';
 import { supabase } from '@/lib/supabase';
 
@@ -103,6 +105,37 @@ export const deviceApiService = {
     return req<FirmwareInfo | null>('/firmware/latest');
   },
 
+  /**
+   * Publish a new firmware release: uploads the .bin to the firmware bucket and
+   * records it as the latest version. Recorders on an older version then see the
+   * update banner and can be flashed OTA. The binary is sent raw (octet-stream),
+   * so this bypasses the JSON `req` helper.
+   */
+  async publishFirmware(
+    file: File | Blob,
+    version: string,
+    notes?: string
+  ): Promise<FirmwareInfo> {
+    const token = await getAuthToken();
+    const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+    const q = new URLSearchParams({ version });
+    if (notes) q.set('notes', notes);
+    const res = await fetch(`${getBaseUrl()}/firmware?${q.toString()}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(anonKey ? { apikey: anonKey } : {}),
+      },
+      body: file,
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`${res.status} ${body || res.statusText}`);
+    }
+    return res.json();
+  },
+
   /** Queue an OTA firmware update on a recorder (downloads + flashes the .bin). */
   async updateFirmware(id: string, fw: { url: string; version: string }): Promise<void> {
     await req(`/devices/${id}/commands`, {
@@ -153,5 +186,32 @@ export const deviceApiService = {
   async isConfigured(): Promise<boolean> {
     const token = await getAuthToken();
     return !!token;
+  },
+
+  // ---- Admin (system-wide) ----
+  /** Whether the signed-in user is a SATE admin. */
+  async amIAdmin(): Promise<boolean> {
+    try {
+      const r = await req<{ isAdmin: boolean }>('/admin/me');
+      return !!r.isAdmin;
+    } catch {
+      return false;
+    }
+  },
+  /** Every recorder in the system, with its owner's email. */
+  async adminListDevices(): Promise<AdminDevice[]> {
+    return req<AdminDevice[]>('/admin/devices');
+  },
+  /** Every published firmware release. */
+  async adminListFirmware(): Promise<AdminFirmware[]> {
+    return req<AdminFirmware[]>('/admin/firmware');
+  },
+  /** Delete a firmware release (row + .bin). */
+  async adminDeleteFirmware(id: string): Promise<void> {
+    await req(`/admin/firmware/${id}`, { method: 'DELETE' });
+  },
+  /** Unlink any device from its account (it resets to setup on next heartbeat). */
+  async adminDeleteDevice(id: string): Promise<void> {
+    await req(`/admin/devices/${id}`, { method: 'DELETE' });
   },
 };

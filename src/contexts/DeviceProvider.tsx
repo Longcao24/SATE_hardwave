@@ -61,6 +61,8 @@ interface DeviceContextValue {
   refresh: () => Promise<void>;
   /** Latest firmware available for the fleet (null while unknown). */
   latestFirmware: FirmwareInfo | null;
+  /** Re-fetch the latest firmware now (e.g. right after publishing one). */
+  refreshFirmware: () => Promise<void>;
   /** True when the selected device is not on the latest firmware. */
   firmwareUpdateAvailable: boolean;
   /** OTA lifecycle for the selected device. */
@@ -144,6 +146,13 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   // ---- Firmware ----
   // Fetch the latest available firmware once the API is reachable, then refresh
   // it periodically so a freshly published release shows up without a reload.
+  const refreshFirmware = useCallback(async () => {
+    try {
+      const fw = await deviceApiService.getLatestFirmware();
+      if (mountedRef.current) setLatestFirmware(fw);
+    } catch { /* non-fatal */ }
+  }, []);
+
   useEffect(() => {
     if (!isConnected) return;
     let cancelled = false;
@@ -294,6 +303,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     isConnected,
     refresh,
     latestFirmware,
+    refreshFirmware,
     firmwareUpdateAvailable,
     otaStatus,
     updateFirmware,

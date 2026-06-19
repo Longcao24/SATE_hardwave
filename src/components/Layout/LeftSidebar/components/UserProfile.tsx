@@ -1,5 +1,6 @@
 import React from 'react';
 import { User, Crown, CreditCard, Settings, Ticket, LogOut } from 'lucide-react';
+import { MobileLinkButton } from '../../../Auth/MobileLinkModal';
 
 interface UserProfileProps {
   user: { email?: string } | null;
@@ -96,6 +97,7 @@ export const UserProfile: React.FC<UserProfileProps> = ({
                 <Ticket className="w-4 h-4" />
                 Invite Codes
               </button>
+              <MobileLinkButton />
               <div className="border-t border-gray-200 my-1"></div>
               <button
                 onClick={onLogout}

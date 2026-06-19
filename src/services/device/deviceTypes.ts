@@ -52,6 +52,26 @@ export interface FirmwareInfo {
 }
 
 // ---------------------------------------------------------------------------
+// Admin (system-wide management — only for users in sate_admins)
+// ---------------------------------------------------------------------------
+
+/** A recorder as the admin sees it: a ManagedDevice plus its owner's email. */
+export interface AdminDevice extends ManagedDevice {
+  user_id?: string;
+  owner_email?: string;
+  created_at?: string;
+}
+
+/** A published firmware release row (admin firmware manager). */
+export interface AdminFirmware {
+  id: string;
+  version: string;
+  url: string;
+  notes?: string | null;
+  created_at?: string;
+}
+
+// ---------------------------------------------------------------------------
 // Uploaded sessions (GET /api/sessions)
 // ---------------------------------------------------------------------------
 
