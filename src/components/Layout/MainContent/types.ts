@@ -35,6 +35,8 @@ export interface MainContentProps {
   onPlaybackSpeedChange?: (speed: number) => void;
   recordingId?: string;
   onPlaySegment?: (startTime: number, endTime: number) => Promise<void>;
+  // Device flag markers (ms offsets) for this recording, shown on the seek bar.
+  flags?: number[];
 }
 
 

@@ -24,6 +24,9 @@ interface AudioControlsProps {
   isSimpleAnnotationMode?: boolean;
   playbackSpeed?: number;
   onPlaybackSpeedChange?: (speed: number) => void;
+  // Flag markers (ms offsets) the clinician hit on the hardware device while
+  // recording. Rendered as clickable ticks on the seek bar.
+  flags?: number[];
 }
 
 const AudioControls: React.FC<AudioControlsProps> = ({ 
@@ -42,7 +45,8 @@ const AudioControls: React.FC<AudioControlsProps> = ({
   availableErrorTypes = [],
   isSimpleAnnotationMode = true,
   playbackSpeed = 1.0,
-  onPlaybackSpeedChange
+  onPlaybackSpeedChange,
+  flags = []
 }) => {
   const internalAudioRef = useRef<HTMLAudioElement>(null);
   const audioRef = externalAudioRef || internalAudioRef;
@@ -136,7 +140,7 @@ const AudioControls: React.FC<AudioControlsProps> = ({
               className={`h-3 bg-gray-200 rounded-full relative group ${isAudioReady ? 'cursor-pointer' : 'cursor-not-allowed'}`}
               onClick={handleSeek}
             >
-              <div 
+              <div
                 className="h-3 bg-blue-600 rounded-full relative transition-all duration-150"
                 style={{ width: `${progressPercentage}%` }}
               >
@@ -144,6 +148,21 @@ const AudioControls: React.FC<AudioControlsProps> = ({
                   <div className="absolute right-0 top-1/2 -translate-y-1/2 w-5 h-5 bg-blue-600 rounded-full border-2 border-white shadow-sm opacity-0 group-hover:opacity-100 transition-opacity" />
                 )}
               </div>
+
+              {/* Device flag markers — amber ticks at each flagged moment. */}
+              {isAudioReady && flags
+                .map((ms) => ms / 1000)
+                .filter((sec) => sec >= 0 && sec <= duration)
+                .map((sec, i) => (
+                  <button
+                    key={`flag-${i}-${sec}`}
+                    type="button"
+                    title={`Flagged moment · ${formatTime(sec)}`}
+                    onClick={(e) => { e.stopPropagation(); onSeekTo(sec); }}
+                    className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-2 h-5 bg-amber-500 rounded-sm border border-white shadow hover:bg-amber-600 z-10"
+                    style={{ left: `${(sec / duration) * 100}%` }}
+                  />
+                ))}
             </div>
           </div>
 

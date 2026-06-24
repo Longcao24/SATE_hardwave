@@ -100,11 +100,12 @@ export const loadRecording = async (recordingId: string): Promise<{
   fileName: string;
   recordingName: string | null;
   createdAt: string;
+  flags: number[];
 } | null> => {
   try {
     const { data: recording, error } = await supabase
       .from('recordings')
-      .select('transcript, error_counts, analysis, file_path, file_name, recording_name, created_at')
+      .select('transcript, error_counts, analysis, file_path, file_name, recording_name, created_at, flags')
       .eq('id', recordingId)
       .single();
 
@@ -123,6 +124,7 @@ export const loadRecording = async (recordingId: string): Promise<{
       fileName: recording.file_name,
       recordingName: recording.recording_name,
       createdAt: recording.created_at,
+      flags: Array.isArray(recording.flags) ? (recording.flags as number[]) : [],
     };
   } catch (error) {
     console.error('Error loading recording:', error);

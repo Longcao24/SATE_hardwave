@@ -399,6 +399,7 @@ export function MainApp() {
             recordingId={transcriptProcessor.currentRecordingId || undefined}
             onPlaySegment={audioPlayer.playSegment}
             onEditingStateChange={handleEditingStateChange}
+            flags={transcriptProcessor.currentRecordingFlags}
           />
         ) : (
           <Dashboard 

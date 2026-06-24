@@ -523,6 +523,7 @@ async function handleSessionUpload(supabase: any, req: Request, subPath: string)
       patient_id: url.searchParams.get('patient_id') || 'PT',
       session_number: sessionNumber,
       sample_rate: Number(url.searchParams.get('sample_rate') || 16000),
+      flags: parseFlags(url.searchParams.get('flags')),
     }, assembled);
     await supabase.storage.from('device-sessions').remove([tmpPath]);
     return res;
@@ -531,10 +532,18 @@ async function handleSessionUpload(supabase: any, req: Request, subPath: string)
   return err('Unknown session endpoint', 404);
 }
 
+// Parse the firmware's "&flags=12000,45000" CSV (ms offsets) into a number[].
+function parseFlags(raw: string | null): number[] {
+  if (!raw) return [];
+  return raw.split(',')
+    .map((s) => Number(s.trim()))
+    .filter((n) => Number.isFinite(n) && n >= 0);
+}
+
 async function storeSessionRecord(
   supabase: any,
   userId: string,
-  meta: { device_serial: string; patient_id: string; session_number: number; sample_rate: number },
+  meta: { device_serial: string; patient_id: string; session_number: number; sample_rate: number; flags?: number[] },
   wavBytes: Uint8Array,
 ) {
   const sessionId = 's-' + crypto.randomUUID().slice(0, 8);
@@ -548,6 +557,7 @@ async function storeSessionRecord(
     id: sessionId, user_id: userId, device_serial: meta.device_serial,
     patient_id: meta.patient_id, session_number: meta.session_number,
     sample_rate: meta.sample_rate, bytes: wavBytes.length, storage_path: storagePath,
+    flags: meta.flags && meta.flags.length ? meta.flags : null,
   });
   if (insertError) throw new Error(insertError.message);
 

@@ -19,6 +19,8 @@ export function useTranscriptProcessor() {
   // Current recording state
   const [currentRecordingName, setCurrentRecordingName] = useState('');
   const [currentRecordingDate, setCurrentRecordingDate] = useState('');
+  // Device flag markers (ms offsets) for the open recording; empty for uploads.
+  const [currentRecordingFlags, setCurrentRecordingFlags] = useState<number[]>([]);
   
   // Filter state
   const [activeFilters, setActiveFilters] = useState<string[]>([]);
@@ -52,6 +54,7 @@ export function useTranscriptProcessor() {
     setSpeechAnalysis: transcriptDataHook.setSpeechAnalysis,
     setCurrentRecordingName,
     setCurrentRecordingDate,
+    setCurrentRecordingFlags,
     setCurrentRecordingId: recordingMetadataHook.setCurrentRecordingId,
     setAvailableErrorTypes,
     setActiveFilters,
@@ -92,6 +95,7 @@ export function useTranscriptProcessor() {
     recordingMetadataHook.setCurrentRecordingId(null);
     setCurrentRecordingName('');
     setCurrentRecordingDate('');
+    setCurrentRecordingFlags([]);
     setAvailableErrorTypes([]);
     setActiveFilters([]);
     
@@ -132,6 +136,7 @@ export function useTranscriptProcessor() {
     // Current recording
     currentRecordingName,
     currentRecordingDate,
+    currentRecordingFlags,
     currentRecordingId: recordingMetadataHook.currentRecordingId,
     isEditMode: transcriptEditorHook.isEditMode,
     

@@ -46,7 +46,8 @@ const MainContent: React.FC<MainContentProps> = ({
   playbackSpeed,
   onPlaybackSpeedChange,
   recordingId,
-  onPlaySegment
+  onPlaySegment,
+  flags = []
 }) => {
   const [isSimpleAnnotationMode, setIsSimpleAnnotationMode] = useState(true);
   const [showCancelConfirmation, setShowCancelConfirmation] = useState(false);
@@ -227,6 +228,7 @@ const MainContent: React.FC<MainContentProps> = ({
             isSimpleAnnotationMode={isSimpleAnnotationMode}
             playbackSpeed={playbackSpeed}
             onPlaybackSpeedChange={onPlaybackSpeedChange}
+            flags={flags}
           />
         </div>
       )}

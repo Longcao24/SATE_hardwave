@@ -43,13 +43,13 @@ serve(async (req) => {
 
   let query = supabase
     .from('sate_device_sessions')
-    .select('id, user_id, device_serial, patient_id, session_number, sample_rate, bytes, storage_path')
+    .select('id, user_id, device_serial, patient_id, session_number, sample_rate, bytes, storage_path, flags')
     .eq('processed', false)
     .order('created_at', { ascending: true })
     .limit(BATCH_LIMIT);
   if (onlyId) query = supabase
     .from('sate_device_sessions')
-    .select('id, user_id, device_serial, patient_id, session_number, sample_rate, bytes, storage_path')
+    .select('id, user_id, device_serial, patient_id, session_number, sample_rate, bytes, storage_path, flags')
     .eq('id', onlyId)
     .eq('processed', false);
 
@@ -124,6 +124,8 @@ async function processOne(supabase: any, s: any): Promise<string> {
     protocol: 'auto',
     notes: 'Auto-imported from SATE hardware device',
     needs_review: false,
+    // Flag markers (ms offsets) the clinician hit on the device during the take.
+    flags: Array.isArray(s.flags) && s.flags.length ? s.flags : null,
   }).select('id').single();
   if (insErr) {
     await supabase.storage.from('recordings').remove([recPath]);
