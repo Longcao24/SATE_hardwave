@@ -91,6 +91,8 @@ export interface UploadedSession {
   recording_id?: string | null;
   /** Set if processing failed. */
   process_error?: string | null;
+  /** True when the AI returned no usable text: no report is created. */
+  no_text?: boolean;
 }
 
 // ---------------------------------------------------------------------------

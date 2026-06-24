@@ -61,7 +61,7 @@ serve(async (req) => {
   for (const s of sessions) {
     try {
       const rec = await processOne(supabase, s);
-      results.push({ session: s.id, recording_id: rec, status: 'ok' });
+      results.push({ session: s.id, recording_id: rec, status: rec ? 'ok' : 'no_text' });
     } catch (e) {
       const msg = (e as Error).message || String(e);
       await supabase.from('sate_device_sessions')
@@ -72,7 +72,7 @@ serve(async (req) => {
   return json({ processed: results });
 });
 
-async function processOne(supabase: any, s: any): Promise<string> {
+async function processOne(supabase: any, s: any): Promise<string | null> {
   // 1. Download the WAV the device uploaded.
   const { data: blob, error: dlErr } = await supabase.storage.from('device-sessions').download(s.storage_path);
   if (dlErr || !blob) throw new Error(`download failed: ${dlErr?.message || 'no blob'}`);
@@ -92,7 +92,21 @@ async function processOne(supabase: any, s: any): Promise<string> {
   const aiRes = await fetch(AI_PROCESS_URL, { method: 'POST', body: fd, headers: { Accept: 'application/json' } });
   if (!aiRes.ok) throw new Error(`AI ${aiRes.status}: ${(await aiRes.text()).slice(0, 200)}`);
   const transcript = await aiRes.json();
-  if (!transcript || !transcript.segments) throw new Error('AI returned no segments');
+  if (!transcript || !Array.isArray(transcript.segments)) throw new Error('AI returned no segments');
+
+  // No usable speech (silence / noise): the AI returns a valid response but with
+  // no words. Do NOT create a recording/report. Mark the session no_text so the
+  // device tab shows "No text in audio" + a delete option, and stop reprocessing.
+  const hasText = transcript.segments.some((seg: any) =>
+    (Array.isArray(seg.words) && seg.words.some((w: any) => (w?.word || '').trim().length > 0)) ||
+    (typeof seg.text === 'string' && seg.text.trim().length > 0));
+  if (!hasText) {
+    await supabase.from('sate_device_sessions').update({
+      processed: true, processed_at: new Date().toISOString(),
+      recording_id: null, no_text: true, process_error: null,
+    }).eq('id', s.id);
+    return null;
+  }
 
   // 4. Same derived metrics as manual upload.
   const errorCounts = countErrors(transcript.segments);

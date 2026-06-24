@@ -181,6 +181,10 @@ serve(async (req) => {
     if (audioMatch && method === 'GET') {
       return await getSessionAudio(supabase, user.id, audioMatch[1]);
     }
+    const sessionDelMatch = subPath.match(/^\/sessions\/([^/]+)$/);
+    if (sessionDelMatch && method === 'DELETE') {
+      return await deleteSession(supabase, user.id, sessionDelMatch[1]);
+    }
     return err('Not found', 404);
   } catch (e) {
     console.error('Device API error:', e);
@@ -570,12 +574,28 @@ async function storeSessionRecord(
 
 async function listSessions(supabase: any, userId: string, deviceSerial: string | null) {
   let query = supabase.from('sate_device_sessions')
-    .select('id, device_serial, patient_id, session_number, sample_rate, bytes, created_at, processed, processed_at, recording_id, process_error')
+    .select('id, device_serial, patient_id, session_number, sample_rate, bytes, created_at, processed, processed_at, recording_id, process_error, no_text')
     .eq('user_id', userId).order('created_at', { ascending: false });
   if (deviceSerial) query = query.eq('device_serial', deviceSerial);
   const { data, error } = await query.limit(20);
   if (error) throw new Error(error.message);
   return json((data || []).map((s: any) => ({ ...s, at: s.created_at })));
+}
+
+// Delete a single uploaded session (its DB row + the stored WAV). Scoped to the
+// caller's own sessions. Used for "no text in audio" sessions and any cleanup.
+// A linked recording, if any, is left intact (delete that from the report view).
+async function deleteSession(supabase: any, userId: string, sessionId: string) {
+  const { data: row } = await supabase.from('sate_device_sessions')
+    .select('storage_path').eq('id', sessionId).eq('user_id', userId).maybeSingle();
+  if (!row) return err('Session not found', 404);
+  if (row.storage_path) {
+    await supabase.storage.from('device-sessions').remove([row.storage_path]).catch(() => {});
+  }
+  const { error } = await supabase.from('sate_device_sessions')
+    .delete().eq('id', sessionId).eq('user_id', userId);
+  if (error) throw new Error(error.message);
+  return noContent();
 }
 
 async function getSessionAudio(supabase: any, userId: string, sessionId: string) {

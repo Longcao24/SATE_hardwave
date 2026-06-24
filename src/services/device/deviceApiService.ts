@@ -164,6 +164,12 @@ export const deviceApiService = {
     return req<UploadedSession[]>(`/sessions${q}`);
   },
 
+  /** Delete an uploaded session (its row + stored audio). A linked recording,
+   *  if any, is left intact. */
+  async deleteSession(sessionId: string): Promise<void> {
+    await req(`/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
+  },
+
   /**
    * Get the playable audio URL for a session.
    * The Edge Function returns a 302 redirect to a Supabase Storage signed URL.

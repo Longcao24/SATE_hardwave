@@ -1,19 +1,25 @@
 // DeviceSessionStatus — read-only list of sessions the recorder uploaded, with
 // their live processing state. No manual sync/import step: the server auto-runs
 // the AI bridge, so this just shows progress (Received → Processing → Ready).
+// Sessions whose audio held no speech are marked "No text in audio" (no report
+// is created) and can be deleted from here.
 
+import { useState } from 'react';
 import type { UploadedSession } from '@/services/device/deviceTypes';
 import { formatSessionDuration, timeAgo } from '@/hooks/useDevices';
-import { CheckCircle2, Loader2, AlertCircle, FileAudio } from 'lucide-react';
+import { CheckCircle2, Loader2, AlertCircle, FileAudio, MicOff, Trash2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { deviceApiService } from '@/services/device/deviceApiService';
+import { useDeviceContext } from '@/contexts/DeviceProvider';
 
 interface DeviceSessionStatusProps {
   sessions: UploadedSession[];
 }
 
-type Status = 'processing' | 'ready' | 'failed';
+type Status = 'processing' | 'ready' | 'failed' | 'no_text';
 
 const statusOf = (s: UploadedSession): Status => {
+  if (s.no_text) return 'no_text';
   if (s.process_error) return 'failed';
   if (s.processed && s.recording_id) return 'ready';
   return 'processing';
@@ -21,6 +27,26 @@ const statusOf = (s: UploadedSession): Status => {
 
 export function DeviceSessionStatus({ sessions }: DeviceSessionStatusProps) {
   const navigate = useNavigate();
+  const { refresh } = useDeviceContext();
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const handleDelete = async (e: React.MouseEvent, s: UploadedSession) => {
+    e.stopPropagation();
+    if (deletingId) return;
+    if (!window.confirm(`Delete session ${s.session_number}? This removes the uploaded audio and cannot be undone.`)) {
+      return;
+    }
+    setDeletingId(s.id);
+    try {
+      await deviceApiService.deleteSession(s.id);
+      await refresh();
+    } catch (err) {
+      console.error('Failed to delete session:', err);
+      window.alert('Could not delete the session. Please try again.');
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   return (
     <div className="mt-6">
@@ -40,6 +66,7 @@ export function DeviceSessionStatus({ sessions }: DeviceSessionStatusProps) {
           sessions.map((s, i) => {
             const status = statusOf(s);
             const ready = status === 'ready';
+            const busy = deletingId === s.id;
             return (
               <div
                 key={s.id}
@@ -65,6 +92,14 @@ export function DeviceSessionStatus({ sessions }: DeviceSessionStatusProps) {
                     <CheckCircle2 className="w-3 h-3" /> Ready · View
                   </span>
                 )}
+                {status === 'no_text' && (
+                  <span
+                    title="The AI found no speech in this audio, so no report was created."
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-600 bg-slate-100 rounded-lg"
+                  >
+                    <MicOff className="w-3 h-3" /> No text in audio
+                  </span>
+                )}
                 {status === 'failed' && (
                   <span
                     title={s.process_error || 'Processing failed'}
@@ -73,6 +108,16 @@ export function DeviceSessionStatus({ sessions }: DeviceSessionStatusProps) {
                     <AlertCircle className="w-3 h-3" /> Failed
                   </span>
                 )}
+
+                <button
+                  type="button"
+                  onClick={(e) => handleDelete(e, s)}
+                  disabled={busy}
+                  title="Delete this session"
+                  className="ml-2 p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 disabled:opacity-50"
+                >
+                  {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                </button>
               </div>
             );
           })
