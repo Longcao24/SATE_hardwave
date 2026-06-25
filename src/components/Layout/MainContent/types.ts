@@ -8,6 +8,9 @@ export interface MainContentProps {
   isPlaying: boolean;
   onTogglePlayPause: () => void;
   onSeekTo: (time: number) => void;
+  // Raw seek (no gap-snapping) — used for device-flag clicks so they play the
+  // exact flagged moment even when it lands in a silent gap.
+  onSeekExact?: (time: number) => void;
   duration: number;
   onNextWord: () => void;
   onPrevWord: () => void;
@@ -37,6 +40,12 @@ export interface MainContentProps {
   onPlaySegment?: (startTime: number, endTime: number) => Promise<void>;
   // Device flag markers (ms offsets) for this recording, shown on the seek bar.
   flags?: number[];
+  // Notes keyed by raw ms offset (string). Shown + editable in edit mode.
+  flagNotes?: Record<string, string>;
+  // Flag edit handlers — only called when isEditable + recording is loaded.
+  onAddFlag?: (rawMs: number) => void;
+  onDeleteFlag?: (rawMs: number) => void;
+  onUpdateFlagNote?: (rawMs: number, note: string) => void;
 }
 
 

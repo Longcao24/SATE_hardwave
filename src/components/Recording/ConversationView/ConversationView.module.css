@@ -5,6 +5,7 @@
   overflow-y: auto;
   background: white;
   height: 100%;
+  position: relative;
 }
 
 /* Edit Toolbar Styles */
@@ -1271,4 +1272,145 @@
 .noteCancelBtn:hover {
   background: #e5e7eb;
   color: #374151;
+}
+
+/* --- Utterance row + device-flag timeline rail ---------------------------- */
+/* Each utterance is wrapped in a row so a vertical flag timeline can sit to its
+   right. The 24px spacing is moved from the segment onto the row, so the rail
+   cell stretches to exactly the utterance height (accurate flag placement). */
+.segmentRow {
+  display: flex;
+  align-items: stretch;
+  margin-bottom: 24px;
+}
+
+.segmentRow .conversationSegment,
+.segmentRow .pauseSegment {
+  margin-bottom: 0;
+}
+
+.segmentCol {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Reserves horizontal space on the right of each utterance so text never runs
+   under the timeline rail / flag labels. */
+.flagRailSpacer {
+  flex: 0 0 92px;
+}
+
+/* One overlay spanning the whole utterance list; scrolls with the content.
+   Flags are positioned by measured time (see ConversationView index.tsx). */
+.flagRailOverlay {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Continuous vertical timeline line, sitting inside the reserved spacer zone. */
+.flagRailOverlay::before {
+  content: '';
+  position: absolute;
+  right: 70px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #e5e7eb;
+  border-radius: 1px;
+}
+
+/* Flag tick — wrapper div anchored on the rail line. */
+.flagTick {
+  position: absolute;
+  right: 74px;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  pointer-events: auto;
+  z-index: 2;
+}
+
+/* The clickable button inside the tick wrapper. */
+.flagTickBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin: 0;
+  padding: 1px 4px;
+  background: #fff;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+  color: #b45309;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.flagTickBtn:hover {
+  background: #fffbeb;
+}
+
+/* In edit mode the tick shows delete controls. */
+.flagTickEditable .flagTickBtn {
+  padding-right: 2px;
+}
+
+/* Delete button — only visible in edit mode. */
+.flagDeleteBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  cursor: pointer;
+  color: #ef4444;
+  padding: 0;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.flagTickEditable:hover .flagDeleteBtn {
+  opacity: 1;
+}
+
+/* Note popover wrapper — positions above/below the tick. */
+.flagPopoverWrap {
+  position: relative;
+}
+
+/* Filled flag for ticks that have a note. */
+.flagIconFilled {
+  fill: #f59e0b;
+}
+
+/* Amber dot indicator when a note exists (next to timestamp). */
+.flagNoteDot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #f59e0b;
+  flex: none;
+}
+
+.flagIcon {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  fill: #fcd34d;
+  stroke: #d97706;
+}
+
+.flagTime {
+  font-variant-numeric: tabular-nums;
 }

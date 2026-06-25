@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { X } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback, useLayoutEffect } from 'react';
+import { X, Flag, Trash2 } from 'lucide-react';
+import FlagNotePopover from '../../Audio/FlagNotePopover';
 import { type Segment } from '../../../services/dataService';
 import { jsonToSalt } from '../../../services/saltService';
 import AnnotationPopup from '../../Annotations/AnnotationPopup';
@@ -44,7 +45,12 @@ const ConversationView: React.FC<ConversationViewProps> = ({
   duration = 0,
   isSimpleAnnotationMode = true,
   onEditingStateChange,
-  onPlaySegment
+  onPlaySegment,
+  flags = [],
+  flagNotes = {},
+  onSeekExact,
+  onDeleteFlag,
+  onUpdateFlagNote,
 }) => {
   // State management
   const [selectedAnnotation, setSelectedAnnotation] = useState<AnnotationDetails | null>(null);
@@ -57,6 +63,27 @@ const ConversationView: React.FC<ConversationViewProps> = ({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [clickedWord, setClickedWord] = useState<{ segmentIndex: number; wordIndex: number; timestamp: number } | null>(null);
   const editableRef = useRef<HTMLDivElement>(null as any);
+
+  // --- Device flag markers → vertical timeline rail ---------------------------
+  // The transcript is sparse (utterances don't cover the whole audio), so a flag
+  // can land inside an utterance OR in a silent gap between/outside them. We
+  // measure each rendered utterance's vertical position, then place every flag by
+  // time: interpolated within its utterance, or proportionally across the gap
+  // between the utterances before/after it. This keeps the rail flags consistent
+  // with the horizontal seek-bar ticks (same time → same relative position).
+  const formatFlagTime = useCallback((seconds: number): string => {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  }, []);
+
+  const hasFlags = (flags?.length ?? 0) > 0 && transcriptData.length > 0;
+
+  const [railTicks, setRailTicks] = useState<Array<{ sec: number; y: number }>>([]);
+  const [railHeight, setRailHeight] = useState(0);
+  const [flagPopup, setFlagPopup] = useState<{ rawMs: number; sec: number; x: number; y: number } | null>(null);
+  // NOTE: recomputeRail + its effect are defined further down, after `autoScroll`
+  // is declared (it needs autoScroll.scrollContainerRef).
 
   // Error callback for segment operations
   const handleSegmentError = useCallback((message: string) => {
@@ -96,6 +123,105 @@ const ConversationView: React.FC<ConversationViewProps> = ({
     currentTime,
     isEnabled: true,
   });
+
+  // Measure utterance positions and place each device flag on the timeline rail
+  // by time (see the comment near railTicks state above). Defined here because it
+  // depends on autoScroll.scrollContainerRef.
+  const recomputeRail = useCallback(() => {
+    const container = autoScroll.scrollContainerRef.current;
+    if (!container || !hasFlags) {
+      setRailTicks([]);
+      setRailHeight(0);
+      return;
+    }
+
+    const cRect = container.getBoundingClientRect();
+    const scrollTop = container.scrollTop;
+    // Content-absolute vertical metrics for each utterance row (scroll-independent).
+    const metrics = transcriptData.map((seg, i) => {
+      const el = container.querySelector(`[data-seg-row="${i}"]`) as HTMLElement | null;
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { start: seg.start, end: seg.end, top: r.top - cRect.top + scrollTop, height: r.height };
+    });
+    const contentHeight = container.scrollHeight;
+
+    const timeToY = (t: number): number | null => {
+      // Inside an utterance.
+      for (const m of metrics) {
+        if (!m) continue;
+        if (t >= m.start && t <= m.end) {
+          const span = Math.max(0.001, m.end - m.start);
+          return m.top + ((t - m.start) / span) * m.height;
+        }
+      }
+      // In a gap / outside: interpolate between the utterance before and after.
+      let before: typeof metrics[number] = null;
+      let after: typeof metrics[number] = null;
+      for (const m of metrics) {
+        if (!m) continue;
+        if (m.end <= t && (!before || m.end > before.end)) before = m;
+        if (m.start >= t && (!after || m.start < after.start)) after = m;
+      }
+      if (before && after) {
+        const denom = Math.max(0.001, after.start - before.end);
+        const frac = Math.min(1, Math.max(0, (t - before.end) / denom));
+        const bBottom = before.top + before.height;
+        return bBottom + frac * (after.top - bBottom);
+      }
+      if (after && !before) {
+        // Before the first utterance.
+        const frac = after.start > 0 ? Math.min(1, Math.max(0, t / after.start)) : 0;
+        return frac * after.top;
+      }
+      if (before && !after) {
+        // After the last utterance — spread across remaining height by audio duration.
+        const bBottom = before.top + before.height;
+        if (duration && duration > before.end) {
+          const frac = Math.min(1, Math.max(0, (t - before.end) / (duration - before.end)));
+          return bBottom + frac * (contentHeight - bBottom);
+        }
+        return bBottom;
+      }
+      return null;
+    };
+
+    const raw = (flags ?? [])
+      .map((ms) => ms / 1000)
+      .filter((s) => Number.isFinite(s) && s >= 0)
+      .sort((a, b) => a - b)
+      .map((sec) => ({ sec, y: timeToY(sec) }))
+      .filter((t): t is { sec: number; y: number } => t.y !== null);
+
+    // Push ticks apart so no two are closer than MIN_TICK_GAP px.
+    // Forward pass cascades: each tick's final position is used for the next,
+    // so a cluster of N close flags all get spaced out correctly.
+    const MIN_TICK_GAP = 22;
+    const ticks: typeof raw = [];
+    for (const t of raw) {
+      const lastY = ticks.length > 0 ? ticks[ticks.length - 1].y : -Infinity;
+      ticks.push({ ...t, y: Math.max(t.y, lastY + MIN_TICK_GAP) });
+    }
+
+    setRailHeight(contentHeight);
+    setRailTicks(ticks);
+  }, [autoScroll.scrollContainerRef, hasFlags, transcriptData, flags, duration]);
+
+  // Recompute on data/layout changes. ResizeObserver + window resize cover reflows
+  // (edit mode, inline editing, font load, viewport changes).
+  useLayoutEffect(() => {
+    recomputeRail();
+    const raf = requestAnimationFrame(recomputeRail);
+    const container = autoScroll.scrollContainerRef.current;
+    const ro = new ResizeObserver(() => recomputeRail());
+    if (container) ro.observe(container);
+    window.addEventListener('resize', recomputeRail);
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+      window.removeEventListener('resize', recomputeRail);
+    };
+  }, [recomputeRail, inlineEditingSegment, isEditable, isSimpleAnnotationMode, activeFilters]);
 
   // Context menu state
   const [contextMenuData, setContextMenuData] = useState<ContextMenuData>({
@@ -398,9 +524,11 @@ const ConversationView: React.FC<ConversationViewProps> = ({
       {transcriptData.length === 0 ? (
         <WelcomeMessage />
       ) : (
-        transcriptData.map((segment, segmentIndex) => (
+        transcriptData.map((segment, segmentIndex) => {
+          return (
+          <div key={segmentIndex} data-seg-row={segmentIndex} className={styles.segmentRow}>
+            <div className={styles.segmentCol}>
           <TranscriptSegment
-            key={segmentIndex}
             segment={segment}
             segmentIndex={segmentIndex}
             segmentId={autoScroll.getSegmentId(segmentIndex)}
@@ -481,9 +609,73 @@ const ConversationView: React.FC<ConversationViewProps> = ({
             }}
             onNoteChange={handleNoteChange}
           />
-        ))
+            </div>
+            {hasFlags && <div className={styles.flagRailSpacer} aria-hidden="true" />}
+          </div>
+          );
+        })
+      )}
+
+      {/* Device-flag timeline rail — single measured overlay spanning the list. */}
+      {hasFlags && (
+        <div className={styles.flagRailOverlay} style={{ height: railHeight }}>
+          {railTicks.map((t, i) => {
+            const FLAG_LEAD_MS = 70;
+            const rawMs = Math.round(t.sec * 1000 + FLAG_LEAD_MS);
+            const note = flagNotes[String(rawMs)] || flagNotes[String(Math.round(t.sec * 1000))] || '';
+            return (
+              <div
+                key={`flag-${i}-${t.sec}`}
+                className={`${styles.flagTick} ${isEditable ? styles.flagTickEditable : ''}`}
+                style={{ top: t.y }}
+              >
+                <button
+                  type="button"
+                  title={`${formatFlagTime(t.sec)}${note ? ` · ${note}` : ''}`}
+                  className={styles.flagTickBtn}
+                  onClick={(e) => {
+                    if (isEditable || note) {
+                      setFlagPopup({ rawMs, sec: t.sec, x: e.clientX, y: e.clientY });
+                    } else {
+                      onSeekExact ? onSeekExact(t.sec) : onSeek(t.sec.toString());
+                    }
+                  }}
+                >
+                  <Flag className={`${styles.flagIcon} ${note ? styles.flagIconFilled : ''}`} />
+                  <span className={styles.flagTime}>{formatFlagTime(t.sec)}</span>
+                  {note && <span className={styles.flagNoteDot} />}
+                </button>
+                {isEditable && onDeleteFlag && (
+                  <button
+                    type="button"
+                    className={styles.flagDeleteBtn}
+                    title="Remove flag"
+                    onClick={() => { onDeleteFlag(rawMs); setFlagPopup(null); }}
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
       )}
       
+      {/* Flag note popup — annotation-style, positioned from click coords */}
+      {flagPopup && (
+        <FlagNotePopover
+          sec={flagPopup.sec}
+          rawMs={flagPopup.rawMs}
+          note={flagNotes[String(flagPopup.rawMs)] || flagNotes[String(Math.round(flagPopup.sec * 1000))] || ''}
+          position={{ x: flagPopup.x, y: flagPopup.y }}
+          onClose={() => setFlagPopup(null)}
+          onSeek={() => { onSeekExact ? onSeekExact(flagPopup.sec) : onSeek(flagPopup.sec.toString()); }}
+          isEditable={isEditable}
+          onSave={onUpdateFlagNote}
+          onDelete={onDeleteFlag ? () => onDeleteFlag(flagPopup.rawMs) : undefined}
+        />
+      )}
+
       {/* Popups and Dialogs */}
       <AnnotationPopup
         annotation={selectedAnnotation}

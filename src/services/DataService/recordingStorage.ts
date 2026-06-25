@@ -1,6 +1,6 @@
 import { supabase } from '@/lib/supabase';
 import { queryClient } from '@/lib/react-query';
-import type { TranscriptData, IssueCounts, SpeechAnalysis } from './types';
+import type { TranscriptData, IssueCounts, SpeechAnalysis, FlagNotes } from './types';
 import { countErrors } from './errorCounter';
 import { calculateSpeechAnalysis } from './speechAnalysis';
 
@@ -92,8 +92,8 @@ export const getRecordingUrl = async (path: string): Promise<string | null> => {
 };
 
 // Load recording data from database with full analysis
-export const loadRecording = async (recordingId: string): Promise<{ 
-  transcript: TranscriptData; 
+export const loadRecording = async (recordingId: string): Promise<{
+  transcript: TranscriptData;
   errorCounts: IssueCounts;
   analysis: SpeechAnalysis;
   audioUrl: string | null;
@@ -101,11 +101,12 @@ export const loadRecording = async (recordingId: string): Promise<{
   recordingName: string | null;
   createdAt: string;
   flags: number[];
+  flagNotes: FlagNotes;
 } | null> => {
   try {
     const { data: recording, error } = await supabase
       .from('recordings')
-      .select('transcript, error_counts, analysis, file_path, file_name, recording_name, created_at, flags')
+      .select('transcript, error_counts, analysis, file_path, file_name, recording_name, created_at, flags, flag_notes')
       .eq('id', recordingId)
       .single();
 
@@ -125,10 +126,31 @@ export const loadRecording = async (recordingId: string): Promise<{
       recordingName: recording.recording_name,
       createdAt: recording.created_at,
       flags: Array.isArray(recording.flags) ? (recording.flags as number[]) : [],
+      flagNotes: (recording.flag_notes && typeof recording.flag_notes === 'object' && !Array.isArray(recording.flag_notes))
+        ? (recording.flag_notes as FlagNotes)
+        : {},
     };
   } catch (error) {
     console.error('Error loading recording:', error);
     return null;
+  }
+};
+
+// Auto-save flag edits (add/delete/note). Writes both columns atomically.
+export const updateRecordingFlags = async (
+  recordingId: string,
+  flags: number[],
+  flagNotes: FlagNotes,
+): Promise<{ success: boolean; error?: string }> => {
+  try {
+    const { error } = await supabase
+      .from('recordings')
+      .update({ flags, flag_notes: flagNotes })
+      .eq('id', recordingId);
+    if (error) return { success: false, error: error.message };
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Unknown error' };
   }
 };
 

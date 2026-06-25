@@ -367,6 +367,7 @@ export function MainApp() {
             isPlaying={audioPlayer.isPlaying}
             onTogglePlayPause={audioPlayer.togglePlayPause}
             onSeekTo={audioPlayer.seekTo}
+            onSeekExact={audioPlayer.seekToExact}
             duration={audioPlayer.duration}
             onNextWord={() => {}}
             onPrevWord={() => {}}
@@ -400,6 +401,10 @@ export function MainApp() {
             onPlaySegment={audioPlayer.playSegment}
             onEditingStateChange={handleEditingStateChange}
             flags={transcriptProcessor.currentRecordingFlags}
+            flagNotes={transcriptProcessor.currentRecordingFlagNotes}
+            onAddFlag={transcriptProcessor.addFlag}
+            onDeleteFlag={transcriptProcessor.deleteFlag}
+            onUpdateFlagNote={transcriptProcessor.updateFlagNote}
           />
         ) : (
           <Dashboard 

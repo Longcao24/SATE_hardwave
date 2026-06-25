@@ -51,6 +51,14 @@ export interface ConversationViewProps {
   isSimpleAnnotationMode?: boolean;
   onEditingStateChange?: (state: EditingState, actions: EditingActions) => void;
   onPlaySegment?: (startTime: number, endTime: number) => Promise<void>;
+  // Device flag markers (ms offsets) hit on the hardware while recording.
+  // Rendered as ticks on a vertical timeline rail beside the utterances.
+  flags?: number[];
+  flagNotes?: Record<string, string>;
+  // Raw seek (no gap-snapping) for flag clicks, so they play the exact moment.
+  onSeekExact?: (time: number) => void;
+  onDeleteFlag?: (rawMs: number) => void;
+  onUpdateFlagNote?: (rawMs: number, note: string) => void;
 }
 
 export interface SpeakerChangeData {

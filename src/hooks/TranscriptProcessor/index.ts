@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { useAuth } from '@/contexts/AuthProvider';
 import { useTranscriptData } from './useTranscriptData';
 import { useProcessingState } from './useProcessingState';
@@ -7,7 +7,9 @@ import { useRecordingMetadata } from './useRecordingMetadata';
 import { useRecordingLoader } from './useRecordingLoader';
 import { useTranscriptEditor } from './useTranscriptEditor';
 import { useFileUpload } from './useFileUpload';
+import { updateRecordingFlags } from '@/services/dataService';
 import type { RecordingMetadata } from './types';
+import type { FlagNotes } from '@/services/DataService/types';
 
 /**
  * Main hook that orchestrates all transcript processing sub-hooks
@@ -21,6 +23,8 @@ export function useTranscriptProcessor() {
   const [currentRecordingDate, setCurrentRecordingDate] = useState('');
   // Device flag markers (ms offsets) for the open recording; empty for uploads.
   const [currentRecordingFlags, setCurrentRecordingFlags] = useState<number[]>([]);
+  // Notes keyed by ms offset (as string) — loaded alongside flags.
+  const [currentRecordingFlagNotes, setCurrentRecordingFlagNotes] = useState<FlagNotes>({});
   
   // Filter state
   const [activeFilters, setActiveFilters] = useState<string[]>([]);
@@ -55,6 +59,7 @@ export function useTranscriptProcessor() {
     setCurrentRecordingName,
     setCurrentRecordingDate,
     setCurrentRecordingFlags,
+    setCurrentRecordingFlagNotes,
     setCurrentRecordingId: recordingMetadataHook.setCurrentRecordingId,
     setAvailableErrorTypes,
     setActiveFilters,
@@ -89,6 +94,42 @@ export function useTranscriptProcessor() {
       recordingMetadataHook.saveRecordingWithFreshData(metadata, transcriptData, errorCounts, setDataError),
   });
 
+  // --- Flag editing (auto-save) ---
+  const recordingId = recordingMetadataHook.currentRecordingId;
+
+  const saveFlags = useCallback(async (flags: number[], notes: FlagNotes) => {
+    if (!recordingId) return;
+    setCurrentRecordingFlags(flags);
+    setCurrentRecordingFlagNotes(notes);
+    await updateRecordingFlags(recordingId, flags, notes);
+  }, [recordingId]);
+
+  // Add a new flag at rawMs. rawMs is the exact stored value (caller already
+  // compensates for display lead). Sorted ascending after insert.
+  const addFlag = useCallback(async (rawMs: number) => {
+    const next = [...currentRecordingFlags, rawMs].sort((a, b) => a - b);
+    await saveFlags(next, currentRecordingFlagNotes);
+  }, [currentRecordingFlags, currentRecordingFlagNotes, saveFlags]);
+
+  // Delete a flag by its stored ms value.
+  const deleteFlag = useCallback(async (rawMs: number) => {
+    const next = currentRecordingFlags.filter((ms) => ms !== rawMs);
+    const nextNotes = { ...currentRecordingFlagNotes };
+    delete nextNotes[String(rawMs)];
+    await saveFlags(next, nextNotes);
+  }, [currentRecordingFlags, currentRecordingFlagNotes, saveFlags]);
+
+  // Set or clear the note for a flag (identified by its stored ms value).
+  const updateFlagNote = useCallback(async (rawMs: number, note: string) => {
+    const nextNotes = { ...currentRecordingFlagNotes };
+    if (note.trim()) {
+      nextNotes[String(rawMs)] = note.trim();
+    } else {
+      delete nextNotes[String(rawMs)];
+    }
+    await saveFlags(currentRecordingFlags, nextNotes);
+  }, [currentRecordingFlags, currentRecordingFlagNotes, saveFlags]);
+
   // Clear all data
   const clearData = () => {
     transcriptDataHook.clearData();
@@ -96,6 +137,7 @@ export function useTranscriptProcessor() {
     setCurrentRecordingName('');
     setCurrentRecordingDate('');
     setCurrentRecordingFlags([]);
+    setCurrentRecordingFlagNotes({});
     setAvailableErrorTypes([]);
     setActiveFilters([]);
     
@@ -137,6 +179,7 @@ export function useTranscriptProcessor() {
     currentRecordingName,
     currentRecordingDate,
     currentRecordingFlags,
+    currentRecordingFlagNotes,
     currentRecordingId: recordingMetadataHook.currentRecordingId,
     isEditMode: transcriptEditorHook.isEditMode,
     
@@ -154,7 +197,12 @@ export function useTranscriptProcessor() {
     saveRecordingNameChange: transcriptEditorHook.saveRecordingNameChange,
     cancelEditMode: transcriptEditorHook.cancelEditMode,
     clearData,
-    
+
+    // Flag editing (auto-save to DB when recording is loaded)
+    addFlag,
+    deleteFlag,
+    updateFlagNote,
+
     // Setters
     setDataError: processingStateHook.setDataError,
     setShowTimeoutWarning: processingStateHook.setShowTimeoutWarning,

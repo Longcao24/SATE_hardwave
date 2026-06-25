@@ -185,6 +185,18 @@ export function useAudioPlayer({ transcriptData = [] }: UseAudioPlayerProps = {}
     setCurrentTime(clampedTime);
   };
 
+  // Raw seek to an exact time, WITHOUT the gap-snapping in seekTo's
+  // validateSeekTimestamp. Used for device-flag clicks: a flag can fall in a
+  // silent gap between utterances, and we must play that exact moment, not snap
+  // to the next segment's start.
+  const seekToExact = (time: number) => {
+    const audio = audioRef.current;
+    if (!audio || !audioLoaded) return;
+    const clampedTime = Math.max(0, Math.min(time, duration));
+    audio.currentTime = clampedTime;
+    setCurrentTime(clampedTime);
+  };
+
   const seekToTimestamp = (timestamp: string) => {
     // Handle direct timestamp values (e.g., "3.565")
     const time = parseFloat(timestamp);
@@ -270,6 +282,7 @@ export function useAudioPlayer({ transcriptData = [] }: UseAudioPlayerProps = {}
     // Actions
     togglePlayPause,
     seekTo,
+    seekToExact,
     seekToTimestamp,
     setAudioUrl,
     setCurrentTime,

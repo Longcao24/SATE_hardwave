@@ -69,6 +69,10 @@ export interface IssueCounts {
   'utterance-error': number;
 }
 
+// Device flag notes: key = ms offset as string, value = note text.
+// Stored separately from the flags number[] so the flags column stays compatible.
+export type FlagNotes = { [ms: string]: string };
+
 // Enhanced error type for better error handling
 export interface ProcessingError {
   type: 'api' | 'network' | 'server' | 'validation' | 'unknown';

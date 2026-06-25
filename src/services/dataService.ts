@@ -43,4 +43,5 @@ export {
   updateRecordingName,
   updateRecordingMetadata,
   updateRecordingPatient,
-} from './DataService/recordingStorage'; 
+  updateRecordingFlags,
+} from './DataService/recordingStorage';

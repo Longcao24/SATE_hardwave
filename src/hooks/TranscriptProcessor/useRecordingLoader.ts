@@ -18,6 +18,7 @@ interface RecordingLoaderDeps {
   setCurrentRecordingName: (name: string) => void;
   setCurrentRecordingDate: (date: string) => void;
   setCurrentRecordingFlags: (flags: number[]) => void;
+  setCurrentRecordingFlagNotes: (notes: Record<string, string>) => void;
   setCurrentRecordingId: (id: string | null) => void;
   setAvailableErrorTypes: (types: string[]) => void;
   setActiveFilters: (filters: string[]) => void;
@@ -56,6 +57,7 @@ export function useRecordingLoader(deps: RecordingLoaderDeps) {
       deps.setCurrentRecordingName('Sample Audio (673_clip.wav)');
       deps.setCurrentRecordingDate(new Date().toISOString());
       deps.setCurrentRecordingFlags([]); // sample data has no device flags
+      deps.setCurrentRecordingFlagNotes({});
       deps.setCurrentRecordingId(null); // Sample data, no recording ID
       
       // Get available error types for filtering
@@ -109,6 +111,7 @@ export function useRecordingLoader(deps: RecordingLoaderDeps) {
         deps.setCurrentRecordingName(recordingData.recordingName || recordingData.fileName);
         deps.setCurrentRecordingDate(recordingData.createdAt);
         deps.setCurrentRecordingFlags(recordingData.flags || []);
+        deps.setCurrentRecordingFlagNotes(recordingData.flagNotes || {});
         deps.setCurrentRecordingId(recordingId);
         
         // Get available error types for filtering

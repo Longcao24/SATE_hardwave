@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Button } from '../ui/button';
-import { Play, Pause, SkipBack, SkipForward } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward, X } from 'lucide-react';
 import { type IssueCounts } from '@/services/dataService';
 import { getButtonColor, getAnnotationLabel } from '@/lib/annotationColors';
+import FlagNotePopover from './FlagNotePopover';
 
 interface AudioControlsProps {
   onTimeUpdate?: (currentTime: number) => void;
@@ -24,30 +25,38 @@ interface AudioControlsProps {
   isSimpleAnnotationMode?: boolean;
   playbackSpeed?: number;
   onPlaybackSpeedChange?: (speed: number) => void;
-  // Flag markers (ms offsets) the clinician hit on the hardware device while
-  // recording. Rendered as clickable ticks on the seek bar.
   flags?: number[];
+  flagNotes?: Record<string, string>;
+  onSeekExact?: (time: number) => void;
+  isEditable?: boolean;
+  onAddFlag?: (rawMs: number) => void;
+  onDeleteFlag?: (rawMs: number) => void;
+  onUpdateFlagNote?: (rawMs: number, note: string) => void;
 }
 
-const AudioControls: React.FC<AudioControlsProps> = ({ 
-
-  audioRef: externalAudioRef, 
-  isPlaying, 
-  currentTime, 
-  duration, 
-  onTogglePlayPause, 
-  onSeekTo, 
-
-  activeFilters, 
-  onToggleFilter, 
-
-  issueCounts, 
+const AudioControls: React.FC<AudioControlsProps> = ({
+  audioRef: externalAudioRef,
+  isPlaying,
+  currentTime,
+  duration,
+  onTogglePlayPause,
+  onSeekTo,
+  activeFilters,
+  onToggleFilter,
+  issueCounts,
   availableErrorTypes = [],
   isSimpleAnnotationMode = true,
   playbackSpeed = 1.0,
   onPlaybackSpeedChange,
-  flags = []
+  flags = [],
+  flagNotes = {},
+  onSeekExact,
+  isEditable = false,
+  onAddFlag,
+  onDeleteFlag,
+  onUpdateFlagNote,
 }) => {
+  const [flagPopup, setFlagPopup] = useState<{ rawMs: number; sec: number; x: number; y: number } | null>(null);
   const internalAudioRef = useRef<HTMLAudioElement>(null);
   const audioRef = externalAudioRef || internalAudioRef;
   
@@ -100,13 +109,23 @@ const AudioControls: React.FC<AudioControlsProps> = ({
     onTogglePlayPause();
   };
 
+  const FLAG_LEAD_MS = 70; // matches MainContent adjustment
+
   const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!isAudioReady) return;
 
     const rect = e.currentTarget.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
     const newTime = (clickX / rect.width) * duration;
-    
+
+    // In edit mode: add a flag at click position. Store with lead compensation so
+    // after the -FLAG_LEAD_MS display shift the tick appears exactly here.
+    if (isEditable && onAddFlag) {
+      const rawMs = Math.round(newTime * 1000) + FLAG_LEAD_MS;
+      onAddFlag(rawMs);
+      return;
+    }
+
     onSeekTo(newTime);
   };
 
@@ -137,7 +156,8 @@ const AudioControls: React.FC<AudioControlsProps> = ({
           {/* Progress Bar - Full Width */}
           <div className="flex-1">
             <div 
-              className={`h-3 bg-gray-200 rounded-full relative group ${isAudioReady ? 'cursor-pointer' : 'cursor-not-allowed'}`}
+              className={`h-3 bg-gray-200 rounded-full relative group ${!isAudioReady ? 'cursor-not-allowed' : isEditable ? 'cursor-crosshair' : 'cursor-pointer'}`}
+              title={isEditable ? 'Click to add flag' : undefined}
               onClick={handleSeek}
             >
               <div
@@ -149,20 +169,71 @@ const AudioControls: React.FC<AudioControlsProps> = ({
                 )}
               </div>
 
-              {/* Device flag markers — amber ticks at each flagged moment. */}
-              {isAudioReady && flags
-                .map((ms) => ms / 1000)
-                .filter((sec) => sec >= 0 && sec <= duration)
-                .map((sec, i) => (
-                  <button
-                    key={`flag-${i}-${sec}`}
-                    type="button"
-                    title={`Flagged moment · ${formatTime(sec)}`}
-                    onClick={(e) => { e.stopPropagation(); onSeekTo(sec); }}
-                    className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-2 h-5 bg-amber-500 rounded-sm border border-white shadow hover:bg-amber-600 z-10"
-                    style={{ left: `${(sec / duration) * 100}%` }}
-                  />
-                ))}
+              {/* Device flag markers — stagger overlapping ticks above/below bar */}
+              {isAudioReady && (() => {
+                // Sort by time, then assign a stagger row to avoid overlap.
+                // Ticks within OVERLAP_THRESHOLD% of each other alternate rows.
+                const OVERLAP_PCT = 2.5; // ~8px on a 300px bar
+                const sorted = flags
+                  .map((ms) => ({ ms, sec: ms / 1000 }))
+                  .filter(({ sec }) => sec >= 0 && sec <= duration)
+                  .sort((a, b) => a.sec - b.sec);
+
+                // Assign row: 0 = on bar, 1 = above, 2 = below, 3 = above further…
+                const rows: number[] = [];
+                for (let i = 0; i < sorted.length; i++) {
+                  if (i === 0) { rows.push(0); continue; }
+                  const prevPct = (sorted[i - 1].sec / duration) * 100;
+                  const curPct  = (sorted[i].sec   / duration) * 100;
+                  rows.push(curPct - prevPct < OVERLAP_PCT ? (rows[i - 1] % 2 === 0 ? 1 : 0) : 0);
+                }
+
+                return sorted.map(({ ms, sec }, i) => {
+                  const rawMs = Math.round(ms + FLAG_LEAD_MS);
+                  const note = flagNotes[String(rawMs)] || flagNotes[String(ms)] || '';
+                  const row = rows[i];
+                  const offsetY = row === 0 ? 0 : row % 2 === 1 ? -14 : 14;
+
+                  return (
+                    <div
+                      key={`flag-${i}-${sec}`}
+                      className="absolute -translate-x-1/2 z-10 group/tick"
+                      style={{
+                        left: `${(sec / duration) * 100}%`,
+                        top: `calc(50% + ${offsetY}px)`,
+                        transform: 'translate(-50%, -50%)',
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {/* Tick body */}
+                      <button
+                        type="button"
+                        title={`${formatTime(sec)}${note ? ` · ${note}` : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (isEditable || note) {
+                            setFlagPopup({ rawMs, sec, x: e.clientX, y: e.clientY });
+                          } else {
+                            (onSeekExact ?? onSeekTo)(sec);
+                          }
+                        }}
+                        className={`w-2 h-5 rounded-sm border border-white shadow ${note ? 'bg-amber-600' : 'bg-amber-500'} hover:bg-amber-600`}
+                      />
+                      {/* Delete X — edit mode only, on hover */}
+                      {isEditable && onDeleteFlag && (
+                        <button
+                          type="button"
+                          title="Remove flag"
+                          onClick={(e) => { e.stopPropagation(); onDeleteFlag(rawMs); setFlagPopup(null); }}
+                          className="absolute -top-3 left-1/2 -translate-x-1/2 w-4 h-4 rounded-full bg-red-500 text-white flex items-center justify-center opacity-0 group-hover/tick:opacity-100 transition-opacity"
+                        >
+                          <X className="w-2.5 h-2.5" />
+                        </button>
+                      )}
+                    </div>
+                  );
+                });
+              })()}
             </div>
           </div>
 
@@ -317,6 +388,20 @@ const AudioControls: React.FC<AudioControlsProps> = ({
           )}
         </div>
       </div>
+      {/* Flag note popup — annotation-style, positioned from click coords */}
+      {flagPopup && (
+        <FlagNotePopover
+          sec={flagPopup.sec}
+          rawMs={flagPopup.rawMs}
+          note={flagNotes[String(flagPopup.rawMs)] || flagNotes[String(Math.round(flagPopup.sec * 1000))] || ''}
+          position={{ x: flagPopup.x, y: flagPopup.y }}
+          onClose={() => setFlagPopup(null)}
+          onSeek={() => { (onSeekExact ?? onSeekTo)(flagPopup.sec); }}
+          isEditable={isEditable}
+          onSave={onUpdateFlagNote}
+          onDelete={onDeleteFlag && flagPopup ? () => { onDeleteFlag!(flagPopup.rawMs); setFlagPopup(null); } : undefined}
+        />
+      )}
     </div>
   );
 };

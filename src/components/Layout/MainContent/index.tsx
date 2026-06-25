@@ -20,6 +20,7 @@ const MainContent: React.FC<MainContentProps> = ({
   isPlaying,
   onTogglePlayPause,
   onSeekTo,
+  onSeekExact,
   duration,
   onNextWord,
   onPrevWord,
@@ -47,8 +48,22 @@ const MainContent: React.FC<MainContentProps> = ({
   onPlaybackSpeedChange,
   recordingId,
   onPlaySegment,
-  flags = []
+  flags = [],
+  flagNotes = {},
+  onAddFlag,
+  onDeleteFlag,
+  onUpdateFlagNote,
 }) => {
+  // Device flags land ~0.5s late (clinician reaction time + hardware latency), so
+  // the moment the clinician meant to mark is slightly earlier. Shift every flag
+  // back by this lead time. Applied once here so the seek bar and the utterance
+  // timeline rail stay in sync. Clamped at 0.
+  const FLAG_LEAD_MS = 70;
+  const adjustedFlags = React.useMemo(
+    () => (flags || []).map((ms) => Math.max(0, ms - FLAG_LEAD_MS)),
+    [flags]
+  );
+
   const [isSimpleAnnotationMode, setIsSimpleAnnotationMode] = useState(true);
   const [showCancelConfirmation, setShowCancelConfirmation] = useState(false);
   const [showBackConfirmation, setShowBackConfirmation] = useState(false);
@@ -202,6 +217,11 @@ const MainContent: React.FC<MainContentProps> = ({
             isSimpleAnnotationMode={isSimpleAnnotationMode}
             onEditingStateChange={handleEditingStateChangeInternal}
             onPlaySegment={onPlaySegment}
+            flags={adjustedFlags}
+            flagNotes={flagNotes}
+            onSeekExact={onSeekExact}
+            onDeleteFlag={onDeleteFlag}
+            onUpdateFlagNote={onUpdateFlagNote}
           />
       </div>
 
@@ -228,7 +248,13 @@ const MainContent: React.FC<MainContentProps> = ({
             isSimpleAnnotationMode={isSimpleAnnotationMode}
             playbackSpeed={playbackSpeed}
             onPlaybackSpeedChange={onPlaybackSpeedChange}
-            flags={flags}
+            flags={adjustedFlags}
+            flagNotes={flagNotes}
+            onSeekExact={onSeekExact}
+            isEditable={isEditable}
+            onAddFlag={onAddFlag}
+            onDeleteFlag={onDeleteFlag}
+            onUpdateFlagNote={onUpdateFlagNote}
           />
         </div>
       )}
