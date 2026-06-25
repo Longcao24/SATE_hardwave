@@ -641,9 +641,14 @@ const ConversationView: React.FC<ConversationViewProps> = ({
                     }
                   }}
                 >
-                  <Flag className={`${styles.flagIcon} ${note ? styles.flagIconFilled : ''}`} />
-                  <span className={styles.flagTime}>{formatFlagTime(t.sec)}</span>
-                  {note && <span className={styles.flagNoteDot} />}
+                  {/* Label chip — time + icon, extends LEFT of the dot */}
+                  <span className={styles.flagLabel}>
+                    <Flag className={`${styles.flagIcon} ${note ? styles.flagIconFilled : ''}`} />
+                    <span className={styles.flagTime}>{formatFlagTime(t.sec)}</span>
+                    {note && <span className={styles.flagNoteDot} />}
+                  </span>
+                  {/* Amber dot — centred ON the line via translateX */}
+                  <span className={`${styles.flagMarker} ${note ? styles.flagMarkerHasNote : ''}`} />
                 </button>
                 {isEditable && onDeleteFlag && (
                   <button

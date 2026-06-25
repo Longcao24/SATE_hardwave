@@ -1311,89 +1311,145 @@
   z-index: 1;
 }
 
-/* Continuous vertical timeline line, sitting inside the reserved spacer zone. */
+/* Continuous vertical timeline line — thin, fades at both ends. */
 .flagRailOverlay::before {
   content: '';
   position: absolute;
   right: 70px;
   top: 0;
   bottom: 0;
-  width: 2px;
-  background: #e5e7eb;
-  border-radius: 1px;
+  width: 1.5px;
+  background: linear-gradient(
+    to bottom,
+    transparent 0%,
+    #d1d5db 3%,
+    #d1d5db 97%,
+    transparent 100%
+  );
 }
 
-/* Flag tick — wrapper div anchored on the rail line. */
+/* Flag tick — flex row: [label chip] [amber dot] [delete btn]
+   Anchored at right: 70px (the line). The amber dot sits centred on the line
+   via translateX(6px) (half of its 12 px diameter). */
 .flagTick {
   position: absolute;
-  right: 74px;
+  right: 70px;
   transform: translateY(-50%);
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 2px;
   pointer-events: auto;
   z-index: 2;
 }
 
-/* The clickable button inside the tick wrapper. */
+/* Main clickable target: label chip + marker dot. */
 .flagTickBtn {
-  display: inline-flex;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+/* Label chip — flag icon + timestamp, floats to the LEFT of the dot. */
+.flagLabel {
+  display: flex;
   align-items: center;
   gap: 3px;
-  margin: 0;
-  padding: 1px 4px;
-  background: #fff;
-  border: 0;
-  border-radius: 4px;
-  cursor: pointer;
-  color: #b45309;
-  font-size: 11px;
+  padding: 2px 7px 2px 5px;
+  background: white;
+  border: 1px solid #fde68a;
+  border-radius: 10px;
+  font-size: 10px;
   font-weight: 600;
-  line-height: 1;
+  color: #92400e;
   white-space: nowrap;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.07);
+  opacity: 0.65;
+  transition: opacity 0.15s;
+  line-height: 1;
 }
 
-.flagTickBtn:hover {
-  background: #fffbeb;
+.flagTick:hover .flagLabel,
+.flagTickEditable .flagLabel {
+  opacity: 1;
 }
 
-/* In edit mode the tick shows delete controls. */
-.flagTickEditable .flagTickBtn {
-  padding-right: 2px;
+/* Amber dot — the marker ON the line.
+   translateX(6px) = half of 12 px width → visual centre sits on the line. */
+.flagMarker {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fbbf24;
+  border: 2px solid white;
+  box-shadow: 0 0 0 1.5px rgba(251, 191, 36, 0.45), 0 1px 4px rgba(0, 0, 0, 0.12);
+  flex-shrink: 0;
+  transform: translateX(6px);
+  transition: box-shadow 0.15s, background 0.15s;
 }
 
-/* Delete button — only visible in edit mode. */
+/* Darker when flag has a note. */
+.flagMarkerHasNote {
+  background: #d97706;
+  box-shadow: 0 0 0 2px rgba(217, 119, 6, 0.4), 0 1px 4px rgba(0, 0, 0, 0.15);
+}
+
+.flagTick:hover .flagMarker {
+  box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.35), 0 2px 6px rgba(0, 0, 0, 0.15);
+}
+
+/* Delete button — appears to the RIGHT of the dot (inside the 22 px gap)
+   on hover in edit mode only. */
 .flagDeleteBtn {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fee2e2;
   border: 0;
-  border-radius: 3px;
-  background: none;
   cursor: pointer;
   color: #ef4444;
   padding: 0;
+  flex-shrink: 0;
   opacity: 0;
-  transition: opacity 0.15s;
+  transform: translateX(12px);  /* follow the marker's visual shift */
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.flagDeleteBtn:hover {
+  background: #fecaca;
 }
 
 .flagTickEditable:hover .flagDeleteBtn {
   opacity: 1;
 }
 
-/* Note popover wrapper — positions above/below the tick. */
-.flagPopoverWrap {
-  position: relative;
+/* Flag icon inside the label chip. */
+.flagIcon {
+  width: 10px;
+  height: 10px;
+  flex: none;
+  fill: #fde68a;
+  stroke: #d97706;
+  stroke-width: 2;
 }
 
-/* Filled flag for ticks that have a note. */
+/* Filled flag when note exists. */
 .flagIconFilled {
   fill: #f59e0b;
+  stroke: #b45309;
 }
 
-/* Amber dot indicator when a note exists (next to timestamp). */
+/* Timestamp inside the label chip. */
+.flagTime {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Amber dot inside chip when note exists. */
 .flagNoteDot {
   display: inline-block;
   width: 5px;
@@ -1401,16 +1457,10 @@
   border-radius: 50%;
   background: #f59e0b;
   flex: none;
+  margin-left: 1px;
 }
 
-.flagIcon {
-  width: 14px;
-  height: 14px;
-  flex: none;
-  fill: #fcd34d;
-  stroke: #d97706;
-}
-
-.flagTime {
-  font-variant-numeric: tabular-nums;
+/* Unused but kept to avoid dead-reference lint warnings. */
+.flagPopoverWrap {
+  position: relative;
 }
