@@ -4,10 +4,10 @@
 
 import type { ReactNode } from 'react';
 
-// Screen cutout as a fraction of the frame image (732×1385), measured from the
-// transparent region of sate-device-frame.png.
-const SCREEN = { left: '16.80%', top: '18.56%', width: '66.80%', height: '52.64%' };
-const FRAME_SRC = '/assets/sate-device-frame.png';
+// Screen cutout as a fraction of the frame image (1024×1536), measured from the
+// transparent region of device.png.
+const SCREEN = { left: '26.95%', top: '20.90%', width: '45.90%', height: '43.42%' };
+const FRAME_SRC = '/assets/device.png';
 
 export function DeviceFrame({
   children,
@@ -18,8 +18,8 @@ export function DeviceFrame({
 }) {
   return (
     <div className="relative mx-auto" style={{ width }}>
-      {/* Keep the frame's real proportions (732 × 1385). */}
-      <div className="relative w-full" style={{ aspectRatio: '732 / 1385' }}>
+      {/* Keep the frame's real proportions (1024 × 1536). */}
+      <div className="relative w-full" style={{ aspectRatio: '1024 / 1536' }}>
         {/* Live screen — sits behind the bezel and shows through the cutout. */}
         <div
           className="absolute overflow-hidden bg-white"
