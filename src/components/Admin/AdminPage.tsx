@@ -22,6 +22,14 @@ function timeAgo(iso?: string): string {
   return h < 24 ? `${h}h ago` : `${Math.round(h / 24)}d ago`;
 }
 
+// Battery chip: colour by charge, dash when the device can't sense it.
+function batteryClass(pct?: number | null): string {
+  if (pct == null) return 'text-gray-400';
+  if (pct < 15) return 'text-red-600';
+  if (pct < 35) return 'text-amber-600';
+  return 'text-green-600';
+}
+
 export function AdminPage() {
   const navigate = useNavigate();
   const [allowed, setAllowed] = useState<boolean | null>(null);
@@ -166,6 +174,8 @@ export function AdminPage() {
                 <th className="text-left font-medium px-4 py-2">Device</th>
                 <th className="text-left font-medium px-4 py-2">Owner</th>
                 <th className="text-left font-medium px-4 py-2">FW</th>
+                <th className="text-left font-medium px-4 py-2">Battery</th>
+                <th className="text-left font-medium px-4 py-2">Recordings</th>
                 <th className="text-left font-medium px-4 py-2">Status</th>
                 <th className="text-left font-medium px-4 py-2">Last seen</th>
                 <th className="px-4 py-2"></th>
@@ -173,7 +183,7 @@ export function AdminPage() {
             </thead>
             <tbody className="divide-y divide-gray-100">
               {devices.length === 0 && (
-                <tr><td colSpan={6} className="px-4 py-4 text-gray-500">No recorders registered.</td></tr>
+                <tr><td colSpan={8} className="px-4 py-4 text-gray-500">No recorders registered.</td></tr>
               )}
               {devices.map((d) => (
                 <tr key={d.id}>
@@ -183,6 +193,10 @@ export function AdminPage() {
                   </td>
                   <td className="px-4 py-2 text-gray-700">{d.owner_email || d.slp || '—'}</td>
                   <td className="px-4 py-2 text-gray-700">{d.fw || '—'}</td>
+                  <td className={`px-4 py-2 font-medium ${batteryClass(d.battery_pct)}`}>
+                    {d.battery_pct == null ? '—' : `${d.battery_pct}%`}
+                  </td>
+                  <td className="px-4 py-2 text-gray-700">{d.total_recordings ?? 0}</td>
                   <td className="px-4 py-2">
                     <span className={`inline-flex items-center gap-1.5 ${d.online ? 'text-green-600' : 'text-gray-400'}`}>
                       <span className={`w-2 h-2 rounded-full ${d.online ? 'bg-green-500' : 'bg-gray-300'}`} />
