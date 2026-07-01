@@ -36,6 +36,8 @@ export interface ManagedDevice {
   ota_state?: string;
   /** Battery state-of-charge % from the heartbeat; null/undefined = unknown. */
   battery_pct?: number | null;
+  /** Raw cell voltage (mV) from the heartbeat, for battery calibration; null = unknown. */
+  battery_mv?: number | null;
   /** Lifetime recording count from the heartbeat (survives on-device auto-trim). */
   total_recordings?: number;
   /** Clinician the recorder is assigned to (set at registration) */

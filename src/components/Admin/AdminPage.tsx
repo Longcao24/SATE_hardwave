@@ -175,6 +175,7 @@ export function AdminPage() {
                 <th className="text-left font-medium px-4 py-2">Owner</th>
                 <th className="text-left font-medium px-4 py-2">FW</th>
                 <th className="text-left font-medium px-4 py-2">Battery</th>
+                <th className="text-left font-medium px-4 py-2">Cell mV</th>
                 <th className="text-left font-medium px-4 py-2">Recordings</th>
                 <th className="text-left font-medium px-4 py-2">Status</th>
                 <th className="text-left font-medium px-4 py-2">Last seen</th>
@@ -183,7 +184,7 @@ export function AdminPage() {
             </thead>
             <tbody className="divide-y divide-gray-100">
               {devices.length === 0 && (
-                <tr><td colSpan={8} className="px-4 py-4 text-gray-500">No recorders registered.</td></tr>
+                <tr><td colSpan={9} className="px-4 py-4 text-gray-500">No recorders registered.</td></tr>
               )}
               {devices.map((d) => (
                 <tr key={d.id}>
@@ -195,6 +196,9 @@ export function AdminPage() {
                   <td className="px-4 py-2 text-gray-700">{d.fw || '—'}</td>
                   <td className={`px-4 py-2 font-medium ${batteryClass(d.battery_pct)}`}>
                     {d.battery_pct == null ? '—' : `${d.battery_pct}%`}
+                  </td>
+                  <td className="px-4 py-2 text-gray-700 tabular-nums">
+                    {d.battery_mv == null || d.battery_mv < 0 ? '—' : `${d.battery_mv} mV`}
                   </td>
                   <td className="px-4 py-2 text-gray-700">{d.total_recordings ?? 0}</td>
                   <td className="px-4 py-2">
