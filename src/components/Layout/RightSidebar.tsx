@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  BarChart3, 
-  AlertTriangle, 
-  // Filter, 
+import {
+  BarChart3,
+  AlertTriangle,
+  // Filter,
   Activity,
+  TrendingUp,
 
   PanelRight,
   ChartColumn
@@ -11,6 +12,7 @@ import {
 import { type IssueCounts, type Segment } from '@/services/dataService';
 import { getBackgroundColor,  getAnnotationLabel, getAnnotationDescription } from '@/lib/annotationColors';
 import { calculateSpeakerVocd } from '@/utils/vocdCalculator';
+import { fetchChildesNorms, type ChildesNormsResponse } from '@/services/childesNormsService';
 
 import { type SpeechAnalysis } from '@/services/dataService';
 
@@ -47,6 +49,42 @@ const RightSidebar: React.FC<RightSidebarProps> = ({
   const collapsedWidth = 70; // Width when collapsed
   const actualWidth = collapsed ? collapsedWidth : width;
   const [chartHovered, setChartHovered] = useState(false);
+
+  // --- Analysis tab: CHILDES normative comparison ---
+  const [normYear, setNormYear] = useState<string>('');
+  const [normMonth, setNormMonth] = useState<string>('');
+  const [normRange, setNormRange] = useState<string>('6');
+  const [normLoading, setNormLoading] = useState(false);
+  const [normError, setNormError] = useState<string | null>(null);
+  const [norms, setNorms] = useState<ChildesNormsResponse | null>(null);
+
+  const runNormComparison = async () => {
+    const year = parseInt(normYear, 10);
+    if (Number.isNaN(year)) {
+      setNormError('Year is required.');
+      return;
+    }
+    setNormLoading(true);
+    setNormError(null);
+    try {
+      const month = normMonth.trim() === '' ? undefined : parseInt(normMonth, 10);
+      const range = normRange.trim() === '' ? undefined : parseInt(normRange, 10);
+      const res = await fetchChildesNorms({
+        language: 'Eng-NA',
+        task: 'narrative',
+        clinical: 'TD',
+        year,
+        month,
+        range,
+      });
+      setNorms(res);
+    } catch (e: any) {
+      setNormError(e?.message || 'Failed to fetch norms.');
+      setNorms(null);
+    } finally {
+      setNormLoading(false);
+    }
+  };
 
   // Reset chartHovered when collapsed state changes
   useEffect(() => {
@@ -663,6 +701,7 @@ const RightSidebar: React.FC<RightSidebarProps> = ({
 
   const tabs = [
     { id: 'overview', label: 'Overview', icon: BarChart3, color: 'gray' },
+    { id: 'analysis', label: 'Analysis', icon: TrendingUp, color: 'green' },
     { id: 'language', label: 'Language', icon: Activity, color: 'blue' },
     { id: 'issues', label: 'Issues', icon: AlertTriangle, color: 'red' },
     // { id: 'annotations', label: 'Filters', icon: Filter, color: 'purple' }
@@ -787,6 +826,10 @@ const RightSidebar: React.FC<RightSidebarProps> = ({
                   active: 'text-blue-700 border-blue-600 bg-blue-50',
                   inactive: 'text-blue-500 border-transparent hover:text-blue-700 hover:bg-blue-50'
                 },
+                green: {
+                  active: 'text-green-700 border-green-600 bg-green-50',
+                  inactive: 'text-green-500 border-transparent hover:text-green-700 hover:bg-green-50'
+                },
                 red: {
                   active: 'text-red-700 border-red-600 bg-red-50',
                   inactive: 'text-red-500 border-transparent hover:text-red-700 hover:bg-red-50'
@@ -815,6 +858,158 @@ const RightSidebar: React.FC<RightSidebarProps> = ({
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto bg-gray-50 min-h-0">
+        {activeTab === 'analysis' && (
+          <div className="p-4 space-y-4">
+            {/* Query form */}
+            <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+              <div className="inline-block px-2 py-0.5 mb-3 text-xs font-semibold text-amber-800 bg-amber-100 rounded">
+                Sample Details
+              </div>
+              <div className="space-y-3">
+                <div>
+                  <label className="text-xs font-medium text-gray-700 mb-1 block">Language</label>
+                  <select
+                    disabled
+                    value="Eng-NA"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md bg-gray-100 text-gray-600 cursor-not-allowed"
+                  >
+                    <option value="Eng-NA">Eng-NA</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-gray-700 mb-1 block">Task</label>
+                  <select
+                    disabled
+                    value="narrative"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md bg-gray-100 text-gray-600 cursor-not-allowed"
+                  >
+                    <option value="narrative">Narrative</option>
+                  </select>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label className="text-xs font-medium text-gray-700 mb-1 block">
+                      Year <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={normYear}
+                      onChange={(e) => setNormYear(e.target.value)}
+                      placeholder="6"
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-gray-700 mb-1 block">Month</label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={11}
+                      value={normMonth}
+                      onChange={(e) => setNormMonth(e.target.value)}
+                      placeholder="opt."
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-gray-700 mb-1 block">± Range</label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={normRange}
+                      onChange={(e) => setNormRange(e.target.value)}
+                      placeholder="6"
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                    />
+                  </div>
+                </div>
+                <p className="text-[11px] text-gray-400 leading-tight">
+                  Range = ± months around the age. Ignored when Month is empty (whole-year window).
+                </p>
+                <button
+                  onClick={runNormComparison}
+                  disabled={normLoading || normYear.trim() === ''}
+                  className="w-full px-3 py-2 text-sm font-medium bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {normLoading ? 'Loading…' : 'Compare to norms'}
+                </button>
+                {normError && (
+                  <p className="text-xs text-red-600">{normError}</p>
+                )}
+              </div>
+            </div>
+
+            {/* Results */}
+            {norms && (
+              <>
+                <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+                  <div className="flex items-center gap-2 mb-1">
+                    <TrendingUp className="w-4 h-4 text-green-600" />
+                    <h3 className="text-sm font-semibold text-gray-900">Normative Comparison</h3>
+                  </div>
+                  <p className="text-xs text-gray-600">
+                    Reference group: TD reference (CHILDES)
+                  </p>
+                  <p className="text-xs text-gray-600">Speaker: {currentSpeaker}</p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    n = {norms.n_samples} samples · {norms.n_corpora} corpora
+                    {norms.filters.age_window_months && (
+                      <> · {norms.filters.age_window_months[0]}–{norms.filters.age_window_months[1]} mo</>
+                    )}
+                  </p>
+                </div>
+
+                {[
+                  { key: 'MLUm', label: 'MLUm', sub: 'Mean Length of Utterance (Morphemes)', child: mlum, metric: norms.MLUm },
+                  { key: 'MLUw', label: 'MLUw', sub: 'Mean Length of Utterance (Words)', child: mluw, metric: norms.MLUw },
+                ].map(({ key, label, sub, child, metric }) => {
+                  const sd = metric.sd || 1;
+                  const z = (child - metric.mean) / sd;
+                  // Map z in [-2.5, +2.5] to 0-100% along the bar.
+                  const clampedZ = Math.max(-2.5, Math.min(2.5, z));
+                  const pct = ((clampedZ + 2.5) / 5) * 100;
+                  return (
+                    <div key={key} className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+                      <div className="flex items-baseline justify-between">
+                        <div>
+                          <span className="text-sm font-bold text-gray-900">{label}</span>
+                          <span className="ml-2 text-xs text-gray-500">{sub}</span>
+                        </div>
+                        <span className="text-xl font-bold text-gray-900">{child.toFixed(2)}</span>
+                      </div>
+                      <div className="mt-1 text-xs text-gray-600">
+                        SD = {metric.sd.toFixed(2)}
+                      </div>
+                      {/* SD scale ticks */}
+                      <div className="mt-3 flex justify-between text-[10px] text-gray-400">
+                        <span>−2SD</span><span>−1SD</span><span>μ</span><span>+1SD</span><span>+2SD</span>
+                      </div>
+                      {/* Gradient bar */}
+                      <div className="relative h-4 rounded-full mt-1"
+                        style={{ background: 'linear-gradient(90deg,#dc2626 0%,#f59e0b 30%,#a3e635 60%,#16a34a 100%)' }}
+                      >
+                        {/* mean line at center */}
+                        <div className="absolute top-[-2px] bottom-[-2px] w-0.5 bg-gray-700/70"
+                          style={{ left: '50%' }} />
+                        {/* child marker */}
+                        <div
+                          className="absolute -top-1 -bottom-1 w-1 bg-black rounded-full"
+                          style={{ left: `calc(${pct}% - 2px)` }}
+                          title={`${label} = ${child.toFixed(2)} (${z >= 0 ? '+' : ''}${z.toFixed(2)} SD)`}
+                        />
+                      </div>
+                      <div className="mt-1 text-[10px] text-gray-500">
+                        Child <span className="font-semibold text-gray-800">{child.toFixed(2)}</span>
+                        {' '}vs norm mean {metric.mean.toFixed(2)}
+                      </div>
+                    </div>
+                  );
+                })}
+              </>
+            )}
+          </div>
+        )}
         {activeTab === 'overview' && (
           <div className="p-4 space-y-6">
             {/* Basic Metrics */}
