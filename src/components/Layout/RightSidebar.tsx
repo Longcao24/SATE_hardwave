@@ -14,6 +14,17 @@ import { getBackgroundColor,  getAnnotationLabel, getAnnotationDescription } fro
 import { calculateSpeakerVocd } from '@/utils/vocdCalculator';
 import { fetchChildesNorms, type ChildesNormsResponse } from '@/services/childesNormsService';
 
+// Normal-distribution CDF (Abramowitz-Stegun erf) -> percentile from a z-score.
+// Used by the Analysis tab to estimate ≈ Pnn from mean/SD norms.
+function erf(x: number): number {
+  const t = 1 / (1 + 0.3275911 * Math.abs(x));
+  const y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
+  return x >= 0 ? y : -y;
+}
+function zToPercentile(z: number): number {
+  return Math.round(0.5 * (1 + erf(z / Math.SQRT2)) * 100);
+}
+
 import { type SpeechAnalysis } from '@/services/dataService';
 
 interface RightSidebarProps {
@@ -960,15 +971,30 @@ const RightSidebar: React.FC<RightSidebarProps> = ({
                   </p>
                 </div>
 
-                {[
+                {norms.n_samples === 0 || norms.MLUm.mean == null ? (
+                  <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm text-xs text-gray-600">
+                    No reference samples for this age window. Try a different year/month or a wider range.
+                  </div>
+                ) : [
                   { key: 'MLUm', label: 'MLUm', sub: 'Mean Length of Utterance (Morphemes)', child: mlum, metric: norms.MLUm },
                   { key: 'MLUw', label: 'MLUw', sub: 'Mean Length of Utterance (Words)', child: mluw, metric: norms.MLUw },
                 ].map(({ key, label, sub, child, metric }) => {
                   const sd = metric.sd || 1;
-                  const z = (child - metric.mean) / sd;
-                  // Map z in [-2.5, +2.5] to 0-100% along the bar.
-                  const clampedZ = Math.max(-2.5, Math.min(2.5, z));
-                  const pct = ((clampedZ + 2.5) / 5) * 100;
+                  const mean = metric.mean;
+                  const z = (child - mean) / sd;
+                  // Bar spans mean ± 2.5 SD (absolute value axis, like the norm plot).
+                  const min = mean - 2.5 * sd;
+                  const max = mean + 2.5 * sd;
+                  const valToPct = (v: number) =>
+                    Math.max(0, Math.min(100, ((v - min) / (max - min)) * 100));
+                  const childPct = valToPct(child);
+                  const percMarks = [
+                    { label: '−2 SD', z: -2 },
+                    { label: '−1 SD', z: -1 },
+                    { label: 'μ', z: 0 },
+                    { label: '+1 SD', z: 1 },
+                    { label: '+2 SD', z: 2 },
+                  ];
                   return (
                     <div key={key} className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
                       <div className="flex items-baseline justify-between">
@@ -978,30 +1004,49 @@ const RightSidebar: React.FC<RightSidebarProps> = ({
                         </div>
                         <span className="text-xl font-bold text-gray-900">{child.toFixed(2)}</span>
                       </div>
+                      {/* stats line */}
                       <div className="mt-1 text-xs text-gray-600">
-                        SD = {metric.sd.toFixed(2)}
+                        μ = {mean.toFixed(2)} · SD = {sd.toFixed(2)}
                       </div>
-                      {/* SD scale ticks */}
-                      <div className="mt-3 flex justify-between text-[10px] text-gray-400">
-                        <span>−2SD</span><span>−1SD</span><span>μ</span><span>+1SD</span><span>+2SD</span>
-                      </div>
-                      {/* Gradient bar */}
-                      <div className="relative h-4 rounded-full mt-1"
-                        style={{ background: 'linear-gradient(90deg,#dc2626 0%,#f59e0b 30%,#a3e635 60%,#16a34a 100%)' }}
-                      >
-                        {/* mean line at center */}
-                        <div className="absolute top-[-2px] bottom-[-2px] w-0.5 bg-gray-700/70"
-                          style={{ left: '50%' }} />
-                        {/* child marker */}
-                        <div
-                          className="absolute -top-1 -bottom-1 w-1 bg-black rounded-full"
-                          style={{ left: `calc(${pct}% - 2px)` }}
-                          title={`${label} = ${child.toFixed(2)} (${z >= 0 ? '+' : ''}${z.toFixed(2)} SD)`}
-                        />
-                      </div>
-                      <div className="mt-1 text-[10px] text-gray-500">
-                        Child <span className="font-semibold text-gray-800">{child.toFixed(2)}</span>
-                        {' '}vs norm mean {metric.mean.toFixed(2)}
+                      {/* norm plot */}
+                      <div className="relative mt-3">
+                        {/* percentile tick labels */}
+                        <div className="relative h-4 text-[10px] text-gray-400">
+                          {percMarks.map((m) => (
+                            <span key={m.label}
+                              className="absolute -translate-x-1/2 whitespace-nowrap"
+                              style={{ left: `${valToPct(mean + m.z * sd)}%` }}>
+                              {m.label}
+                            </span>
+                          ))}
+                        </div>
+                        {/* gradient bar */}
+                        <div className="relative h-6 rounded-sm"
+                          style={{ background: 'linear-gradient(90deg,#9e1c1c 0%,#c62828 10%,#dd5a34 21%,#ee8b3f 31%,#f4cf4f 42%,#dbe263 50%,#a9d06a 60%,#6bb457 73%,#3d9a48 88%,#25793a 100%)' }}
+                        >
+                          {/* percentile gridlines (skip P50 — blue dashed covers it) */}
+                          {percMarks.filter((m) => m.z !== 0).map((m) => (
+                            <div key={m.label}
+                              className="absolute inset-y-0 w-px bg-black/20"
+                              style={{ left: `${valToPct(mean + m.z * sd)}%` }} />
+                          ))}
+                          {/* mean (P50) — blue dashed */}
+                          <div className="absolute inset-y-0 border-l-2 border-dashed border-blue-700"
+                            style={{ left: '50%' }} title={`μ = ${mean.toFixed(2)}`} />
+                        </div>
+                        {/* range ends */}
+                        <div className="relative h-4 mt-0.5 text-[10px] text-gray-400">
+                          <span className="absolute left-0">{min.toFixed(2)}</span>
+                          <span className="absolute right-0">{max.toFixed(2)}</span>
+                        </div>
+                        {/* child marker overlay — black line through the bar + foot + value */}
+                        <div className="absolute -translate-x-1/2 flex flex-col items-center pointer-events-none"
+                          style={{ left: `${childPct}%`, top: '14px' }}
+                          title={`${label} = ${child.toFixed(2)} (${z >= 0 ? '+' : ''}${z.toFixed(2)} SD)`}>
+                          <span className="w-0.5 bg-black" style={{ height: '30px' }} />
+                          <span className="w-2.5 h-px bg-black" />
+                          <span className="mt-0.5 text-[10px] font-bold text-gray-900">{child.toFixed(2)}</span>
+                        </div>
                       </div>
                     </div>
                   );
