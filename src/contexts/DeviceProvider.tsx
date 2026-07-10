@@ -75,6 +75,37 @@ interface DeviceContextValue {
 
 const DeviceContext = createContext<DeviceContextValue | null>(null);
 
+// Plaud recorders have no sate_devices row (they upload through the user-authed
+// /sessions path), so listDevices() never returns them. Instead we synthesize a
+// device from the sessions they've synced: any device_serial `plaud-<sn>` becomes
+// one virtual, passive device (can't be commanded/OTA'd — it's driven from the
+// Plaud device itself / the Companion app). Matches "connect Plaud → it shows on
+// /devices with its recordings".
+function derivePlaudDevices(sessions: UploadedSession[]): ManagedDevice[] {
+  const bySerial = new Map<string, UploadedSession[]>();
+  for (const s of sessions) {
+    if (!s.device_serial?.startsWith('plaud-')) continue;
+    const arr = bySerial.get(s.device_serial) ?? [];
+    arr.push(s);
+    bySerial.set(s.device_serial, arr);
+  }
+  return [...bySerial.entries()].map(([serial, ss]) => {
+    const last = ss.reduce((m, s) => (s.at > m ? s.at : m), ss[0].at);
+    const pending = ss.filter((s) => !s.processed).length;
+    const short = serial.replace(/^plaud-/, '');
+    return {
+      id: `plaud:${serial}`,
+      name: `Plaud ${short.slice(-4)}`,
+      serial,
+      fw: 'Plaud',
+      online: false,
+      last_seen: last,
+      pending_sessions: pending,
+      kind: 'plaud',
+    };
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Provider
 // ---------------------------------------------------------------------------
@@ -107,19 +138,23 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     try {
-      const list = await deviceApiService.listDevices();
+      // One unfiltered sessions fetch serves double duty: it discovers Plaud
+      // recorders (which have no device row) and lets us slice out the selected
+      // device's own recordings client-side — no per-device round trip.
+      const [list, allSessions] = await Promise.all([
+        deviceApiService.listDevices(),
+        deviceApiService.listSessions(),
+      ]);
       if (!mountedRef.current) return;
-      setDevices(list);
+      const merged = [...list, ...derivePlaudDevices(allSessions)];
+      setDevices(merged);
       setIsConnected(true);
       setError(null);
 
       // Load sessions for the selected device
-      const current = list.find((d) => d.id === selectedId) ?? list[0];
+      const current = merged.find((d) => d.id === selectedId) ?? merged[0];
       if (current) {
-        const ups = await deviceApiService.listSessions(current.serial);
-        if (mountedRef.current) {
-          setSessions(ups.slice(0, 10));
-        }
+        setSessions(allSessions.filter((s) => s.device_serial === current.serial).slice(0, 10));
       } else {
         setSessions([]);
       }
@@ -271,7 +306,10 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
 
   // ---- Derived OTA state for the selected device ----
   const firmwareUpdateAvailable = !!(
-    latestFirmware && selectedDevice && selectedDevice.fw !== latestFirmware.version
+    latestFirmware &&
+    selectedDevice &&
+    selectedDevice.kind !== 'plaud' && // Plaud isn't OTA-flashable from the web
+    selectedDevice.fw !== latestFirmware.version
   );
 
   void otaTick; // referenced so the periodic tick recomputes the timeout below

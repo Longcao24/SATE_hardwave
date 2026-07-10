@@ -8,6 +8,7 @@ import { useDeviceStatus } from '@/hooks/useDevices';
 import { RecordSessionModal } from './RecordSessionModal';
 import { DeviceSettingsModal } from './DeviceSettingsModal';
 import { DeviceFrame } from './DeviceFrame';
+import { PlaudDeviceGraphic } from './PlaudDeviceGraphic';
 import {
   RefreshCw,
   Settings,
@@ -18,6 +19,8 @@ import {
   ChevronDown,
   Smartphone,
   Activity,
+  Bluetooth,
+  CheckCircle2,
 } from 'lucide-react';
 
 export function DevicePanel() {
@@ -26,11 +29,14 @@ export function DevicePanel() {
     selectedDevice,
     selectDevice,
     sendCommand,
+    sessions,
     isLoading,
     isSendingCommand,
     activeCommand,
     error,
   } = useDeviceContext();
+
+  const isPlaud = selectedDevice?.kind === 'plaud';
 
   const { isOnline, isRecording, isUploading, isBusy, statusLabel, statusColor } = useDeviceStatus();
 
@@ -114,7 +120,7 @@ export function DevicePanel() {
       {/* ---- Header: device selector + settings ---- */}
       <div className="device-panel-header">
         <div className="flex-1">
-          <p className="text-xs font-bold tracking-widest text-gray-400 uppercase">SATE Recorder</p>
+          <p className="text-xs font-bold tracking-widest text-gray-400 uppercase">{isPlaud ? 'Plaud Recorder' : 'SATE Recorder'}</p>
           <div className="relative" ref={dropdownRef}>
             <button
               onClick={() => devices.length > 1 && setShowDeviceDropdown(!showDeviceDropdown)}
@@ -148,25 +154,75 @@ export function DevicePanel() {
           <div className="flex items-center gap-2 mt-1">
             <span
               className="w-2 h-2 rounded-full"
-              style={{ backgroundColor: statusColorMap[statusColor] }}
+              style={{ backgroundColor: isPlaud ? '#6366f1' : statusColorMap[statusColor] }}
             />
             <span
               className="text-xs font-semibold"
-              style={{ color: statusColorMap[statusColor] }}
+              style={{ color: isPlaud ? '#6366f1' : statusColorMap[statusColor] }}
             >
-              {statusLabel}
+              {isPlaud ? 'Paired' : statusLabel}
             </span>
           </div>
         </div>
-        <button
-          onClick={() => setShowSettingsModal(true)}
-          className="p-2 rounded-lg hover:bg-gray-100 transition-colors"
-          title="Recorder settings"
-        >
-          <Settings className="w-5 h-5 text-gray-500" />
-        </button>
+        {!isPlaud && (
+          <button
+            onClick={() => setShowSettingsModal(true)}
+            className="p-2 rounded-lg hover:bg-gray-100 transition-colors"
+            title="Recorder settings"
+          >
+            <Settings className="w-5 h-5 text-gray-500" />
+          </button>
+        )}
       </div>
 
+      {/* ---- Plaud: passive card — recordings ride in over BLE via the
+              Companion app; recording is driven on the Plaud device itself,
+              so there are no remote command/OTA controls here. ---- */}
+      {isPlaud ? (
+        <div className="device-hero">
+          <PlaudDeviceGraphic width={190} />
+          <div className="mt-4 flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-indigo-500" />
+            <span className="text-sm font-bold text-indigo-600">Paired</span>
+            <Bluetooth className="w-4 h-4 text-indigo-500" />
+          </div>
+          <span className="mt-1 text-[11px] text-gray-400 truncate max-w-full">
+            {selectedDevice?.serial}
+          </span>
+          <p className="text-gray-500 text-sm mt-4 text-center max-w-sm">
+            Recordings sync automatically from your Plaud device through the
+            SATE Companion app. Start/stop and flag on the Plaud itself — audio
+            transfers here and runs the same analysis.
+          </p>
+
+          <div className="device-actions-row mt-5">
+            <div className="device-action-card !cursor-default">
+              <CheckCircle2 className="w-5 h-5 text-green-500" />
+              <span className="device-action-label">Synced</span>
+              <span className="device-action-sub">{sessions.length} recording{sessions.length === 1 ? '' : 's'}</span>
+            </div>
+            <div className="device-action-card !cursor-default">
+              {selectedDevice && selectedDevice.pending_sessions > 0 ? (
+                <RefreshCw className="w-5 h-5 text-amber-500 animate-spin" />
+              ) : (
+                <CheckCircle2 className="w-5 h-5 text-green-500" />
+              )}
+              <span className="device-action-label">Analysis</span>
+              <span className="device-action-sub">
+                {selectedDevice && selectedDevice.pending_sessions > 0
+                  ? `${selectedDevice.pending_sessions} processing`
+                  : 'All processed'}
+              </span>
+            </div>
+            <div className="device-action-card !cursor-default">
+              <Smartphone className="w-5 h-5 text-indigo-500" />
+              <span className="device-action-label">Control</span>
+              <span className="device-action-sub">On device / app</span>
+            </div>
+          </div>
+        </div>
+      ) : (
+      <>
       {/* ---- Hero: the real recorder, live on its screen ---- */}
       <div className="device-hero">
         <DeviceFrame width={300}>
@@ -275,9 +331,11 @@ export function DevicePanel() {
           <span className="device-action-sub">Reboot device</span>
         </button>
       </div>
+      </>
+      )}
 
       {/* ---- Offline banner ---- */}
-      {selectedDevice && !isOnline && (
+      {selectedDevice && !isOnline && !isPlaud && (
         <div className="device-offline-banner">
           <WifiOff className="w-4 h-4 text-amber-600 flex-shrink-0" />
           <p className="text-amber-700 text-xs">
@@ -305,7 +363,7 @@ export function DevicePanel() {
         isOpen={showRecordModal}
         onClose={() => setShowRecordModal(false)}
       />
-      {selectedDevice && (
+      {selectedDevice && !isPlaud && (
         <DeviceSettingsModal
           isOpen={showSettingsModal}
           onClose={() => setShowSettingsModal(false)}

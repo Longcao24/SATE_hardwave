@@ -174,6 +174,23 @@ serve(async (req) => {
     if (subPath === '/patients' && method === 'PUT') {
       return await replacePatients(supabase, user.id, req);
     }
+    // User-authenticated session upload. The SATE recorder POSTs with its
+    // device key (handled earlier), but the phone app uploads on behalf of a
+    // device that has NO device key of its own — a Plaud recorder (which is
+    // never registered in sate_devices), or a BLE-bridged SATE session. Here
+    // the caller is the signed-in user, so the session is stored under user.id.
+    if (subPath === '/sessions' && method === 'POST') {
+      const body = await req.json();
+      const { wav_base64, ...meta } = body;
+      const wavBytes = Uint8Array.from(atob(wav_base64 || ''), (c) => c.charCodeAt(0));
+      return await storeSessionRecord(supabase, user.id, {
+        device_serial: meta.device_serial || 'plaud',
+        patient_id: meta.patient_id || 'PT',
+        session_number: meta.session_number || 0,
+        sample_rate: meta.sample_rate || 16000,
+        flags: Array.isArray(meta.flags) ? meta.flags.filter((n: unknown) => Number.isFinite(n)) : undefined,
+      }, wavBytes);
+    }
     if (subPath === '/sessions' && method === 'GET') {
       return await listSessions(supabase, user.id, url.searchParams.get('device'));
     }
@@ -476,6 +493,7 @@ async function handleSessionUpload(supabase: any, req: Request, subPath: string)
       patient_id: meta.patient_id || 'PT',
       session_number: meta.session_number || 0,
       sample_rate: meta.sample_rate || 16000,
+      flags: Array.isArray(meta.flags) ? meta.flags.filter((n: unknown) => Number.isFinite(n)) : undefined,
     }, wavBytes);
   }
 

@@ -3,7 +3,7 @@
 
 import type { ManagedDevice } from '@/services/device/deviceTypes';
 import { timeAgo } from '@/hooks/useDevices';
-import { Wifi, WifiOff, Radio, Upload } from 'lucide-react';
+import { Wifi, WifiOff, Radio, Upload, Bluetooth } from 'lucide-react';
 
 interface DeviceCardProps {
   device: ManagedDevice;
@@ -12,6 +12,7 @@ interface DeviceCardProps {
 
 export function DeviceCard({ device, onClick }: DeviceCardProps) {
   const state = device.state ?? 'idle';
+  const isPlaud = device.kind === 'plaud';
   const isRecording = state === 'recording';
   const isUploading = state === 'uploading';
 
@@ -19,7 +20,12 @@ export function DeviceCard({ device, onClick }: DeviceCardProps) {
   let statusLabel: string;
   let StatusIcon: typeof Wifi;
 
-  if (isRecording) {
+  if (isPlaud) {
+    // Passive: synced over BLE via the Companion app, not live on Wi-Fi.
+    statusDot = 'bg-indigo-500';
+    statusLabel = 'Paired';
+    StatusIcon = Bluetooth;
+  } else if (isRecording) {
     statusDot = 'bg-red-500';
     statusLabel = 'Recording';
     StatusIcon = Radio;
@@ -45,9 +51,10 @@ export function DeviceCard({ device, onClick }: DeviceCardProps) {
       <div className="flex items-start justify-between">
         <div className="flex items-center gap-3">
           <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-            device.online ? 'bg-blue-50' : 'bg-gray-100'
+            isPlaud ? 'bg-indigo-50' : device.online ? 'bg-blue-50' : 'bg-gray-100'
           }`}>
             <StatusIcon className={`w-5 h-5 ${
+              isPlaud ? 'text-indigo-500' :
               isRecording ? 'text-red-500 animate-pulse' :
               isUploading ? 'text-blue-500' :
               device.online ? 'text-blue-600' : 'text-gray-400'
