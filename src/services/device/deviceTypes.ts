@@ -26,9 +26,10 @@ export interface ManagedDevice {
   serial: string;
   fw: string;
   /** Device family. 'sate' = ESP32-S3 recorder (default); 'plaud' = a paired
-   *  Plaud NotePin/NotePro, synthesized from its uploaded sessions (no
-   *  sate_devices row, so it can't be commanded/OTA'd from the web). */
-  kind?: 'sate' | 'plaud';
+   *  Plaud NotePin/NotePro; 'pendant' = a SATE Pendant. The last two are
+   *  synthesized from their uploaded sessions (no sate_devices row, so they
+   *  can't be commanded/OTA'd from the web). */
+  kind?: 'sate' | 'plaud' | 'pendant';
   /** true = device is reachable over Wi-Fi right now */
   online: boolean;
   ip?: string;

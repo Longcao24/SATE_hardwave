@@ -9,6 +9,7 @@ import { RecordSessionModal } from './RecordSessionModal';
 import { DeviceSettingsModal } from './DeviceSettingsModal';
 import { DeviceFrame } from './DeviceFrame';
 import { PlaudDeviceGraphic } from './PlaudDeviceGraphic';
+import { PendantDeviceGraphic } from './PendantDeviceGraphic';
 import {
   RefreshCw,
   Settings,
@@ -36,7 +37,9 @@ export function DevicePanel() {
     error,
   } = useDeviceContext();
 
-  const isPlaud = selectedDevice?.kind === 'plaud';
+  // Plaud + Pendant are passive external devices (no Wi-Fi commands/OTA).
+  const isPlaud = selectedDevice?.kind === 'plaud' || selectedDevice?.kind === 'pendant';
+  const extLabel = selectedDevice?.kind === 'pendant' ? 'Pendant' : 'Plaud';
 
   const { isOnline, isRecording, isUploading, isBusy, statusLabel, statusColor } = useDeviceStatus();
 
@@ -120,7 +123,7 @@ export function DevicePanel() {
       {/* ---- Header: device selector + settings ---- */}
       <div className="device-panel-header">
         <div className="flex-1">
-          <p className="text-xs font-bold tracking-widest text-gray-400 uppercase">{isPlaud ? 'Plaud Recorder' : 'SATE Recorder'}</p>
+          <p className="text-xs font-bold tracking-widest text-gray-400 uppercase">{isPlaud ? `${extLabel} device` : 'SATE Recorder'}</p>
           <div className="relative" ref={dropdownRef}>
             <button
               onClick={() => devices.length > 1 && setShowDeviceDropdown(!showDeviceDropdown)}
@@ -180,7 +183,11 @@ export function DevicePanel() {
               so there are no remote command/OTA controls here. ---- */}
       {isPlaud ? (
         <div className="device-hero">
-          <PlaudDeviceGraphic width={190} />
+          {selectedDevice?.kind === 'pendant' ? (
+            <PendantDeviceGraphic width={170} />
+          ) : (
+            <PlaudDeviceGraphic width={190} />
+          )}
           <div className="mt-4 flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-indigo-500" />
             <span className="text-sm font-bold text-indigo-600">Paired</span>
@@ -190,9 +197,8 @@ export function DevicePanel() {
             {selectedDevice?.serial}
           </span>
           <p className="text-gray-500 text-sm mt-4 text-center max-w-sm">
-            Recordings sync automatically from your Plaud device through the
-            SATE Companion app. Start/stop and flag on the Plaud itself — audio
-            transfers here and runs the same analysis.
+            Recordings sync from your {extLabel} through the SATE Companion app
+            over Bluetooth — audio transfers here and runs the same analysis.
           </p>
 
           <div className="device-actions-row mt-5">

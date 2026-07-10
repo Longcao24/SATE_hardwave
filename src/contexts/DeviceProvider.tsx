@@ -75,33 +75,36 @@ interface DeviceContextValue {
 
 const DeviceContext = createContext<DeviceContextValue | null>(null);
 
-// Plaud recorders have no sate_devices row (they upload through the user-authed
-// /sessions path), so listDevices() never returns them. Instead we synthesize a
-// device from the sessions they've synced: any device_serial `plaud-<sn>` becomes
-// one virtual, passive device (can't be commanded/OTA'd — it's driven from the
-// Plaud device itself / the Companion app). Matches "connect Plaud → it shows on
-// /devices with its recordings".
-function derivePlaudDevices(sessions: UploadedSession[]): ManagedDevice[] {
+// Plaud recorders and SATE Pendants have no sate_devices row (they upload through
+// the user-authed /sessions path), so listDevices() never returns them. Instead
+// we synthesize one virtual, passive device per distinct `plaud-<sn>` /
+// `pendant-<id>` serial from the sessions they've synced (can't be commanded/
+// OTA'd — driven from the device / the Companion app). Matches "connect it → it
+// shows on /devices with its recordings".
+function deriveExternalDevices(sessions: UploadedSession[]): ManagedDevice[] {
   const bySerial = new Map<string, UploadedSession[]>();
   for (const s of sessions) {
-    if (!s.device_serial?.startsWith('plaud-')) continue;
-    const arr = bySerial.get(s.device_serial) ?? [];
+    const sn = s.device_serial;
+    if (!sn?.startsWith('plaud-') && !sn?.startsWith('pendant-')) continue;
+    const arr = bySerial.get(sn) ?? [];
     arr.push(s);
-    bySerial.set(s.device_serial, arr);
+    bySerial.set(sn, arr);
   }
   return [...bySerial.entries()].map(([serial, ss]) => {
     const last = ss.reduce((m, s) => (s.at > m ? s.at : m), ss[0].at);
     const pending = ss.filter((s) => !s.processed).length;
-    const short = serial.replace(/^plaud-/, '');
+    const isPlaud = serial.startsWith('plaud-');
+    const kind: ManagedDevice['kind'] = isPlaud ? 'plaud' : 'pendant';
+    const short = serial.replace(/^(plaud|pendant)-/, '');
     return {
-      id: `plaud:${serial}`,
-      name: `Plaud ${short.slice(-4)}`,
+      id: `${kind}:${serial}`,
+      name: `${isPlaud ? 'Plaud' : 'Pendant'} ${short.slice(-4)}`,
       serial,
-      fw: 'Plaud',
+      fw: isPlaud ? 'Plaud' : 'Pendant',
       online: false,
       last_seen: last,
       pending_sessions: pending,
-      kind: 'plaud',
+      kind,
     };
   });
 }
@@ -146,7 +149,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
         deviceApiService.listSessions(),
       ]);
       if (!mountedRef.current) return;
-      const merged = [...list, ...derivePlaudDevices(allSessions)];
+      const merged = [...list, ...deriveExternalDevices(allSessions)];
       setDevices(merged);
       setIsConnected(true);
       setError(null);
@@ -308,7 +311,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   const firmwareUpdateAvailable = !!(
     latestFirmware &&
     selectedDevice &&
-    selectedDevice.kind !== 'plaud' && // Plaud isn't OTA-flashable from the web
+    (selectedDevice.kind ?? 'sate') === 'sate' && // external devices aren't OTA-flashable from web
     selectedDevice.fw !== latestFirmware.version
   );
 
