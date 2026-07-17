@@ -1,5 +1,6 @@
 import type { TranscriptData, IssueCounts, ProcessingError } from './types';
 import { countErrors } from './errorCounter';
+import { MAX_UPLOAD_BYTES, MAX_UPLOAD_LABEL } from '@/config/uploadLimits';
 
 // Helper function to categorize and format errors
 const categorizeError = (error: any, response?: Response): ProcessingError => {
@@ -51,7 +52,7 @@ const categorizeError = (error: any, response?: Response): ProcessingError => {
       message = 'There was an issue with the audio file format or content. Try a different file or format.';
       apiType = 'validation';
     } else if (errorString.includes('File size') || errorString.includes('too large')) {
-      message = 'The audio file is too large to process. Please use a file smaller than 50MB.';
+      message = `The audio file is too large to process. Please use a file smaller than ${MAX_UPLOAD_LABEL}.`;
       apiType = 'validation';
     }
     
@@ -196,11 +197,15 @@ export const processAudioFile = async (
       throw validationError;
     }
 
-    if (audioFile.size > 50 * 1024 * 1024) { // 50MB limit
-      const validationError = new Error('Audio file is too large (max 50MB). Please select a smaller file.');
+    // Second gate on the same upload: ImportPopup checks the picker, this checks anything
+    // reaching the processor. Both now read MAX_UPLOAD_BYTES so they cannot disagree —
+    // they were separate 50MB literals, and raising one alone still failed here.
+    if (audioFile.size > MAX_UPLOAD_BYTES) {
+      const msg = `Audio file is too large (max ${MAX_UPLOAD_LABEL}). Please select a smaller file.`;
+      const validationError = new Error(msg);
       (validationError as any).errorDetails = {
         type: 'validation',
-        message: 'Audio file is too large (max 50MB). Please select a smaller file.',
+        message: msg,
         originalError: `File size: ${(audioFile.size / 1024 / 1024).toFixed(2)}MB`,
         retryable: false
       };

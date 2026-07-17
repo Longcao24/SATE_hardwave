@@ -3,6 +3,7 @@ import { Upload, FileAudio, X, Loader2, Users } from 'lucide-react';
 import { Button } from '../ui/button';
 import { type Patient, patientService } from '@/services/patientService';
 import { ProgressStepper } from '../Common/ProgressStepper';
+import { MAX_UPLOAD_BYTES, MAX_UPLOAD_LABEL, formatBytes } from '@/config/uploadLimits';
 
 interface ImportPopupProps {
   isOpen: boolean;
@@ -78,16 +79,17 @@ const ImportPopup: React.FC<ImportPopupProps> = ({
     const isValidType = validTypes.includes(file.type) || 
                        file.name.match(/\.(wav|mp3|m4a|ogg|webm|flac|aac)$/i);
     
-    // Validate file size (50MB limit)
-    const maxSize = 50 * 1024 * 1024; // 50MB
-    
     if (!isValidType) {
       alert('Please select a valid audio file (WAV, MP3, M4A, OGG, WebM, FLAC, or AAC)');
       return;
     }
-    
-    if (file.size > maxSize) {
-      alert('File is too large. Please select a file smaller than 50MB.');
+
+    // Ceiling is the Storage global limit, not a number invented here — see uploadLimits.ts.
+    if (file.size > MAX_UPLOAD_BYTES) {
+      alert(
+        `File is too large (${formatBytes(file.size)}). ` +
+          `Please select a file smaller than ${MAX_UPLOAD_LABEL}.`,
+      );
       return;
     }
     
@@ -280,7 +282,7 @@ const ImportPopup: React.FC<ImportPopupProps> = ({
                       </p>
                     </div>
                     <p className="text-xs text-gray-500">
-                      Supports WAV, MP3, M4A, OGG, WebM, FLAC, and AAC (max 50MB)
+                      Supports WAV, MP3, M4A, OGG, WebM, FLAC, and AAC (max {MAX_UPLOAD_LABEL})
                     </p>
                   </div>
                 )}
