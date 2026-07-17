@@ -1,15 +1,22 @@
-// SATE Device API — Supabase Edge Function
+// SATE Device API — Supabase Edge Function              [v12]
 // Replaces the mock-server's Express endpoints with a single Edge Function
 // that does internal path routing. Authenticated via Supabase JWT (users) or a
 // device key (the recorder).
 //
-// Deploy:  npx supabase functions deploy device-api
+// Deploy:  npx supabase functions deploy device-api --no-verify-jwt
+//          (verify_jwt MUST stay false — this function checks the device key /
+//          user JWT itself; the CLI/MCP default of true breaks registration.)
 // Invoke:  POST/GET ${SUPABASE_URL}/functions/v1/device-api/<path>
 //
-// Chunked session upload now ASSEMBLES the firmware's ~1 MB slices (offset +
-// final, exactly like the mock-server), patches the WAV header on the final
-// slice, then fires the process-device-session function which runs the SAME AI
-// pipeline as a manual web upload and writes the result into `recordings`.
+// Chunked session upload ASSEMBLES the firmware's ~1 MB slices (offset + final),
+// patches the WAV header on the final slice, then fires process-device-session
+// which runs the SAME AI pipeline as a manual web upload and writes the result
+// into `recordings`.
+//
+// v12: /sessions/chunk stores each slice as its own _tmp/s<n>/<offset>.part and
+//      stitches once on final (was: rewrite the whole temp blob per slice, which
+//      was quadratic and stalled long uploads). Accepts &total= from firmware
+//      >=1.5.9 and rejects a size mismatch instead of storing a corrupt WAV.
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3';
@@ -507,51 +514,181 @@ async function handleSessionUpload(supabase: any, req: Request, subPath: string)
     }, wavBytes);
   }
 
-  // /sessions/chunk — stitch the firmware's offset slices into one WAV.
+  // /sessions/chunk — collect the firmware's ~1 MB offset slices, stitch on final.
+  //
+  // Each slice is stored as its OWN object under _tmp/<patient>/s<n>/<offset>.part. The old
+  // version kept one temp blob and did download-whole + upload-whole on EVERY
+  // slice: quadratic, so a 30-min session moved ~1.5 GB through this function and
+  // the late slices blew past the firmware's 12 s timeout. Every timeout was
+  // retried, the retry restarted at offset 0, and offset 0 truncated the temp blob
+  // back to the first slice — a backlog that could never drain ("8 recordings
+  // uploading, no progress"). Writing parts makes each slice O(1); the full file
+  // is materialised exactly once, on the final slice.
   if (subPath === '/sessions/chunk') {
     const offset = Number(url.searchParams.get('offset') || 0);
     const isFinal = url.searchParams.get('final') === '1';
     const sessionNumber = Number(url.searchParams.get('session_number') || 0);
+    // Firmware (>=1.5.9) sends the session's full byte length so the assembled
+    // result can be verified before it's accepted. 0 = older firmware: skip the check.
+    const declaredTotal = Number(url.searchParams.get('total') || 0);
     const slice = new Uint8Array(await req.arrayBuffer());
-    const tmpPath = `${deviceId}/_tmp/s${sessionNumber}.wav`;
+    // The part dir MUST be scoped by patient: session numbers restart at 1 for each
+    // patient, so `s1` alone collides between two patients on the same device. With
+    // one shared dir, patient A's stalled parts and patient B's parts land together
+    // and a resume can stitch a WAV out of BOTH patients' audio. Sanitised because
+    // this goes into a storage path.
+    const patientId = (url.searchParams.get('patient_id') || 'PT').replace(/[^A-Za-z0-9_-]/g, '');
+    const partDir = `${deviceId}/_tmp/${patientId || 'PT'}/s${sessionNumber}`;
+    // Zero-pad so a plain lexical sort is also numeric order.
+    const partPath = `${partDir}/${String(offset).padStart(12, '0')}.part`;
+    const serial = url.searchParams.get('device_serial') || device.serial;
 
-    let assembled: Uint8Array;
-    if (offset === 0) {
-      assembled = slice;
-    } else {
-      const { data: cur } = await supabase.storage.from('device-sessions').download(tmpPath);
-      const curBytes = cur ? new Uint8Array(await cur.arrayBuffer()) : new Uint8Array(0);
-      if (curBytes.length >= offset + slice.length) {
-        return json({ ok: true, idempotent: true, total: curBytes.length });
+    // Already stored? Answer before touching the parts.
+    //
+    // Assembling a long session takes a while, and the device gives up waiting
+    // after 60 s. If it times out on a final that actually SUCCEEDED, it retries
+    // the final - but by then the parts are gone (removed on success), so the
+    // contiguity check below would 409 and the device would re-upload the entire
+    // session from byte 0. For a 118 MB take that is ~9 minutes of pointless
+    // upload, on repeat, and it would never converge. Confirming the existing row
+    // instead makes a lost ACK a no-op: the device marks it synced and moves on.
+    if (isFinal && declaredTotal > 0) {
+      const { data: already } = await supabase.from('sate_device_sessions')
+        .select('id, storage_path')
+        .eq('user_id', device.user_id)
+        .eq('device_serial', serial)
+        .eq('session_number', sessionNumber)
+        .eq('bytes', declaredTotal)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      // A row is NOT proof the audio is there. The 413 bug left rows whose object
+      // never landed; trusting the row alone would answer "already stored" and
+      // strand that recording on the device forever. Confirm the object, and bin
+      // the row if it is a ghost so this upload can replace it.
+      if (already) {
+        const real = already.storage_path &&
+          await objectExists(supabase, 'device-sessions', already.storage_path);
+        if (real) {
+          await supabase.storage.from('device-sessions')
+            .remove([partPath]).catch(() => {});
+          return json({ id: already.id, idempotent: true });
+        }
+        await supabase.from('sate_device_sessions').delete().eq('id', already.id);
+        console.warn(`dropped ghost session row ${already.id} (no object) - re-storing`);
       }
-      if (curBytes.length < offset) {
-        return err(`offset gap: have ${curBytes.length}, got ${offset}`, 409);
-      }
-      assembled = new Uint8Array(offset + slice.length);
-      assembled.set(curBytes.subarray(0, offset), 0);
-      assembled.set(slice, offset);
     }
 
-    if (!isFinal) {
-      const { error: tmpErr } = await supabase.storage.from('device-sessions')
-        .upload(tmpPath, assembled, { contentType: 'audio/wav', upsert: true });
-      if (tmpErr) throw new Error(`tmp upload: ${tmpErr.message}`);
-      return json({ ok: true, received: slice.length, total: assembled.length });
+    // offset 0 = the device is (re)starting this session, so whatever is in the
+    // part dir is from an abandoned attempt and must go. Without this, stale parts
+    // with a HIGHER offset survive and get stitched onto the new upload: sessions
+    // are renumbered when the SLP deletes one, so `s3` today can be different audio
+    // than `s3` yesterday, and the leftover tail would silently corrupt it.
+    if (offset === 0) {
+      const { data: stale } = await supabase.storage.from('device-sessions')
+        .list(partDir, { limit: 10000 });
+      if (stale?.length) {
+        await supabase.storage.from('device-sessions')
+          .remove(stale.map((f: any) => `${partDir}/${f.name}`));
+      }
+    }
+
+    // Re-sending a slice is normal (the firmware retries at the same offset), and
+    // upsert makes it idempotent without reading anything back.
+    const { error: partErr } = await supabase.storage.from('device-sessions')
+      .upload(partPath, slice, { contentType: 'application/octet-stream', upsert: true });
+    if (partErr) throw new Error(`part upload: ${partErr.message}`);
+
+    if (!isFinal) return json({ ok: true, received: slice.length, offset });
+
+    // Final slice: pull every part back, in offset order, and verify they form one
+    // gap-free stream. A gap means the device and this function disagree about what
+    // landed (e.g. a resume against parts written by an older firmware), so 409 and
+    // let the device restart the session from 0 rather than store a corrupt WAV.
+    const { data: listed, error: listErr } = await supabase.storage
+      .from('device-sessions').list(partDir, { limit: 10000 });
+    if (listErr) throw new Error(`part list: ${listErr.message}`);
+
+    const parts = (listed || [])
+      .filter((f: any) => f.name.endsWith('.part'))
+      .map((f: any) => ({
+        name: f.name,
+        offset: Number(f.name.replace('.part', '')),
+        size: Number(f.metadata?.size ?? 0),
+      }))
+      .sort((a: any, b: any) => a.offset - b.offset);
+
+    // Verify contiguity from the LISTED sizes first, so a bad set is rejected
+    // before a single byte is downloaded.
+    let assembledLen = 0;
+    for (const p of parts) {
+      if (p.offset !== assembledLen) {
+        return err(`offset gap: expected ${assembledLen}, have part at ${p.offset}`, 409);
+      }
+      assembledLen += p.size;
+    }
+    if (declaredTotal > 0 && assembledLen !== declaredTotal) {
+      return err(`size mismatch: assembled ${assembledLen}, device says ${declaredTotal}`, 409);
+    }
+    if (assembledLen === 0) return err('no audio received', 400);
+
+    // Allocate ONCE and stream each part straight into place. Collecting the parts
+    // into an array first and then copying them into a second buffer held the whole
+    // session in memory twice (~236 MB for a 62-min take) — enough to OOM this
+    // function on exactly the long recordings that need it most.
+    const assembled = new Uint8Array(assembledLen);
+    // Fetch in parallel batches. A 62-minute take is ~118 parts; downloading them
+    // one after another burned ~18 s of the device's 60 s final-slice budget for no
+    // reason. Each part is written straight to its own offset, so order doesn't
+    // matter and only the in-flight batch (~8 MB) is held on top of `assembled`.
+    const DL_CONCURRENCY = 8;
+    for (let i = 0; i < parts.length; i += DL_CONCURRENCY) {
+      const batch = parts.slice(i, i + DL_CONCURRENCY);
+      const fetched = await Promise.all(batch.map(async (p: any) => {
+        const { data: pd, error: dlErr } = await supabase.storage
+          .from('device-sessions').download(`${partDir}/${p.name}`);
+        if (dlErr || !pd) return { p, bytes: null };
+        return { p, bytes: new Uint8Array(await pd.arrayBuffer()) };
+      }));
+      for (const f of fetched) {
+        if (!f.bytes) return err(`missing part at ${f.p.offset}`, 409);
+        if (f.bytes.length !== f.p.size || f.p.offset + f.bytes.length > assembledLen) {
+          return err(`part at ${f.p.offset} changed size`, 409);
+        }
+        assembled.set(f.bytes, f.p.offset);
+      }
     }
 
     patchWavHeader(assembled);
+    // Same `serial` the idempotency probe above used - if these two ever disagreed,
+    // the probe could never match and every timed-out final would duplicate.
     const res = await storeSessionRecord(supabase, device.user_id, {
-      device_serial: url.searchParams.get('device_serial') || device.serial,
+      device_serial: serial,
       patient_id: url.searchParams.get('patient_id') || 'PT',
       session_number: sessionNumber,
       sample_rate: Number(url.searchParams.get('sample_rate') || 16000),
       flags: parseFlags(url.searchParams.get('flags')),
     }, assembled);
-    await supabase.storage.from('device-sessions').remove([tmpPath]);
+    // Only bin the parts once the session is safely stored. Also clear the old
+    // single-blob temp file a pre-1.5.9 attempt may have left behind.
+    await supabase.storage.from('device-sessions')
+      .remove(parts.map((p: any) => `${partDir}/${p.name}`));
+    await supabase.storage.from('device-sessions')
+      .remove([`${deviceId}/_tmp/s${sessionNumber}.wav`]).catch(() => {});
     return res;
   }
 
   return err('Unknown session endpoint', 404);
+}
+
+// True only if the object is really in the bucket. Used to tell a genuine
+// "already uploaded" apart from a row whose object never landed.
+async function objectExists(supabase: any, bucket: string, path: string): Promise<boolean> {
+  const cut = path.lastIndexOf('/');
+  const dir = cut >= 0 ? path.slice(0, cut) : '';
+  const name = cut >= 0 ? path.slice(cut + 1) : path;
+  const { data } = await supabase.storage.from(bucket).list(dir, { search: name, limit: 100 });
+  return !!data?.some((f: any) => f.name === name);
 }
 
 // Parse the firmware's "&flags=12000,45000" CSV (ms offsets) into a number[].
@@ -571,9 +708,21 @@ async function storeSessionRecord(
   const sessionId = 's-' + crypto.randomUUID().slice(0, 8);
   const storagePath = `${userId}/${meta.device_serial}/${sessionId}.wav`;
 
+  // THROW - never just log. This used to `console.error` and carry on inserting
+  // the row, so a rejected upload still returned 2xx: the recorder marked the
+  // session synced and (pre-1.5.9) deleted its only copy, while the server held a
+  // row pointing at nothing. A 118 MB session hit Storage's global file-size limit
+  // (413) and was lost exactly this way. A failed upload must fail the request so
+  // the device keeps the audio and retries.
   const { error: uploadError } = await supabase.storage.from('device-sessions')
     .upload(storagePath, wavBytes, { contentType: 'audio/wav', upsert: true });
-  if (uploadError) console.error('Storage upload error:', uploadError);
+  if (uploadError) {
+    throw new Error(
+      `storage upload failed for ${wavBytes.length} bytes: ${uploadError.message}` +
+      ` (if this is "exceeded the maximum allowed size", raise the project's global` +
+      ` file size limit in Storage settings - the bucket limit alone is not enough)`,
+    );
+  }
 
   const { error: insertError } = await supabase.from('sate_device_sessions').insert({
     id: sessionId, user_id: userId, device_serial: meta.device_serial,
