@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/contexts/AuthProvider';
 
 export interface Recording {
   id: string;
@@ -13,18 +14,13 @@ export interface Recording {
 }
 
 export const useRecordings = () => {
-  const { data: user } = useQuery({
-    queryKey: ['user'],
-    queryFn: async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      return user;
-    },
-    staleTime: Infinity, // User data doesn't change frequently
-    gcTime: Infinity, // Keep user data in cache
-    refetchOnMount: false,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-  });
+  // The user comes from AuthProvider, NOT from a cached ['user'] query. That
+  // query was cached with staleTime/gcTime Infinity and never refetched, so if
+  // it resolved before the session hydrated it stayed null forever — the
+  // recordings query never enabled and the list looked empty until a hard
+  // reload (Ctrl+Shift+R). AuthProvider tracks onAuthStateChange, so this value
+  // is correct the moment login completes.
+  const { user } = useAuth();
 
   const { data: recordings, isLoading, error, refetch } = useQuery<Recording[]>({
     queryKey: ['recordings', user?.id],
@@ -41,11 +37,15 @@ export const useRecordings = () => {
       return data as Recording[];
     },
     enabled: !!user?.id,
-    staleTime: 5 * 60 * 1000, // Consider fresh for 5 minutes
+    // Recorder/pendant sessions become recordings server-side, with no click in
+    // this tab. A 5-minute stale window meant they only appeared after a hard
+    // reload, so keep the list short-lived and refetch on mount/focus.
+    // DeviceProvider also invalidates this key the moment a session turns ready.
+    staleTime: 15 * 1000,
     gcTime: 10 * 60 * 1000, // Keep in cache for 10 minutes
-    refetchOnMount: false,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
+    refetchOnMount: true,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
   });
 
   return { recordings, isLoading, error, refetch };

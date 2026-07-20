@@ -19,6 +19,9 @@ import { useDashboardData } from './hooks/useDashboardData';
 // Import types
 import type { DashboardProps } from './types';
 
+// Feature flag: the Recent Patient Activity card is hidden, not removed.
+const SHOW_RECENT_PATIENT_ACTIVITY: boolean = false;
+
 const Dashboard: React.FC<DashboardProps> = ({ onImport, onUseSampleData }) => {
   const { user, hasSeenGuide, markGuideAsSeen } = useAuth();
   const { recordings, isLoading } = useRecordings();
@@ -244,11 +247,14 @@ const Dashboard: React.FC<DashboardProps> = ({ onImport, onUseSampleData }) => {
           {/* </div> */}
         {/* </div> */}
 
-        {/* Recent Patient Activity */}
-        <RecentPatientActivity 
-          patientStats={patientStats}
-          timeFilter={timeFilter}
-        />
+        {/* Recent Patient Activity — hidden for now, not deleted. Flip
+            SHOW_RECENT_PATIENT_ACTIVITY to bring it back. */}
+        {SHOW_RECENT_PATIENT_ACTIVITY && (
+          <RecentPatientActivity
+            patientStats={patientStats}
+            timeFilter={timeFilter}
+          />
+        )}
 
         {/* Standalone Recordings (No Patient) */}
         <StandaloneRecordings 

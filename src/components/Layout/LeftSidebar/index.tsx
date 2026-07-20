@@ -31,6 +31,9 @@ import { MoveToStandaloneModal } from './modals/MoveToStandaloneModal';
 import CreateRecordingPopup from '@/components/Recording/CreateRecordingPopup';
 import ImportPopup from '@/components/Modals/ImportPopup';
 
+// Feature flag: the Patients block in the sidebar is hidden, not removed.
+const SHOW_PATIENT_SECTION: boolean = false;
+
 interface LeftSidebarProps {
   visible: boolean;
   collapsed?: boolean;
@@ -290,15 +293,17 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({
               onNavigate={handleNavigate}
             />
             
-            <PatientSection
-              currentPatient={currentPatient}
-              patients={patients}
-              loadingPatients={loadingPatients}
-              selectedFilterPatientId={selectedFilterPatientId}
-              onNavigate={handleNavigate}
-              onPatientClick={handlePatientFilterClick}
-              onClearFilter={handleClearPatientFilter}
-            />
+            {SHOW_PATIENT_SECTION && (
+              <PatientSection
+                currentPatient={currentPatient}
+                patients={patients}
+                loadingPatients={loadingPatients}
+                selectedFilterPatientId={selectedFilterPatientId}
+                onNavigate={handleNavigate}
+                onPatientClick={handlePatientFilterClick}
+                onClearFilter={handleClearPatientFilter}
+              />
+            )}
             
             <RecordingsList
               recordings={filteredRecordings}

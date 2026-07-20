@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
 import type { Session, User } from '@supabase/supabase-js';
 import { validateInviteCode, useInviteCode } from '@/services/inviteCodeService';
@@ -22,6 +23,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [hasSeenGuide, setHasSeenGuide] = useState(false);
+  const queryClient = useQueryClient();
+  // `undefined` = auth hasn't resolved yet (first pass is not a change).
+  const lastUserIdRef = useRef<string | null | undefined>(undefined);
+
+  // Whenever the signed-in account changes (login, logout, account switch),
+  // drop every cached query. Otherwise the new session reads the previous
+  // user's cached data — or an empty list captured before auth resolved —
+  // which is what forced users to hard-reload to see their recordings.
+  useEffect(() => {
+    const id = user?.id ?? null;
+    const prev = lastUserIdRef.current;
+    lastUserIdRef.current = id;
+    if (prev === undefined || prev === id) return; // first resolve, or no change
+    queryClient.clear();
+  }, [user?.id, queryClient]);
 
   useEffect(() => {
     // Get initial session

@@ -2,7 +2,8 @@
 // Auto-polls the device API every 4 seconds (matching the companion app)
 // and provides device state, commands, and session data to the component tree.
 
-import React, { createContext, useContext, useEffect, useState, useRef, useCallback } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useState, useRef, useCallback } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { deviceApiService } from '@/services/device/deviceApiService';
 import type {
   ManagedDevice,
@@ -118,7 +119,7 @@ const POLL_INTERVAL = 4000; // 4 seconds — matches companion app
 export function DeviceProvider({ children }: { children: React.ReactNode }) {
   const [devices, setDevices] = useState<ManagedDevice[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [sessions, setSessions] = useState<UploadedSession[]>([]);
+  const [allSessions, setAllSessions] = useState<UploadedSession[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSendingCommand, setIsSendingCommand] = useState(false);
   const [activeCommand, setActiveCommand] = useState<RemoteCommand | null>(null);
@@ -129,8 +130,23 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   const [otaStartedAt, setOtaStartedAt] = useState<number | null>(null);
   const [otaTick, setOtaTick] = useState(0); // forces re-eval of the timeout
   const mountedRef = useRef(true);
+  const queryClient = useQueryClient();
+  // Recording ids we've already told react-query about, so a finished session
+  // refreshes the Recordings tab exactly once instead of on every 4s poll.
+  const seenRecordingsRef = useRef<Set<string> | null>(null);
 
   const selectedDevice = devices.find((d) => d.id === selectedId) ?? devices[0] ?? null;
+
+  // Sessions are DERIVED, not stored: switching devices must swap the Recent
+  // Sessions list in the same render, not one 4s poll later (it used to show the
+  // previous device's recordings until the next fetch landed).
+  const sessions = useMemo(
+    () =>
+      selectedDevice
+        ? allSessions.filter((s) => s.device_serial === selectedDevice.serial).slice(0, 10)
+        : [],
+    [allSessions, selectedDevice],
+  );
 
   // ---- Polling ----
   const refresh = useCallback(async () => {
@@ -151,15 +167,24 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       if (!mountedRef.current) return;
       const merged = [...list, ...deriveExternalDevices(allSessions)];
       setDevices(merged);
+      setAllSessions(allSessions);
       setIsConnected(true);
       setError(null);
 
-      // Load sessions for the selected device
-      const current = merged.find((d) => d.id === selectedId) ?? merged[0];
-      if (current) {
-        setSessions(allSessions.filter((s) => s.device_serial === current.serial).slice(0, 10));
+      // A session that just finished processing has produced a `recordings` row.
+      // Push it into the Recordings tab now — the user shouldn't have to click
+      // the session here (or reload) for it to show up.
+      const ready = new Set(
+        allSessions.filter((s) => s.processed && s.recording_id).map((s) => s.recording_id as string),
+      );
+      const seen = seenRecordingsRef.current;
+      if (seen === null) {
+        seenRecordingsRef.current = ready; // first poll: baseline, nothing is "new"
       } else {
-        setSessions([]);
+        let hasNew = false;
+        for (const id of ready) if (!seen.has(id)) { hasNew = true; break; }
+        seenRecordingsRef.current = ready;
+        if (hasNew) queryClient.invalidateQueries({ queryKey: ['recordings'] });
       }
     } catch (e: any) {
       if (mountedRef.current) {
@@ -169,7 +194,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     } finally {
       if (mountedRef.current) setIsLoading(false);
     }
-  }, [selectedId]);
+  }, [queryClient]);
 
   useEffect(() => {
     mountedRef.current = true;
