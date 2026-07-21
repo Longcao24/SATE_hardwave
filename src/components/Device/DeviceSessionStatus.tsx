@@ -7,7 +7,7 @@
 import { useState } from 'react';
 import type { UploadedSession } from '@/services/device/deviceTypes';
 import { formatSessionDuration, timeAgo } from '@/hooks/useDevices';
-import { CheckCircle2, Loader2, AlertCircle, FileAudio, MicOff, Trash2 } from 'lucide-react';
+import { CheckCircle2, Loader2, AlertCircle, FileAudio, MicOff, Trash2, Clock, RotateCw } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { deviceApiService } from '@/services/device/deviceApiService';
 import { useDeviceContext } from '@/contexts/DeviceProvider';
@@ -16,9 +16,23 @@ interface DeviceSessionStatusProps {
   sessions: UploadedSession[];
 }
 
-type Status = 'processing' | 'ready' | 'failed' | 'no_text';
+type Status = 'queued' | 'processing' | 'ready' | 'failed' | 'no_text';
 
 const statusOf = (s: UploadedSession): Status => {
+  // Authoritative async state machine when the column is present.
+  if (s.status) {
+    switch (s.status) {
+      case 'queued':
+        return 'queued';
+      case 'processing':
+        return 'processing';
+      case 'error':
+        return 'failed';
+      case 'done':
+        return s.no_text ? 'no_text' : 'ready';
+    }
+  }
+  // Legacy fallback (pre-async pipeline rows).
   if (s.no_text) return 'no_text';
   if (s.process_error) return 'failed';
   if (s.processed && s.recording_id) return 'ready';
@@ -29,6 +43,22 @@ export function DeviceSessionStatus({ sessions }: DeviceSessionStatusProps) {
   const navigate = useNavigate();
   const { refresh } = useDeviceContext();
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [retryingId, setRetryingId] = useState<string | null>(null);
+
+  const handleRetry = async (e: React.MouseEvent, s: UploadedSession) => {
+    e.stopPropagation();
+    if (retryingId) return;
+    setRetryingId(s.id);
+    try {
+      await deviceApiService.retrySession(s.id);
+      await refresh();
+    } catch (err) {
+      console.error('Failed to retry session:', err);
+      window.alert('Could not retry the session. Please try again.');
+    } finally {
+      setRetryingId(null);
+    }
+  };
 
   const handleDelete = async (e: React.MouseEvent, s: UploadedSession) => {
     e.stopPropagation();
@@ -82,9 +112,17 @@ export function DeviceSessionStatus({ sessions }: DeviceSessionStatusProps) {
                   </p>
                 </div>
 
+                {status === 'queued' && (
+                  <span
+                    title="Uploaded and waiting for the processor to pick it up."
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-sky-700 bg-sky-50 rounded-lg"
+                  >
+                    <Clock className="w-3 h-3" /> Received · Queued
+                  </span>
+                )}
                 {status === 'processing' && (
                   <span className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-amber-700 bg-amber-50 rounded-lg">
-                    <Loader2 className="w-3 h-3 animate-spin" /> Received · Processing
+                    <Loader2 className="w-3 h-3 animate-spin" /> Processing
                   </span>
                 )}
                 {status === 'ready' && (
@@ -107,6 +145,22 @@ export function DeviceSessionStatus({ sessions }: DeviceSessionStatusProps) {
                   >
                     <AlertCircle className="w-3 h-3" /> Failed
                   </span>
+                )}
+                {status === 'failed' && (
+                  <button
+                    type="button"
+                    onClick={(e) => handleRetry(e, s)}
+                    disabled={retryingId === s.id}
+                    title="Re-queue this session for processing"
+                    className="ml-2 flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-sky-700 bg-sky-50 rounded-lg hover:bg-sky-100 disabled:opacity-50"
+                  >
+                    {retryingId === s.id ? (
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                    ) : (
+                      <RotateCw className="w-3 h-3" />
+                    )}
+                    Retry
+                  </button>
                 )}
 
                 <button

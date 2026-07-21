@@ -104,6 +104,12 @@ export interface UploadedSession {
   process_error?: string | null;
   /** True when the AI returned no usable text: no report is created. */
   no_text?: boolean;
+  /** Async pipeline state machine: queued → processing → done | error.
+   *  Authoritative once the CF container is live; falls back to the legacy
+   *  processed/process_error/no_text fields when absent. */
+  status?: 'queued' | 'processing' | 'done' | 'error';
+  /** How many times the container has claimed this session. */
+  attempts?: number;
 }
 
 // ---------------------------------------------------------------------------

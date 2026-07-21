@@ -1,4 +1,4 @@
-// SATE Device API — Supabase Edge Function              [v12]
+// SATE Device API — Supabase Edge Function              [v14]
 // Replaces the mock-server's Express endpoints with a single Edge Function
 // that does internal path routing. Authenticated via Supabase JWT (users) or a
 // device key (the recorder).
@@ -17,6 +17,11 @@
 //      stitches once on final (was: rewrite the whole temp blob per slice, which
 //      was quadratic and stalled long uploads). Accepts &total= from firmware
 //      >=1.5.9 and rejects a size mismatch instead of storing a corrupt WAV.
+// v14: async processing state machine. GET /sessions returns `status` + `attempts`
+//      (queued|processing|done|error) so the UI shows real progress instead of
+//      inferring from `processed`. POST /sessions/:id/retry re-queues an errored
+//      session for the CF container. (Processing itself moved out of the edge:
+//      process-device-session is a no-op now; a container holds the long AI call.)
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3';
@@ -204,6 +209,10 @@ serve(async (req) => {
     const audioMatch = subPath.match(/^\/sessions\/([^/]+)\/audio$/);
     if (audioMatch && method === 'GET') {
       return await getSessionAudio(supabase, user.id, audioMatch[1]);
+    }
+    const sessionRetryMatch = subPath.match(/^\/sessions\/([^/]+)\/retry$/);
+    if (sessionRetryMatch && method === 'POST') {
+      return await retrySession(supabase, user.id, sessionRetryMatch[1]);
     }
     const sessionDelMatch = subPath.match(/^\/sessions\/([^/]+)$/);
     if (sessionDelMatch && method === 'DELETE') {
@@ -741,12 +750,27 @@ async function storeSessionRecord(
 
 async function listSessions(supabase: any, userId: string, deviceSerial: string | null) {
   let query = supabase.from('sate_device_sessions')
-    .select('id, device_serial, patient_id, session_number, sample_rate, bytes, created_at, processed, processed_at, recording_id, process_error, no_text')
+    .select('id, device_serial, patient_id, session_number, sample_rate, bytes, created_at, processed, processed_at, recording_id, process_error, no_text, status, attempts')
     .eq('user_id', userId).order('created_at', { ascending: false });
   if (deviceSerial) query = query.eq('device_serial', deviceSerial);
   const { data, error } = await query.limit(20);
   if (error) throw new Error(error.message);
   return json((data || []).map((s: any) => ({ ...s, at: s.created_at })));
+}
+
+// Re-queue an errored session for the async container. Scoped to the caller's own
+// sessions; only an 'error' session may be retried. Resets attempts so the watchdog
+// gives the fresh try its full stall budget again.
+async function retrySession(supabase: any, userId: string, sessionId: string) {
+  const { data: row } = await supabase.from('sate_device_sessions')
+    .select('id, status').eq('id', sessionId).eq('user_id', userId).maybeSingle();
+  if (!row) return err('Session not found', 404);
+  if (row.status !== 'error') return err('Only a failed session can be retried', 409);
+  const { error } = await supabase.from('sate_device_sessions')
+    .update({ status: 'queued', process_error: null, attempts: 0 })
+    .eq('id', sessionId).eq('user_id', userId);
+  if (error) throw new Error(error.message);
+  return json({ id: sessionId, status: 'queued' });
 }
 
 // Delete a single uploaded session (its DB row + the stored WAV). Scoped to the

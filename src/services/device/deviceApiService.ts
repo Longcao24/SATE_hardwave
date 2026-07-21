@@ -170,6 +170,12 @@ export const deviceApiService = {
     await req(`/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
   },
 
+  /** Re-queue a failed session for the async processor. Only valid when the
+   *  session is in the 'error' state. */
+  async retrySession(sessionId: string): Promise<void> {
+    await req(`/sessions/${encodeURIComponent(sessionId)}/retry`, { method: 'POST' });
+  },
+
   /**
    * Get the playable audio URL for a session.
    * The Edge Function returns a 302 redirect to a Supabase Storage signed URL.
