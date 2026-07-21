@@ -4,8 +4,17 @@ import { DeviceCard } from '@/components/Device/DeviceCard';
 import { Mic, ChevronRight } from 'lucide-react';
 
 export default function DeviceOverview() {
-  const { devices, isConnected } = useDeviceContext();
+  const { devices, isConnected, selectDevice } = useDeviceContext();
   const navigate = useNavigate();
+
+  // Open the device page ON the card that was clicked. Without selecting first,
+  // /devices falls back to devices[0] (the SATE recorder), so clicking a Pendant
+  // or Plaud card wrongly opened the recorder's page. Selection persists because
+  // DeviceProvider wraps the whole app (above the router).
+  const openDevice = (id: string) => {
+    selectDevice(id);
+    navigate('/devices');
+  };
 
   if (!isConnected || devices.length === 0) {
     return null; // Don't show the section if they have no devices or API is down
@@ -33,7 +42,7 @@ export default function DeviceOverview() {
           <DeviceCard
             key={device.id}
             device={device}
-            onClick={() => navigate('/devices')}
+            onClick={() => openDevice(device.id)}
           />
         ))}
       </div>
