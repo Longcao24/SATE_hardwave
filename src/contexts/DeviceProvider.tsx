@@ -13,6 +13,22 @@ import type {
   FirmwareInfo,
 } from '@/services/device/deviceTypes';
 
+// Compare dotted numeric firmware versions (e.g. "1.5.12" vs "1.5.10").
+// Returns <0 if a<b, 0 if equal, >0 if a>b. Missing/short parts count as 0;
+// non-numeric segments are treated as 0 so a malformed string never falsely
+// triggers an "update available". "1.5.12" > "1.5.10" (numeric, not string).
+function compareFw(a: string, b: string): number {
+  const pa = a.split('.');
+  const pb = b.split('.');
+  const n = Math.max(pa.length, pb.length);
+  for (let i = 0; i < n; i++) {
+    const na = parseInt(pa[i] ?? '0', 10) || 0;
+    const nb = parseInt(pb[i] ?? '0', 10) || 0;
+    if (na !== nb) return na - nb;
+  }
+  return 0;
+}
+
 // OTA lifecycle for the selected device, derived from its heartbeat fields.
 export type OtaStatus =
   | 'current'     // running the latest firmware
@@ -337,7 +353,10 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     latestFirmware &&
     selectedDevice &&
     (selectedDevice.kind ?? 'sate') === 'sate' && // external devices aren't OTA-flashable from web
-    selectedDevice.fw !== latestFirmware.version
+    selectedDevice.fw &&                            // unknown fw -> don't nag
+    // Only offer an update when the device is on a STRICTLY OLDER build. A device
+    // ahead of (or equal to) the published "latest" must not show the banner.
+    compareFw(selectedDevice.fw, latestFirmware.version) < 0
   );
 
   void otaTick; // referenced so the periodic tick recomputes the timeout below
