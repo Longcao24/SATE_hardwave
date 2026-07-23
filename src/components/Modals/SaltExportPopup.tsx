@@ -49,16 +49,41 @@ export const SaltExportPopup: React.FC<SaltExportPopupProps> = ({
     context: '',
   });
 
-  // Helper function to determine default speaker label
-  const getDefaultSpeakerLabel = (speakerName: string): string => {
+  // Helper function to determine default speaker label.
+  // 'conventional' marks the SALT-standard labels (C = child, E = examiner/adult); they are
+  // assigned before the first-letter fallbacks so a same-letter name can never take them.
+  const getPreferredSpeakerLabel = (speakerName: string): { label: string; conventional: boolean } => {
     const lowerName = speakerName.toLowerCase();
     if (lowerName.startsWith('child')) {
-      return 'C';
+      return { label: 'C', conventional: true };
     } else if (lowerName.startsWith('adult') || lowerName.startsWith('examiner')) {
-      return 'E';
+      return { label: 'E', conventional: true };
     }
     // Default to first letter of speaker name
-    return speakerName.charAt(0).toUpperCase();
+    return { label: speakerName.charAt(0).toUpperCase(), conventional: false };
+  };
+
+  // SALT attributes every utterance carrying the same label to one speaker, so a default that
+  // collides with an already-assigned label must be disambiguated rather than reused.
+  const getDefaultSpeakerLabel = (speakerName: string, takenLabels: Set<string>): string => {
+    const preferred = getPreferredSpeakerLabel(speakerName).label;
+    if (!takenLabels.has(preferred)) {
+      return preferred;
+    }
+    // Next free letter of the speaker's own name, then a numbered variant of the preferred label
+    const letters = speakerName.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(1);
+    for (const letter of letters) {
+      if (!takenLabels.has(letter)) {
+        return letter;
+      }
+    }
+    for (let suffix = 2; suffix < 100; suffix++) {
+      const candidate = `${preferred}${suffix}`;
+      if (!takenLabels.has(candidate)) {
+        return candidate;
+      }
+    }
+    return preferred;
   };
 
   // State for speaker label mappings
@@ -120,17 +145,42 @@ export const SaltExportPopup: React.FC<SaltExportPopupProps> = ({
 
   // Initialize speaker labels when metrics change
   React.useEffect(() => {
-    const newLabels: Record<string, string> = {};
-    metrics.speakers.forEach(speaker => {
+    setSpeakerLabels(prev => {
+      // Only labels of speakers actually in this transcript can collide in the export
+      const takenLabels = new Set(
+        metrics.speakers.map(speaker => prev[speaker.name]).filter((label): label is string => !!label)
+      );
+      const newLabels: Record<string, string> = {};
       // Only set if not already set
-      if (!speakerLabels[speaker.name]) {
-        newLabels[speaker.name] = getDefaultSpeakerLabel(speaker.name);
+      const unlabeled = metrics.speakers.filter(speaker => !prev[speaker.name]);
+      const ordered = [
+        ...unlabeled.filter(speaker => getPreferredSpeakerLabel(speaker.name).conventional),
+        ...unlabeled.filter(speaker => !getPreferredSpeakerLabel(speaker.name).conventional),
+      ];
+      ordered.forEach(speaker => {
+        const label = getDefaultSpeakerLabel(speaker.name, takenLabels);
+        takenLabels.add(label);
+        newLabels[speaker.name] = label;
+      });
+      return Object.keys(newLabels).length > 0 ? { ...prev, ...newLabels } : prev;
+    });
+  }, [metrics.speakers]);
+
+  // Labels shared by two speakers merge them in the exported .slt
+  const duplicateLabels = useMemo(() => {
+    const counts = new Map<string, number>();
+    metrics.speakers.forEach(speaker => {
+      const label = speakerLabels[speaker.name];
+      if (label) {
+        counts.set(label, (counts.get(label) || 0) + 1);
       }
     });
-    if (Object.keys(newLabels).length > 0) {
-      setSpeakerLabels(prev => ({ ...prev, ...newLabels }));
-    }
-  }, [metrics.speakers]);
+    return new Set(
+      Array.from(counts.entries())
+        .filter(([, count]) => count > 1)
+        .map(([label]) => label)
+    );
+  }, [metrics.speakers, speakerLabels]);
 
   // Generate SALT header text
   const generateHeader = (header: SaltHeader): string => {
@@ -149,31 +199,56 @@ export const SaltExportPopup: React.FC<SaltExportPopupProps> = ({
 
   // Generate initial SALT content
   // Note: Excluded segments are included with '+' prefix (handled by segmentsToSalt)
-  const initialContent = useMemo(() => {
-    const filteredData = selectedSpeaker 
+  const headerContent = useMemo(
+    () => (includeHeader ? generateHeader(headerData) : ''),
+    [includeHeader, headerData]
+  );
+
+  const transcriptContent = useMemo(() => {
+    const filteredData = selectedSpeaker
       ? transcriptData.filter(segment => segment.speaker === selectedSpeaker)
       : transcriptData;
-    
-    const transcriptContent = segmentsToSalt(filteredData, includePauses, speakerLabels);
-    
-    if (includeHeader) {
-      return generateHeader(headerData) + transcriptContent;
-    }
-    
-    return transcriptContent;
-  }, [transcriptData, selectedSpeaker, includePauses, includeHeader, headerData, speakerLabels]);
+
+    return segmentsToSalt(filteredData, includePauses, speakerLabels);
+  }, [transcriptData, selectedSpeaker, includePauses, speakerLabels]);
 
   // State for editable content
-  const [editedContent, setEditedContent] = useState(initialContent);
+  const [editedContent, setEditedContent] = useState(headerContent + transcriptContent);
+  // What the preview was last generated from; anything else in the textarea is a manual edit
+  const generatedRef = useRef({ header: headerContent, transcript: transcriptContent });
+  const [previewOutOfSync, setPreviewOutOfSync] = useState(false);
 
   // Refs for synchronized scrolling
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const lineNumbersRef = useRef<HTMLDivElement>(null);
 
-  // Update edited content when initial content changes
+  const regeneratePreview = () => {
+    generatedRef.current = { header: headerContent, transcript: transcriptContent };
+    setEditedContent(headerContent + transcriptContent);
+    setPreviewOutOfSync(false);
+  };
+
+  // Update edited content when the generated content changes, without discarding manual edits
   React.useEffect(() => {
-    setEditedContent(initialContent);
-  }, [initialContent]);
+    const previous = generatedRef.current;
+    if (previous.header === headerContent && previous.transcript === transcriptContent) {
+      return;
+    }
+    generatedRef.current = { header: headerContent, transcript: transcriptContent };
+
+    if (editedContent === previous.header + previous.transcript) {
+      setEditedContent(headerContent + transcriptContent);
+      setPreviewOutOfSync(false);
+      return;
+    }
+    // Manual edits sit below an untouched header, so a header-only change can be swapped in
+    // above them; a change that regenerates utterances can only be applied on explicit request.
+    if (previous.transcript === transcriptContent && editedContent.startsWith(previous.header)) {
+      setEditedContent(headerContent + editedContent.slice(previous.header.length));
+      return;
+    }
+    setPreviewOutOfSync(true);
+  }, [headerContent, transcriptContent]);
 
   // Calculate line numbers
   const lines = editedContent.split('\n');
@@ -435,7 +510,11 @@ export const SaltExportPopup: React.FC<SaltExportPopupProps> = ({
                                 [speaker.name]: value
                               }));
                             }}
-                            className="w-12 px-2 py-1 text-sm text-center font-mono border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            className={`w-12 px-2 py-1 text-sm text-center font-mono border rounded focus:outline-none focus:ring-2 ${
+                              duplicateLabels.has(speakerLabels[speaker.name])
+                                ? 'border-red-400 bg-red-50 focus:ring-red-500'
+                                : 'border-gray-300 focus:ring-blue-500'
+                            }`}
                             placeholder="C"
                             maxLength={3}
                           />
@@ -454,6 +533,12 @@ export const SaltExportPopup: React.FC<SaltExportPopupProps> = ({
                     </div>
                   ))}
                 </div>
+                {duplicateLabels.size > 0 && (
+                  <p className="text-xs text-red-600 mt-3">
+                    Speakers sharing a SALT label are merged into one speaker in the exported file —
+                    give each speaker a unique label.
+                  </p>
+                )}
               </div>
             )}
           </div>
@@ -465,7 +550,23 @@ export const SaltExportPopup: React.FC<SaltExportPopupProps> = ({
               <h3 className="text-lg font-semibold text-gray-900">SALT Format Preview</h3>
               <span className="text-sm text-gray-500">({lines.length} utterances)</span>
             </div>
-            
+
+            {previewOutOfSync && (
+              <div className="flex items-start justify-between gap-3 mb-3 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg">
+                <p className="text-xs text-amber-800">
+                  Your manual edits were kept, so the preview no longer reflects the current pause or
+                  speaker-label settings. Regenerate to apply them — this discards your edits.
+                </p>
+                <button
+                  type="button"
+                  onClick={regeneratePreview}
+                  className="flex-shrink-0 px-2 py-1 text-xs font-medium text-amber-900 bg-amber-100 border border-amber-300 rounded hover:bg-amber-200 transition-colors"
+                >
+                  Regenerate preview
+                </button>
+              </div>
+            )}
+
             <div className="relative flex border border-gray-200 rounded-lg overflow-hidden bg-white shadow-sm">
               {/* Line Numbers */}
               <div 

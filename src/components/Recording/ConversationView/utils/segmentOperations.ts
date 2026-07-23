@@ -18,6 +18,13 @@ export const splitSegment = (
   
   // Helper function to determine which segment a pause belongs to
   const assignPauseToSegment = (pause: any, firstWords: any[], secondWords: any[]) => {
+    // A pause's index (the word it follows) is authoritative when present: renderers and
+    // SALT export match on index before timing, so the assignment has to agree with it or
+    // the re-indexing below moves the pause to a different word than it was drawn at.
+    if (typeof pause.index === 'number') {
+      return pause.index < splitPoint - 1 ? 'first' : 'second';
+    }
+
     // Check if pause occurs between words in the first segment
     for (let i = 0; i < firstWords.length - 1; i++) {
       const currentWord = firstWords[i];
@@ -52,11 +59,29 @@ export const splitSegment = (
   
   const firstWords = segment.words.slice(0, splitPoint);
   const secondWords = segment.words.slice(splitPoint);
-  
+  const firstText = firstWords.map(w => w.word).join(' ');
+  const secondText = secondWords.map(w => w.word).join(' ');
+
+  // A span that straddles the split stays whole in the half holding most of its words
+  // (ties go to the first half); copying it into both would report one error as two.
+  const spanBelongsToFirst = (wordIndices: number[]) =>
+    wordIndices.filter(wordIdx => wordIdx < splitPoint).length * 2 >= wordIndices.length;
+
+  // 'utterance-error' entries carry no word indices, so they can only be anchored by their
+  // content text; each must land in exactly one half or the `...segment` spread copies it
+  // into both and doubles the count.
+  const assignUtteranceErrorToSegment = (error: any) => {
+    const content = typeof error?.content === 'string' ? error.content.trim() : '';
+    if (content && !firstText.includes(content) && secondText.includes(content)) {
+      return 'second';
+    }
+    return 'first';
+  };
+
   // Create first segment
   const firstSegment: Segment = {
     ...segment,
-    text: firstWords.map(w => w.word).join(' '),
+    text: firstText,
     end: splitTime,
     words: firstWords,
     fillerwords: segment.fillerwords?.filter(f => {
@@ -65,17 +90,17 @@ export const splitSegment = (
       );
       return wordInFirstSegment;
     }),
-    repetitions: segment.repetitions?.filter(rep => 
-      rep.words && Array.isArray(rep.words) && rep.words.some(wordIdx => wordIdx < splitPoint)
+    repetitions: segment.repetitions?.filter(rep =>
+      rep.words && Array.isArray(rep.words) && spanBelongsToFirst(rep.words)
     ).map(rep => ({
       ...rep,
       words: rep.words.filter(wordIdx => wordIdx < splitPoint)
     })).filter(rep => rep.words && rep.words.length > 0),
-    morphemes: segment.morphemes?.filter((m: any) => 
+    morphemes: segment.morphemes?.filter((m: any) =>
       (m.index || m.word_index || 0) < splitPoint
     ),
-    morpheme_omissions: segment.morpheme_omissions?.filter((mo: any) => 
-      (mo.word_index || 0) < splitPoint
+    morpheme_omissions: segment.morpheme_omissions?.filter((mo: any) =>
+      (mo.index ?? mo.word_index ?? 0) < splitPoint
     ),
     mispronunciation: segment.mispronunciation?.filter((mp: any) => {
       const wordInFirstSegment = firstWords.some(w => 
@@ -88,10 +113,10 @@ export const splitSegment = (
     ),
     revisions: segment.revisions?.filter((rev: any) => {
       const wordIndices = rev.location || rev.words || [];
-      return Array.isArray(wordIndices) && wordIndices.some((wordIdx: number) => wordIdx < splitPoint);
+      return Array.isArray(wordIndices) && spanBelongsToFirst(wordIndices);
     }).map((rev: any) => {
       const wordIndices = rev.location || rev.words || [];
-      const filteredIndices = Array.isArray(wordIndices) 
+      const filteredIndices = Array.isArray(wordIndices)
         ? wordIndices.filter((wordIdx: number) => wordIdx < splitPoint)
         : [];
       return {
@@ -100,13 +125,16 @@ export const splitSegment = (
         words: filteredIndices
       };
     }).filter((rev: any) => rev.words && rev.words.length > 0),
+    'utterance-error': segment['utterance-error']?.filter((err: any) =>
+      assignUtteranceErrorToSegment(err) === 'first'
+    ),
     is_edited: true
   };
   
   // Create second segment
   const secondSegment: Segment = {
     ...segment,
-    text: secondWords.map(w => w.word).join(' '),
+    text: secondText,
     start: splitTime,
     words: secondWords,
     fillerwords: segment.fillerwords?.filter(f => {
@@ -115,24 +143,25 @@ export const splitSegment = (
       );
       return wordInSecondSegment;
     }),
-    repetitions: segment.repetitions?.filter(rep => 
-      rep.words && Array.isArray(rep.words) && rep.words.some(wordIdx => wordIdx >= splitPoint)
+    repetitions: segment.repetitions?.filter(rep =>
+      rep.words && Array.isArray(rep.words) && !spanBelongsToFirst(rep.words)
     ).map(rep => ({
       ...rep,
       words: rep.words.filter(wordIdx => wordIdx >= splitPoint).map(wordIdx => wordIdx - splitPoint)
     })).filter(rep => rep.words && rep.words.length > 0),
-    morphemes: segment.morphemes?.filter((m: any) => 
+    morphemes: segment.morphemes?.filter((m: any) =>
       (m.index || m.word_index || 0) >= splitPoint
     ).map((m: any) => ({
       ...m,
       index: m.index !== undefined ? m.index - splitPoint : m.index,
       word_index: m.word_index !== undefined ? m.word_index - splitPoint : m.word_index
     })),
-    morpheme_omissions: segment.morpheme_omissions?.filter((mo: any) => 
-      (mo.word_index || 0) >= splitPoint
+    morpheme_omissions: segment.morpheme_omissions?.filter((mo: any) =>
+      (mo.index ?? mo.word_index ?? 0) >= splitPoint
     ).map((mo: any) => ({
       ...mo,
-      word_index: mo.word_index - splitPoint
+      index: mo.index !== undefined ? mo.index - splitPoint : mo.index,
+      word_index: mo.word_index !== undefined ? mo.word_index - splitPoint : mo.word_index
     })),
     mispronunciation: segment.mispronunciation?.filter((mp: any) => {
       const wordInSecondSegment = secondWords.some(w => 
@@ -140,12 +169,14 @@ export const splitSegment = (
       );
       return wordInSecondSegment;
     }),
-    pauses: segment.pauses?.filter((p: any) => 
+    pauses: segment.pauses?.filter((p: any) =>
       assignPauseToSegment(p, firstWords, secondWords) === 'second'
-    ),
+    ).map((p: any) => (
+      typeof p.index === 'number' ? { ...p, index: p.index - splitPoint } : p
+    )),
     revisions: segment.revisions?.filter((rev: any) => {
       const wordIndices = rev.location || rev.words || [];
-      return Array.isArray(wordIndices) && wordIndices.some((wordIdx: number) => wordIdx >= splitPoint);
+      return Array.isArray(wordIndices) && !spanBelongsToFirst(wordIndices);
     }).map((rev: any) => {
       const wordIndices = rev.location || rev.words || [];
       const adjustedIndices = Array.isArray(wordIndices)
@@ -159,9 +190,12 @@ export const splitSegment = (
         words: adjustedIndices
       };
     }).filter((rev: any) => rev.words && rev.words.length > 0),
+    'utterance-error': segment['utterance-error']?.filter((err: any) =>
+      assignUtteranceErrorToSegment(err) === 'second'
+    ),
     is_edited: true
   };
-  
+
   return { firstSegment, secondSegment };
 };
 
@@ -222,9 +256,13 @@ export const mergeSegments = (
     
     pauses: [
       ...(firstSegment.pauses || []),
-      ...(secondSegment.pauses || [])
+      // Adjust indices for second segment pauses (-1 = before its first word, i.e. after
+      // the last word of the first segment)
+      ...(secondSegment.pauses || []).map((p: any) => (
+        typeof p.index === 'number' ? { ...p, index: p.index + firstWordsCount } : p
+      ))
     ],
-    
+
     revisions: [
       ...(firstSegment.revisions || []),
       // Adjust indices for second segment revisions
@@ -238,7 +276,14 @@ export const mergeSegments = (
         };
       })
     ],
-    
+
+    // Segment-level, no indices to adjust — but the `...firstSegment` spread would
+    // otherwise drop the second segment's errors entirely
+    'utterance-error': [
+      ...(firstSegment['utterance-error'] || []),
+      ...(secondSegment['utterance-error'] || [])
+    ],
+
     is_edited: true
   };
 };

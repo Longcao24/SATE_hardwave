@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { recordingMetadataService } from '@/services/recordingMetadataService';
 import { audioStorageService } from '@/services/audioStorageService';
@@ -18,6 +18,14 @@ export function useRecordingMetadata(user: User | null) {
   const [currentRecordingId, setCurrentRecordingId] = useState<string | null>(null);
   const [shouldNavigateAfterSave, setShouldNavigateAfterSave] = useState(false);
 
+  // When the form for the current audio file was opened. Processing results are
+  // published globally without any file identity, so only results produced after
+  // this moment can belong to this file.
+  const formOpenedAtRef = useRef(0);
+  // Error reporter captured when the user clicks Save, so a save deferred until
+  // processing completes can still surface its failure.
+  const saveErrorHandlerRef = useRef<((error: string | null) => void) | null>(null);
+
   const showRecordingMetadataForm = (
     audioFile: File,
     patientId?: string,
@@ -35,6 +43,7 @@ export function useRecordingMetadata(user: User | null) {
       isComplete
     );
 
+    formOpenedAtRef.current = Date.now();
     setPendingRecordingData(pendingData);
     setShowMetadataForm(true);
   };
@@ -137,9 +146,13 @@ export function useRecordingMetadata(user: User | null) {
       return;
     }
 
-    // Check if we have fresh processing results available globally
+    saveErrorHandlerRef.current = setDataError;
+
+    // Check if we have fresh processing results available globally.
+    // Results left over from an earlier upload carry another file's transcript,
+    // so only use them when they were produced after this form opened.
     const globalResults = (window as any).latestProcessingResults;
-    if (globalResults && !pendingRecordingData.isProcessingComplete) {
+    if (globalResults && globalResults.timestamp > formOpenedAtRef.current && !pendingRecordingData.isProcessingComplete) {
       setShouldNavigateAfterSave(true); // User explicitly clicked Save
       await saveRecordingWithFreshData(metadata, globalResults.transcriptData, globalResults.errorCounts, setDataError);
       return;
@@ -149,6 +162,13 @@ export function useRecordingMetadata(user: User | null) {
     setFormMetadata(metadata);
 
     // If processing is not complete, wait for it
+    if (pendingRecordingData.processingFailed) {
+      // Tell the user why Save cannot work instead of returning silently — the
+      // form re-enables Save after a failed run, so this was an invisible dead end.
+      setDataError('Processing failed, so there is no transcript to save yet. Retry processing from the error notice, or upload the file again.');
+      return;
+    }
+
     if (!pendingRecordingData.isProcessingComplete) {
       setShouldNavigateAfterSave(false); // Don't navigate on auto-save after processing
       // Form will be processed when audio processing completes
@@ -170,13 +190,16 @@ export function useRecordingMetadata(user: User | null) {
     setShowMetadataForm(false);
     setPendingRecordingData(null);
     setFormMetadata(null);
+
+    // Results for the abandoned file must not be paired with the next upload
+    delete (window as any).latestProcessingResults;
   };
 
   // Auto-save when processing completes AFTER user has clicked Save button
   // (formMetadata is only set when user clicks Save, ensuring explicit user action)
   useEffect(() => {
     if (pendingRecordingData?.isProcessingComplete && formMetadata && !isSavingRecording) {
-      saveRecordingWithMetadata(formMetadata, () => {});
+      saveRecordingWithMetadata(formMetadata, (error) => saveErrorHandlerRef.current?.(error));
     }
   }, [pendingRecordingData?.isProcessingComplete, formMetadata]);
 

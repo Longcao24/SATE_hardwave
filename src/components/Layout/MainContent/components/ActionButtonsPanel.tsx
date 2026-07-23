@@ -75,7 +75,13 @@ export const ActionButtonsPanel: React.FC<ActionButtonsPanelProps> = ({
         <div className="flex items-center gap-2">
           <button
             onClick={async () => {
-              await onSaveChanges?.();
+              try {
+                await onSaveChanges?.();
+              } catch {
+                // The history is the only record of the edits and the source of
+                // hasUnsavedChanges, so a failed save must keep it armed.
+                return;
+              }
               // Clear history after successful save
               undoRedo.clearHistory();
             }}

@@ -93,9 +93,25 @@ const MainContent: React.FC<MainContentProps> = ({
 
   // Keyboard shortcuts for undo/redo
   useEffect(() => {
+    const isTextEntryTarget = (target: EventTarget | null) => {
+      const element = target as HTMLElement | null;
+      if (!element) return false;
+      const tag = element.tagName;
+      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || element.isContentEditable;
+    };
+
     const handleKeyDown = (e: KeyboardEvent) => {
       // Only handle undo/redo when in edit mode
       if (!isEditable) return;
+
+      // A segment editor holds the index of the segment it opened on, so a
+      // transcript-level undo while one is open (it can add/remove segments and
+      // shift every later index) would make its save land on another utterance.
+      // Leave the keystroke to the field's own native undo instead.
+      if (isTextEntryTarget(e.target)) return;
+      if (editingState &&
+          (editingState.inlineEditingSegment !== null ||
+           editingState.popupEditingSegment !== null)) return;
 
       // Undo: Ctrl+Z (or Cmd+Z on Mac)
       if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
@@ -118,7 +134,7 @@ const MainContent: React.FC<MainContentProps> = ({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isEditable, undoRedo]);
+  }, [isEditable, undoRedo, editingState]);
 
   // Warn user before leaving page with unsaved changes
   useEffect(() => {

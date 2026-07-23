@@ -18,6 +18,71 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
+// A code whose consumption failed at signup time. With email confirmation on,
+// supabase.auth.signUp returns a user but no session, so the consuming RPC runs
+// with the anon key and RLS rejects it — without this the code is never spent
+// and a max_uses=1 code keeps working for every later signup.
+const PENDING_INVITE_KEY = 'sate_pending_invite_code';
+
+const rememberPendingInviteCode = (code: string, userId: string) => {
+  try {
+    localStorage.setItem(PENDING_INVITE_KEY, JSON.stringify({ code, userId }));
+  } catch (error) {
+    console.error('Error storing pending invite code:', error);
+  }
+};
+
+const clearPendingInviteCode = () => {
+  try {
+    localStorage.removeItem(PENDING_INVITE_KEY);
+  } catch (error) {
+    console.error('Error clearing pending invite code:', error);
+  }
+};
+
+// Retried once the account has a real session, which is what the RPC needs.
+// The record is cleared only on a SUCCESSFUL consume (or when the code is already
+// spent): clearing it first meant one transient failure — offline, RLS not yet
+// applied, RPC briefly unavailable — permanently dropped the code and left a
+// single-use invite reusable forever, with only a console line to show for it.
+// A bounded attempt count keeps a genuinely dead code from retrying every sign-in.
+const MAX_INVITE_CONSUME_ATTEMPTS = 5;
+
+const consumePendingInviteCode = async (userId: string) => {
+  let pending: { code?: string; userId?: string; attempts?: number } | null = null;
+  try {
+    const raw = localStorage.getItem(PENDING_INVITE_KEY);
+    pending = raw ? JSON.parse(raw) : null;
+  } catch (error) {
+    console.error('Error reading pending invite code:', error);
+    clearPendingInviteCode();
+    return;
+  }
+
+  if (!pending?.code || pending.userId !== userId) return;
+
+  const result = await useInviteCode(pending.code, userId);
+  if (result.success) {
+    clearPendingInviteCode();
+    return;
+  }
+
+  const attempts = (pending.attempts ?? 0) + 1;
+  console.error(
+    `Failed to record invite code usage (attempt ${attempts}/${MAX_INVITE_CONSUME_ATTEMPTS}):`,
+    result.error
+  );
+  if (attempts >= MAX_INVITE_CONSUME_ATTEMPTS) {
+    clearPendingInviteCode();
+    return;
+  }
+  try {
+    localStorage.setItem(PENDING_INVITE_KEY, JSON.stringify({ ...pending, attempts }));
+  } catch {
+    // Storage unavailable (private mode / quota): nothing more we can do client-side.
+  }
+};
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
@@ -38,6 +103,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (prev === undefined || prev === id) return; // first resolve, or no change
     queryClient.clear();
   }, [user?.id, queryClient]);
+
+  // Runs only with a session in hand, which is what the invite-code RPC needs.
+  useEffect(() => {
+    const userId = session?.user?.id;
+    if (!userId) return;
+    void consumePendingInviteCode(userId);
+  }, [session?.user?.id]);
 
   useEffect(() => {
     // Get initial session
@@ -141,8 +213,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Use the invite code with the newly created user's ID
       const useResult = await useInviteCode(inviteCode, data.user.id);
       if (!useResult.success) {
-        // Note: We don't throw here because the user is already created
-        // This is logged for debugging but shouldn't block the signup flow
+        // The account already exists, so don't throw and wedge the signup —
+        // park the code and spend it as soon as the user has a session.
+        console.error('Failed to record invite code usage:', useResult.error);
+        rememberPendingInviteCode(inviteCode, data.user.id);
       }
     }
   };

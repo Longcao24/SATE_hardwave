@@ -4,6 +4,7 @@
 
 import React, { createContext, useContext, useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { useAuth } from '@/contexts/AuthProvider';
 import { deviceApiService } from '@/services/device/deviceApiService';
 import type {
   ManagedDevice,
@@ -42,6 +43,11 @@ export type OtaStatus =
 // If a queued update hasn't started this long after sending, treat it as failed
 // (common cause: the firmware image URL 404s, so the device can't download it).
 const OTA_TIMEOUT_MS = 120000;
+
+// Hard deadline for the whole flash, including the offline reboot window. A
+// device that never comes back (bad image, power loss) would otherwise sit on
+// "Rebooting" forever, and only the 'failed' banner offers a way out.
+const OTA_STALL_TIMEOUT_MS = 300000;
 
 // ---------------------------------------------------------------------------
 // Context shape
@@ -142,11 +148,15 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [latestFirmware, setLatestFirmware] = useState<FirmwareInfo | null>(null);
-  const [otaTarget, setOtaTarget] = useState<string | null>(null);
-  const [otaStartedAt, setOtaStartedAt] = useState<number | null>(null);
+  // In-flight OTA keyed by device id: several recorders can be updating at once,
+  // and selecting another device must not re-attribute (or drop) their progress.
+  const [otaByDevice, setOtaByDevice] = useState<Record<string, { target: string; startedAt: number }>>({});
   const [otaTick, setOtaTick] = useState(0); // forces re-eval of the timeout
   const mountedRef = useRef(true);
   const queryClient = useQueryClient();
+  const { user } = useAuth();
+  // `undefined` = auth hasn't resolved yet.
+  const lastUserIdRef = useRef<string | null | undefined>(undefined);
   // Recording ids we've already told react-query about, so a finished session
   // refreshes the Recordings tab exactly once instead of on every 4s poll.
   const seenRecordingsRef = useRef<Set<string> | null>(null);
@@ -222,6 +232,27 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     };
   }, [refresh]);
 
+  // Devices, sessions and OTA state all belong to the signed-in account, and this
+  // provider sits outside the auth gate. Drop them the moment the account changes:
+  // refresh() early-returns while signed out, so without this the previous
+  // clinician's devices and patient session names stay in context through logout
+  // and are rendered to whoever signs in next.
+  useEffect(() => {
+    const id = user?.id ?? null;
+    const prev = lastUserIdRef.current;
+    lastUserIdRef.current = id;
+    if (prev === undefined || prev === id) return;
+    setDevices([]);
+    setAllSessions([]);
+    setSelectedId(null);
+    setOtaByDevice({});
+    setError(null);
+    setIsConnected(false);
+    setIsLoading(true);
+    seenRecordingsRef.current = null; // next poll re-baselines instead of announcing
+    refresh();
+  }, [user?.id, refresh]);
+
   // ---- Firmware ----
   // Fetch the latest available firmware once the API is reachable, then refresh
   // it periodically so a freshly published release shows up without a reload.
@@ -246,22 +277,38 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     return () => { cancelled = true; clearInterval(timer); };
   }, [isConnected]);
 
+  /** The in-flight OTA of the selected device, if any. */
+  const activeOta = selectedDevice ? otaByDevice[selectedDevice.id] ?? null : null;
+
+  // Ids whose device now reports the target build, joined so the effect below
+  // keys off the value — every 4s poll rebuilds `devices`, and depending on
+  // those objects would restart the 6s timer before it could ever fire.
+  const landedOtaIds = Object.keys(otaByDevice)
+    .filter((id) => devices.some((d) => d.id === id && d.fw === otaByDevice[id].target))
+    .join(' ');
+
   // Clear the in-flight target a few seconds after the device reports it landed,
   // so the "Updated" confirmation shows briefly then collapses.
   useEffect(() => {
-    if (otaTarget && selectedDevice && selectedDevice.fw === otaTarget) {
-      const t = setTimeout(() => { setOtaTarget(null); setOtaStartedAt(null); }, 6000);
-      return () => clearTimeout(t);
-    }
-  }, [otaTarget, selectedDevice]);
+    if (!landedOtaIds) return;
+    const landed = landedOtaIds.split(' ');
+    const t = setTimeout(() => {
+      setOtaByDevice((m) => {
+        const next = { ...m };
+        for (const id of landed) delete next[id];
+        return next;
+      });
+    }, 6000);
+    return () => clearTimeout(t);
+  }, [landedOtaIds]);
 
   // While an update is in flight, tick every few seconds so the timeout -> failed
   // transition fires even if nothing else re-renders.
   useEffect(() => {
-    if (!otaTarget) return;
+    if (!activeOta) return;
     const t = setInterval(() => setOtaTick((n) => n + 1), 3000);
     return () => clearInterval(t);
-  }, [otaTarget]);
+  }, [activeOta]);
 
   // ---- Actions ----
   const selectDevice = useCallback((id: string) => {
@@ -270,27 +317,36 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
 
   const updateFirmware = useCallback(async () => {
     if (!selectedDevice || !latestFirmware) return;
-    setOtaTarget(latestFirmware.version);
-    setOtaStartedAt(Date.now());
+    const deviceId = selectedDevice.id;
+    setOtaByDevice((m) => ({ ...m, [deviceId]: { target: latestFirmware.version, startedAt: Date.now() } }));
     setError(null);
     try {
-      await deviceApiService.updateFirmware(selectedDevice.id, {
+      await deviceApiService.updateFirmware(deviceId, {
         url: latestFirmware.url,
         version: latestFirmware.version,
       });
       await refresh();
     } catch (e: any) {
       setError(e?.message ?? 'Firmware update failed');
-      setOtaTarget(null);
-      setOtaStartedAt(null);
+      setOtaByDevice((m) => {
+        const next = { ...m };
+        delete next[deviceId];
+        return next;
+      });
       throw e;
     }
   }, [selectedDevice, latestFirmware, refresh]);
 
   const clearOta = useCallback(() => {
-    setOtaTarget(null);
-    setOtaStartedAt(null);
-  }, []);
+    if (!selectedDevice) return;
+    const deviceId = selectedDevice.id;
+    setOtaByDevice((m) => {
+      if (!(deviceId in m)) return m;
+      const next = { ...m };
+      delete next[deviceId];
+      return next;
+    });
+  }, [selectedDevice]);
 
   const sendCommand = useCallback(
     async (op: RemoteCommand, patient?: Partial<DevicePatient>) => {
@@ -361,12 +417,16 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
 
   void otaTick; // referenced so the periodic tick recomputes the timeout below
   let otaStatus: OtaStatus = 'current';
-  if (otaTarget && selectedDevice) {
-    const timedOut = otaStartedAt != null && Date.now() - otaStartedAt > OTA_TIMEOUT_MS;
-    if (selectedDevice.fw === otaTarget) otaStatus = 'done';
+  if (activeOta && selectedDevice) {
+    const elapsed = Date.now() - activeOta.startedAt;
+    if (selectedDevice.fw === activeOta.target) otaStatus = 'done';
+    // Stall wins over every in-progress phase: a device that dropped offline to
+    // reboot and never returned must still reach 'failed', the only state the
+    // banner lets the user dismiss or retry from.
+    else if (elapsed > OTA_STALL_TIMEOUT_MS) otaStatus = 'failed';
     else if (selectedDevice.ota_state === 'updating') otaStatus = 'installing';
     else if (!selectedDevice.online) otaStatus = 'rebooting';
-    else if (timedOut) otaStatus = 'failed';
+    else if (elapsed > OTA_TIMEOUT_MS) otaStatus = 'failed';
     else otaStatus = 'queued';
   } else if (firmwareUpdateAvailable) {
     otaStatus = 'available';

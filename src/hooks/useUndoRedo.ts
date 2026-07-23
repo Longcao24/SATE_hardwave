@@ -67,6 +67,23 @@ export const useUndoRedo = (
     service.saveHistory(initialHistory);
   }, [recordingId]); // Only run when recordingId changes
 
+  // recordingId resolves synchronously from the URL, but transcriptData loads
+  // asynchronously AFTER it — so the init effect above can seed `present` from an
+  // empty/stale array, and the first Undo would then restore a BLANK transcript
+  // (data wipe). Until the user has actually edited (past AND future still empty),
+  // keep `present` in sync with the loaded transcript so history starts from the
+  // real content. Once an edit exists we never touch it, so user work is safe.
+  useEffect(() => {
+    if (isUndoRedoOperation.current) return;
+    setHistory((prev) => {
+      if (prev.past.length !== 0 || prev.future.length !== 0) return prev;
+      if (prev.present === transcriptData) return prev;
+      const next = { past: [], present: transcriptData, future: [] };
+      historyServiceRef.current?.saveHistory(next);
+      return next;
+    });
+  }, [transcriptData]);
+
   // Save history to localStorage whenever it changes
   useEffect(() => {
     if (historyServiceRef.current && recordingId) {

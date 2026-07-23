@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { processAudioFile, deleteRecording, updateRecordingPatient, type IssueCounts, type ProcessingError } from '@/services/dataService';
 import { recordingMetadataService, type PendingRecordingData, type RecordingMetadata } from '@/services/recordingMetadataService';
@@ -62,6 +62,11 @@ const PatientDetails: React.FC = () => {
   const [isSavingRecording, setIsSavingRecording] = useState(false);
   const [formMetadata, setFormMetadata] = useState<RecordingMetadata | null>(null);
   const [shouldNavigateAfterSave, setShouldNavigateAfterSave] = useState(false);
+
+  // When the form for the current audio file was opened. Processing results are
+  // published globally (and shared with the MainApp uploader) without any file
+  // identity, so only results produced after this moment belong to this file.
+  const formOpenedAtRef = useRef(0);
 
   // Cleanup metadata form state when component unmounts
   useEffect(() => {
@@ -140,6 +145,7 @@ const PatientDetails: React.FC = () => {
       isProcessingComplete: pendingData.isProcessingComplete
     });
 
+    formOpenedAtRef.current = Date.now();
     setPendingRecordingData(pendingData);
     setShowMetadataForm(true);
   };
@@ -160,9 +166,11 @@ const PatientDetails: React.FC = () => {
       return;
     }
 
-    // Check if we have fresh processing results available globally
+    // Check if we have fresh processing results available globally.
+    // Results left over from an earlier upload carry another file's transcript,
+    // so only use them when they were produced after this form opened.
     const globalResults = (window as any).latestProcessingResults;
-    if (globalResults && !pendingRecordingData.isProcessingComplete) {
+    if (globalResults && globalResults.timestamp > formOpenedAtRef.current && !pendingRecordingData.isProcessingComplete) {
       console.log('🌍 Using global processing results to save immediately...');
       setShouldNavigateAfterSave(true); // User explicitly clicked Save
       await saveRecordingWithFreshData(metadata, globalResults.transcriptData, globalResults.errorCounts);
@@ -173,6 +181,17 @@ const PatientDetails: React.FC = () => {
     setFormMetadata(metadata);
 
     // If processing is not complete, wait for it
+    if (pendingRecordingData.processingFailed) {
+      // Tell the user why Save cannot work instead of returning silently — the
+      // form re-enables Save after a failed run, so this was an invisible dead end.
+      showErrorNotificationPopup({
+        type: 'server',
+        message: 'Processing failed, so there is no transcript to save yet. '
+          + 'Retry processing, or upload the file again.',
+      });
+      return;
+    }
+
     if (!pendingRecordingData.isProcessingComplete) {
       console.log('⏳ Processing not complete, storing metadata and waiting...');
       setShouldNavigateAfterSave(false); // Don't navigate on auto-save after processing
@@ -222,7 +241,10 @@ const PatientDetails: React.FC = () => {
         setPendingRecordingData(null);
         setFormMetadata(null);
         refetchRecordings();
-        
+
+        // Clear global results so they can't be paired with the next upload
+        delete window.latestProcessingResults;
+
         // Only navigate if explicitly requested (user clicked Save with complete processing)
         if (shouldNavigateAfterSave && recordingId) {
           // Set flag to indicate we're navigating from PatientDetails
@@ -259,7 +281,10 @@ const PatientDetails: React.FC = () => {
         setPendingRecordingData(null);
         setFormMetadata(null);
         refetchRecordings();
-        
+
+        // Clear global results so they can't be paired with the next upload
+        delete window.latestProcessingResults;
+
         // Only navigate if explicitly requested (user clicked Save with complete processing)
         if (shouldNavigateAfterSave && recordingId) {
           // Set flag to indicate we're navigating from PatientDetails
@@ -285,10 +310,13 @@ const PatientDetails: React.FC = () => {
       // console.log('🗑️ Cleaning up cached audio file on cancel...');
       audioStorageService.clearCachedAudio(pendingRecordingData.audioFile);
     }
-    
+
     setShowMetadataForm(false);
     setPendingRecordingData(null);
     setFormMetadata(null);
+
+    // Results for the abandoned file must not be paired with the next upload
+    delete window.latestProcessingResults;
   };
 
   // Auto-save when processing completes AFTER user has clicked Save button

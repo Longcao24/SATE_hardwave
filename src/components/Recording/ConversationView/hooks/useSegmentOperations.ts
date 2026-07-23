@@ -1,12 +1,126 @@
 import { useCallback } from 'react';
-import { type Segment } from '@/services/dataService';
+import { type Segment, type Word, type FillerWord, type Repetition } from '@/services/dataService';
 import { saltToJson } from '@/services/saltService';
-import { 
-  splitSegment, 
-  mergeSegments as mergeSegmentsUtil, 
-  createNewSegment, 
+import {
+  splitSegment,
+  mergeSegments as mergeSegmentsUtil,
+  createNewSegment,
   toggleSegmentExclusion as toggleExclusion
 } from '../utils/segmentOperations';
+
+const normalizeWordText = (text: string): string => text.toLowerCase().replace(/[.,!?;:]+$/, '');
+
+/**
+ * Maps every pre-edit word index onto its index in the rewritten word list (null when the
+ * word is gone). Uses an edit-distance alignment so adding or deleting a word only shifts
+ * the annotations after it instead of orphaning every later one.
+ */
+const alignWordIndices = (oldWords: Word[], newWords: Word[]): Array<number | null> => {
+  const oldText = oldWords.map(w => normalizeWordText(w.word || ''));
+  const newText = newWords.map(w => normalizeWordText(w.word || ''));
+
+  const cost: number[][] = [];
+  for (let i = 0; i <= oldText.length; i++) {
+    cost.push(new Array(newText.length + 1).fill(0));
+    cost[i][0] = i;
+  }
+  for (let j = 0; j <= newText.length; j++) {
+    cost[0][j] = j;
+  }
+  for (let i = 1; i <= oldText.length; i++) {
+    for (let j = 1; j <= newText.length; j++) {
+      const substitution = cost[i - 1][j - 1] + (oldText[i - 1] === newText[j - 1] ? 0 : 1);
+      cost[i][j] = Math.min(substitution, cost[i - 1][j] + 1, cost[i][j - 1] + 1);
+    }
+  }
+
+  const mapping: Array<number | null> = new Array(oldText.length).fill(null);
+  let i = oldText.length;
+  let j = newText.length;
+  while (i > 0 && j > 0) {
+    const substitution = cost[i - 1][j - 1] + (oldText[i - 1] === newText[j - 1] ? 0 : 1);
+    if (cost[i][j] === substitution) {
+      mapping[i - 1] = j - 1;
+      i--;
+      j--;
+    } else if (cost[i][j] === cost[i - 1][j] + 1) {
+      i--;
+    } else {
+      j--;
+    }
+  }
+
+  return mapping;
+};
+
+/**
+ * SALT text has no notation for fillerwords, mispronunciations or morpheme omissions, so a
+ * parsed segment never carries them: they must be re-anchored from the pre-edit segment onto
+ * the rewritten words rather than treated as deleted. Fillers are the exception - jsonToSalt
+ * writes them as a single-word maze, which parses back as a repetition - so a filler survives
+ * only while its word is still parenthesized, and that span is reclassified as the filler.
+ */
+const carryOverUnwritableAnnotations = (
+  currentSegment: Segment,
+  newWords: Word[],
+  parsedRepetitions: Repetition[]
+) => {
+  const currentWords = currentSegment.words || [];
+  const mapping = alignWordIndices(currentWords, newWords);
+  const remap = (oldIndex: number): number | null =>
+    oldIndex >= 0 && oldIndex < mapping.length ? mapping[oldIndex] : null;
+
+  const fillerwords: FillerWord[] = [];
+  const fillerSpans = new Set<number>();
+  for (const filler of currentSegment.fillerwords || []) {
+    const newIndex = remap(currentWords.findIndex(w => w.start === filler.start && w.end === filler.end));
+    if (newIndex === null) continue;
+
+    const stillMazed = parsedRepetitions.some(rep => rep.words.length === 1 && rep.words[0] === newIndex);
+    if (!stillMazed) continue;
+
+    const newWord = newWords[newIndex];
+    fillerwords.push({
+      ...filler,
+      start: newWord.start,
+      end: newWord.end,
+      duration: newWord.start !== null && newWord.end !== null
+        ? newWord.end - newWord.start
+        : filler.duration
+    });
+    fillerSpans.add(newIndex);
+  }
+
+  const mispronunciation = (currentSegment.mispronunciation || []).flatMap((mp: any) => {
+    const newIndex = remap(currentWords.findIndex(w => w.start === mp.start && w.end === mp.end));
+    if (newIndex === null) return [];
+    const newWord = newWords[newIndex];
+    return [{ ...mp, start: newWord.start, end: newWord.end }];
+  });
+
+  const morphemeOmissions = (currentSegment.morpheme_omissions || []).flatMap((omission: any) => {
+    const oldIndex = typeof omission.index === 'number'
+      ? omission.index
+      : (typeof omission.word_index === 'number' ? omission.word_index : null);
+    // Nothing to re-anchor against - keep it rather than drop clinician-entered data
+    if (oldIndex === null) return [omission];
+
+    const newIndex = remap(oldIndex);
+    if (newIndex === null) return [];
+    return [{
+      ...omission,
+      ...(typeof omission.index === 'number' ? { index: newIndex } : {}),
+      ...(typeof omission.word_index === 'number' ? { word_index: newIndex } : {})
+    }];
+  });
+
+  return {
+    fillerwords,
+    repetitions: parsedRepetitions.filter(rep => !(rep.words.length === 1 && fillerSpans.has(rep.words[0]))),
+    mispronunciation,
+    morphemeOmissions
+  };
+};
 
 export const useSegmentOperations = (
   transcriptData: Segment[],
@@ -100,18 +214,25 @@ export const useSegmentOperations = (
       try {
         // Always parse as SALT format (even plain text is valid SALT)
         const parsedSegment = saltToJson(saltText.trim(), currentSegment);
-        
+        const parsedWords = parsedSegment.words || currentSegment.words;
+        const carried = carryOverUnwritableAnnotations(
+          currentSegment,
+          parsedWords,
+          parsedSegment.repetitions || []
+        );
+
         // Update the segment with parsed data
         updatedSegments[segmentIndex] = {
           ...currentSegment,
           text: parsedSegment.text || saltText.trim(),
-          words: parsedSegment.words || currentSegment.words,
-          // Clear existing annotations first, then apply new ones
-          fillerwords: parsedSegment.fillerwords || [],
-          repetitions: parsedSegment.repetitions || [],
-          mispronunciation: parsedSegment.mispronunciation || [],
+          words: parsedWords,
+          // Annotation types the SALT text can express are replaced by what it now says;
+          // the ones it cannot express are carried over from the pre-edit segment
+          fillerwords: carried.fillerwords,
+          repetitions: carried.repetitions,
+          mispronunciation: carried.mispronunciation,
           morphemes: parsedSegment.morphemes || [],
-          morpheme_omissions: parsedSegment.morpheme_omissions || [],
+          morpheme_omissions: carried.morphemeOmissions,
           revisions: parsedSegment.revisions || [],
           pauses: parsedSegment.pauses || [],
           is_edited: true

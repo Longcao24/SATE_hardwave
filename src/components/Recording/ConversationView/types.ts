@@ -10,6 +10,10 @@ export interface EditingState {
   selectedWords: any[];
   selectedForMerge: number[];
   inlineEditingSegment: number | null;
+  /** Index the segment-edit popup opened on, or null. A transcript-level undo
+   *  while it is open shifts indices underneath it, so its save would land on
+   *  another utterance — the parent gates undo/redo on this. */
+  popupEditingSegment: number | null;
   showHelp: boolean;
 }
 

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate, useLocation, useParams, useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthProvider';
 
@@ -12,7 +12,7 @@ import { useToast } from '@/hooks/useToast';
 import { audioStorageService } from '@/services/audioStorageService';
 import { supabase } from '@/lib/supabase';
 import { deviceApiService } from '@/services/device/deviceApiService';
-import { updateRecordingMetadata } from '@/services/dataService';
+import { updateRecordingMetadata, getRecordingUrl } from '@/services/dataService';
 import { type RecordingMetadata } from '@/services/recordingMetadataService';
 
 // Import all components
@@ -39,12 +39,33 @@ export function MainApp() {
   // Determine if we're viewing sample data
   const isSampleData = location.pathname === '/sample';
   
+  // Re-sign the open report's audio when its signed URL stops working, so a
+  // review session that outlives the signature recovers instead of wedging.
+  const refreshReportAudioUrl = useCallback(async (): Promise<string | null> => {
+    if (!reportId || !user) return null;
+    const { data } = await supabase
+      .from('recordings')
+      .select('file_path')
+      .eq('id', reportId)
+      .eq('user_id', user.id)
+      .maybeSingle();
+    if (!data?.file_path) return null;
+    return getRecordingUrl(data.file_path);
+  }, [reportId, user]);
+
   // Use custom hooks
   const transcriptProcessor = useTranscriptProcessor();
-  const audioPlayer = useAudioPlayer({ transcriptData: transcriptProcessor.transcriptData });
+  const audioPlayer = useAudioPlayer({
+    transcriptData: transcriptProcessor.transcriptData,
+    refreshAudioUrl: refreshReportAudioUrl,
+  });
   const sidebarManager = useSidebarManager();
   const { toast, showToast } = useToast();
   
+  // Serialization of report loads (see the load effect below)
+  const reportLoadTokenRef = useRef(0);
+  const reportLoadChainRef = useRef<Promise<void>>(Promise.resolve());
+
   // Import popup state
   const [showImportPopup, setShowImportPopup] = useState(false);
   const [showCreateRecordingPopup, setShowCreateRecordingPopup] = useState(false);
@@ -129,12 +150,19 @@ export function MainApp() {
 
   // Load report from URL parameter on mount
   useEffect(() => {
+    const runToken = ++reportLoadTokenRef.current;
+
     const loadReportFromUrl = async () => {
       // Handle report route
       if (reportId && user) {
         const audioUrl = await transcriptProcessor.loadRecordingById(reportId);
-        if (audioUrl) {
-          audioPlayer.setAudioUrl(audioUrl);
+        if (runToken !== reportLoadTokenRef.current) return;
+        // Always hand the player the new source, null included: keeping the
+        // previous recording's audio would play patient A under patient B's
+        // transcript.
+        audioPlayer.setAudioUrl(audioUrl);
+        if (!audioUrl) {
+          showToast('Could not load the audio for this recording.', 'error');
         }
         // First open of a device recording that hasn't been reviewed yet: pop the
         // metadata form so the SLP can rename it + pick a protocol.
@@ -144,6 +172,7 @@ export function MainApp() {
           .eq('id', reportId)
           .eq('user_id', user.id)
           .maybeSingle();
+        if (runToken !== reportLoadTokenRef.current) return;
         if (rec?.needs_review) {
           setReviewRec({ id: rec.id, name: rec.recording_name || '' });
         }
@@ -159,8 +188,21 @@ export function MainApp() {
       }
     };
 
-    loadReportFromUrl();
+    // loadRecordingById writes transcript/name/flags unconditionally, so two
+    // overlapping loads can land out of order and leave report A's content
+    // under report B's URL. Chaining the runs makes the newest report the last
+    // writer; the token above then discards the stale run's own updates.
+    reportLoadChainRef.current = reportLoadChainRef.current
+      .then(loadReportFromUrl)
+      .catch(() => undefined);
   }, [reportId, user, navigate]);
+
+  // Surface audio failures: the controls otherwise just sit there disabled
+  useEffect(() => {
+    if (audioPlayer.audioError) {
+      showToast(audioPlayer.audioError, 'error');
+    }
+  }, [audioPlayer.audioError]);
 
   // Auto-cleanup expired cache items on app load
   useEffect(() => {
@@ -243,6 +285,11 @@ export function MainApp() {
         error instanceof Error ? error.message : 'Failed to save changes',
         'error'
       );
+      // Rethrow after the toast: the Save button clears undo history once this
+      // resolves, and clearing it on a failed save disarms every unsaved-changes
+      // guard (beforeunload, back-confirm, navigation) — the edits would then be
+      // dropped silently on the next navigation.
+      throw error;
     }
   };
 

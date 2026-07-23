@@ -461,6 +461,7 @@ const ConversationView: React.FC<ConversationViewProps> = ({
         selectedWords: annotations.selectedWords || [],
         selectedForMerge,
         inlineEditingSegment,
+        popupEditingSegment: editingSegment ? editingSegment.index : null,
         showHelp
       };
 
@@ -507,6 +508,7 @@ const ConversationView: React.FC<ConversationViewProps> = ({
     editModes.excludeMode,
     editModes.annotationMode,
     inlineEditingSegment,
+    editingSegment ? editingSegment.index : null,
     showHelp,
     // Convert Sets/Arrays to stable strings for comparison
     Array.from(checkedSegments).sort().join(','),

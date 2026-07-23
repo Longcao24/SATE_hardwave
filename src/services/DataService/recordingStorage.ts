@@ -80,10 +80,15 @@ export const saveRecording = async (
   }
 };
 
+// The player streams from this URL for as long as the report stays open, so the
+// signature has to outlive a full review session (an hour did not — the media
+// element started failing mid-review). The player also re-signs on error.
+const AUDIO_URL_TTL_SECONDS = 12 * 60 * 60;
+
 // Get recording URL from storage
 export const getRecordingUrl = async (path: string): Promise<string | null> => {
   if (!path) return null;
-  const { data, error } = await supabase.storage.from('recordings').createSignedUrl(path, 3600);
+  const { data, error } = await supabase.storage.from('recordings').createSignedUrl(path, AUDIO_URL_TTL_SECONDS);
   if (error) {
     console.error('Failed to create signed URL', error);
     return null;
@@ -205,17 +210,9 @@ export const deleteRecording = async (
       return { success: false, error: 'Recording not found or access denied' };
     }
 
-    // 2. Delete from storage first
-    const { error: storageError } = await supabase.storage
-      .from('recordings')
-      .remove([recording.file_path]);
-
-    if (storageError) {
-      console.error('Failed to delete from storage:', storageError);
-      // Continue with DB deletion even if storage fails
-    }
-
-    // 3. Delete from database
+    // 2. Delete from database first. If storage deletion fails afterwards we
+    // only orphan an audio object; the reverse order destroys the audio of a
+    // recording that is still listed and still looks intact to the clinician.
     const { error: dbError } = await supabase
       .from('recordings')
       .delete()
@@ -225,6 +222,16 @@ export const deleteRecording = async (
     if (dbError) {
       console.error('Failed to delete from database:', dbError);
       return { success: false, error: `Database deletion failed: ${dbError.message}` };
+    }
+
+    // 3. Delete from storage
+    const { error: storageError } = await supabase.storage
+      .from('recordings')
+      .remove([recording.file_path]);
+
+    if (storageError) {
+      console.error('Failed to delete from storage:', storageError);
+      // The row is already gone; the object is orphaned but nothing references it
     }
 
     // 4. Refresh recordings list in React Query cache

@@ -16,13 +16,160 @@ interface EditTranscriptPopupProps {
   duration: number;
 }
 
+type EditWord = {word: string, start: number | null, end: number | null, index: number};
+
 interface EditForm {
   speaker: string;
   text: string;
   start: number;
   end: number;
-  words: Array<{word: string, start: number | null, end: number | null, index: number}>;
+  words: EditWord[];
 }
+
+// The annotation kinds that are fully described by the SALT text and by word indices,
+// so they have to be rewritten as a set whenever words or annotations change.
+interface AnnotationSet {
+  repetitions: NonNullable<Segment['repetitions']>;
+  revisions: NonNullable<Segment['revisions']>;
+  pauses: NonNullable<Segment['pauses']>;
+  morphemes: NonNullable<Segment['morphemes']>;
+  // Also anchored by word index (TranscriptSegment matches `omission.index === wordIndex`),
+  // so it has to shift with the others or it slides onto the neighbouring word.
+  morphemeOmissions: NonNullable<Segment['morpheme_omissions']>;
+}
+
+const annotationsOf = (segment: Segment): AnnotationSet => ({
+  repetitions: segment.repetitions || [],
+  revisions: segment.revisions || [],
+  pauses: segment.pauses || [],
+  morphemes: segment.morphemes || [],
+  morphemeOmissions: segment.morpheme_omissions || []
+});
+
+const normalizeWord = (word: string): string => word.toLowerCase().replace(/[^a-z0-9']/g, '');
+
+// Longest-common-subsequence pairing of the original ASR words with the edited words.
+// Returns, for each edited word, the index of the original word it came from (-1 when new).
+const matchOriginalWords = (originalWords: EditWord[], editedWords: EditWord[]): number[] => {
+  const n = originalWords.length;
+  const m = editedWords.length;
+  const match: number[] = new Array(m).fill(-1);
+  if (n === 0 || m === 0) return match;
+
+  const original = originalWords.map(w => normalizeWord(w.word));
+  const edited = editedWords.map(w => normalizeWord(w.word));
+
+  const lcs: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      lcs[i][j] = original[i] === edited[j]
+        ? lcs[i + 1][j + 1] + 1
+        : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+    }
+  }
+
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (original[i] === edited[j]) {
+      match[j] = i;
+      i++;
+      j++;
+    } else if (lcs[i + 1][j] >= lcs[i][j + 1]) {
+      i++;
+    } else {
+      j++;
+    }
+  }
+
+  return match;
+};
+
+// Fillerwords and split operations match words by exact start/end equality, so a word that
+// survives an edit must keep its own ASR timing rather than a recomputed one. Only genuinely
+// new words get times, interpolated into the gap their surviving neighbours leave.
+const restoreWordTimings = (
+  parsedWords: EditWord[],
+  originalWords: EditWord[],
+  match: number[],
+  segStart: number,
+  segEnd: number
+): EditWord[] => {
+  const result = parsedWords.map((word, index) => {
+    const source = match[index];
+    return source >= 0
+      ? { ...word, start: originalWords[source].start, end: originalWords[source].end }
+      : { ...word };
+  });
+
+  for (let k = 0; k < result.length; k++) {
+    if (match[k] >= 0) continue;
+
+    let runEnd = k;
+    while (runEnd + 1 < result.length && match[runEnd + 1] < 0) runEnd++;
+
+    const from = k > 0 ? result[k - 1].end : segStart;
+    const to = runEnd + 1 < result.length ? result[runEnd + 1].start : segEnd;
+    if (from !== null && to !== null && to > from) {
+      const step = (to - from) / (runEnd - k + 1);
+      for (let idx = k; idx <= runEnd; idx++) {
+        result[idx].start = from + step * (idx - k);
+        result[idx].end = from + step * (idx - k + 1);
+      }
+    }
+
+    k = runEnd;
+  }
+
+  return result;
+};
+
+// Word-index annotations must follow the word they were attached to when a word is inserted
+// or removed, otherwise they silently re-anchor to whatever now occupies that index.
+const shiftAnnotations = (set: AnnotationSet, position: number, delta: 1 | -1): AnnotationSet => {
+  const shiftIndex = (index: number): number =>
+    delta === 1 ? (index >= position ? index + 1 : index) : (index > position ? index - 1 : index);
+  const shiftSpan = (words: number[]): number[] =>
+    (words || []).filter(w => delta === 1 || w !== position).map(shiftIndex);
+  // A pause is keyed by the word it follows, so when that word goes it falls back to the
+  // previous gap (-1 meaning "before the first word").
+  const shiftPauseIndex = (index: number): number =>
+    delta === 1 ? (index >= position ? index + 1 : index) : (index >= position ? index - 1 : index);
+
+  return {
+    repetitions: set.repetitions
+      .map(rep => {
+        const words = shiftSpan(rep.words);
+        return { ...rep, words, mark_location: words.length > 0 ? words[words.length - 1] : rep.mark_location };
+      })
+      .filter(rep => rep.words.length > 0),
+    // A revision carries BOTH `words` and `location`, and every consumer reads
+    // `location || words` — shifting only `words` left it anchored to its old index,
+    // so it re-attached to the neighbouring word.
+    revisions: set.revisions
+      .map(rev => {
+        const words = shiftSpan(rev.words);
+        const location = rev.location ? shiftSpan(rev.location) : undefined;
+        const anchor = (location && location.length > 0) ? location : words;
+        return {
+          ...rev,
+          words,
+          ...(location ? { location } : {}),
+          mark_location: anchor.length > 0 ? anchor[anchor.length - 1] : rev.mark_location,
+        };
+      })
+      .filter(rev => rev.words.length > 0 || (rev.location?.length ?? 0) > 0),
+    pauses: set.pauses.map(pause =>
+      typeof pause.index === 'number' ? { ...pause, index: shiftPauseIndex(pause.index) } : pause
+    ),
+    morphemes: set.morphemes
+      .filter(morph => delta === 1 || morph.index !== position)
+      .map(morph => (typeof morph.index === 'number' ? { ...morph, index: shiftIndex(morph.index) } : morph)),
+    morphemeOmissions: (set.morphemeOmissions || [])
+      .filter((om: any) => delta === 1 || om.index !== position)
+      .map((om: any) => (typeof om.index === 'number' ? { ...om, index: shiftIndex(om.index) } : om))
+  };
+};
 
 const EditTranscriptPopup: React.FC<EditTranscriptPopupProps> = ({
   isOpen,
@@ -51,7 +198,10 @@ const EditTranscriptPopup: React.FC<EditTranscriptPopupProps> = ({
   const [currentPlayingWord, setCurrentPlayingWord] = useState<number | null>(null);
   const [isUsingPopupControls, setIsUsingPopupControls] = useState(false);
   const [editMode, setEditMode] = useState<'simple' | 'advanced'>('simple');
-  const [saltAnnotations, setSaltAnnotations] = useState<any>(null);
+  const [editedAnnotations, setEditedAnnotations] = useState<AnnotationSet | null>(null);
+  // The textarea holds SALT markup; this is the plain text that gets persisted.
+  const [plainText, setPlainText] = useState<string | null>(null);
+  const [timeDrafts, setTimeDrafts] = useState<Record<string, string>>({});
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
   const wordTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -76,7 +226,9 @@ const EditTranscriptPopup: React.FC<EditTranscriptPopupProps> = ({
         words: segment.words.map(w => ({...w}))
       });
       setHasChanges(false);
-      setSaltAnnotations(null);
+      setEditedAnnotations(null);
+      setPlainText(null);
+      setTimeDrafts({});
     }
   }, [segment]);
 
@@ -216,20 +368,48 @@ const EditTranscriptPopup: React.FC<EditTranscriptPopupProps> = ({
   // Handle simple text editing (always process as SALT format)
   const handleSimpleTextChange = (newText: string) => {
     const wasChanged = hasChanges;
-    
+
     // Always parse as SALT format (even plain text is valid SALT)
     const parsedSegment = saltToJson(newText, segment || undefined);
-    
+    const originalWords = segment?.words || [];
+    const parsedWords = parsedSegment.words || editForm.words;
+    // saltToJson spreads the segment duration evenly over the parsed words; re-anchor every
+    // word that survived the edit to its real ASR timing before it reaches the form.
+    const match = matchOriginalWords(originalWords, parsedWords);
+    const words = restoreWordTimings(parsedWords, originalWords, match, editForm.start, editForm.end);
+
     // Update form with parsed data
     setEditForm(prev => ({
       ...prev,
       text: newText, // Keep the SALT format text in the textarea
-      words: parsedSegment.words || prev.words
+      words
     }));
-    
-    // Store parsed annotations to be applied on save
-    setSaltAnnotations(parsedSegment);
-    
+    setPlainText(parsedSegment.text ?? words.map(w => w.word).join(' '));
+
+    // The SALT text describes these annotations completely, so it also decides which ones
+    // are gone. Morphemes SALT cannot express (irregulars) are carried over by word instead.
+    const originalToNew: number[] = new Array(originalWords.length).fill(-1);
+    match.forEach((source, index) => {
+      if (source >= 0) originalToNew[source] = index;
+    });
+    const parsedMorphemes = parsedSegment.morphemes || [];
+    const carriedMorphemes = (segment?.morphemes || [])
+      .filter(morph => !morph.morpheme_form || morph.morpheme_form === '<IRR>')
+      .map(morph => ({ ...morph, index: originalToNew[morph.index] ?? -1 }))
+      .filter(morph => morph.index >= 0 && !parsedMorphemes.some((m: any) => m.index === morph.index));
+
+    setEditedAnnotations({
+      repetitions: parsedSegment.repetitions || [],
+      revisions: parsedSegment.revisions || [],
+      pauses: parsedSegment.pauses || [],
+      morphemes: [...parsedMorphemes, ...carriedMorphemes].sort((a, b) => a.index - b.index),
+      // SALT text carries no omission markup, so the stored omissions ride along
+      // remapped to the edited word order rather than being dropped.
+      morphemeOmissions: (segment?.morpheme_omissions || [])
+        .map((om: any) => ({ ...om, index: originalToNew[om.index] ?? -1 }))
+        .filter((om: any) => om.index >= 0)
+    });
+
     // Show notification for first change
     if (!wasChanged) {
       if (containsSaltAnnotations(newText)) {
@@ -248,6 +428,7 @@ const EditTranscriptPopup: React.FC<EditTranscriptPopupProps> = ({
       // When switching from advanced to simple, convert to SALT format
       const currentSegment = {
         ...segment!,
+        ...(editedAnnotations || {}),
         words: editForm.words,
         speaker: editForm.speaker,
         start: editForm.start,
@@ -258,9 +439,12 @@ const EditTranscriptPopup: React.FC<EditTranscriptPopupProps> = ({
     } else if (newMode === 'advanced' && editMode === 'simple') {
       // When switching to advanced, parse SALT and update words
       const parsedSegment = saltToJson(editForm.text, segment || undefined);
-      setEditForm(prev => ({ 
-        ...prev, 
-        words: parsedSegment.words || generateWordTimestamps(parsedSegment.text || editForm.text, editForm.start, editForm.end)
+      const parsedWords = parsedSegment.words
+        || generateWordTimestamps(parsedSegment.text || editForm.text, editForm.start, editForm.end);
+      const match = matchOriginalWords(editForm.words, parsedWords);
+      setEditForm(prev => ({
+        ...prev,
+        words: restoreWordTimings(parsedWords, prev.words, match, prev.start, prev.end)
       }));
     }
     setEditMode(newMode);
@@ -384,6 +568,25 @@ const EditTranscriptPopup: React.FC<EditTranscriptPopupProps> = ({
     setHoverPosition(null);
   };
 
+  // Keep the raw keystrokes of a timing field while it is mid-edit: committing an empty
+  // field as 0 would move the segment to the start of the recording behind the user's back.
+  const handleTimeInput = (key: string, raw: string, commit: (value: number) => void) => {
+    setTimeDrafts(prev => ({ ...prev, [key]: raw }));
+    const parsed = parseFloat(raw);
+    if (raw.trim() !== '' && isFinite(parsed)) {
+      commit(parsed);
+    }
+  };
+
+  const clearTimeDraft = (key: string) => {
+    setTimeDrafts(prev => {
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  };
+
   // Update segment timing
   const updateTiming = (field: 'start' | 'end', value: number) => {
     const wasChanged = hasChanges;
@@ -469,8 +672,9 @@ const EditTranscriptPopup: React.FC<EditTranscriptPopupProps> = ({
     if (field === 'word') {
       const newText = updatedWords.map(w => w.word).join(' ');
       setEditForm(prev => ({ ...prev, text: newText }));
+      setPlainText(newText);
     }
-    
+
     // Show notification for first change
     if (!wasChanged) {
       showNotificationMessage('info', 'Changes detected. Remember to save when finished!');
@@ -493,12 +697,15 @@ const EditTranscriptPopup: React.FC<EditTranscriptPopupProps> = ({
       word.index = idx;
     });
     setEditForm(prev => ({ ...prev, words: updatedWords }));
+    setEditedAnnotations(prev => shiftAnnotations(prev || annotationsOf(segment!), afterIndex + 1, 1));
+    setTimeDrafts({});
     setHasChanges(true);
 
     // Update text
     const newText = updatedWords.map(w => w.word).join(' ');
     setEditForm(prev => ({ ...prev, text: newText }));
-    
+    setPlainText(newText);
+
     showNotificationMessage('info', 'New word added. Don\'t forget to save your changes!');
   };
 
@@ -512,12 +719,15 @@ const EditTranscriptPopup: React.FC<EditTranscriptPopupProps> = ({
     });
     
     setEditForm(prev => ({ ...prev, words: updatedWords }));
+    setEditedAnnotations(prev => shiftAnnotations(prev || annotationsOf(segment!), wordIndex, -1));
+    setTimeDrafts({});
     setHasChanges(true);
 
     // Update text
     const newText = updatedWords.map(w => w.word).join(' ');
     setEditForm(prev => ({ ...prev, text: newText }));
-    
+    setPlainText(newText);
+
     showNotificationMessage('warning', `Word "${deletedWord}" deleted. Don't forget to save your changes!`);
   };
 
@@ -525,21 +735,30 @@ const EditTranscriptPopup: React.FC<EditTranscriptPopupProps> = ({
   const handleSave = () => {
     if (!segment) return;
 
+    if (editForm.start < 0 || editForm.end < editForm.start) {
+      showNotificationMessage('warning', 'Invalid timing: start must be 0 or more and cannot be after the end time.');
+      return;
+    }
+
     const updatedSegment: Segment = {
       ...segment,
       speaker: editForm.speaker,
-      text: editForm.text,
+      // editForm.text carries SALT markup in simple mode, so persist the parsed plain text
+      // and leave the original text untouched when the text was never edited.
+      text: plainText ?? segment.text,
       start: editForm.start,
       end: editForm.end,
       words: editForm.words
     };
-    
-    // Apply SALT annotations if they were parsed
-    if (saltAnnotations) {
-      if (saltAnnotations.repetitions) updatedSegment.repetitions = saltAnnotations.repetitions;
-      if (saltAnnotations.revisions) updatedSegment.revisions = saltAnnotations.revisions;
-      if (saltAnnotations.pauses) updatedSegment.pauses = saltAnnotations.pauses;
-      if (saltAnnotations.morphemes) updatedSegment.morphemes = saltAnnotations.morphemes;
+
+    // The edited set replaces the originals wholesale - an annotation the user removed must
+    // not survive as an empty key and re-anchor to whatever word now holds its index.
+    if (editedAnnotations) {
+      updatedSegment.repetitions = editedAnnotations.repetitions;
+      updatedSegment.revisions = editedAnnotations.revisions;
+      updatedSegment.pauses = editedAnnotations.pauses;
+      updatedSegment.morphemes = editedAnnotations.morphemes;
+      updatedSegment.morpheme_omissions = editedAnnotations.morphemeOmissions;
     }
 
     onSave(updatedSegment);
@@ -596,7 +815,9 @@ const EditTranscriptPopup: React.FC<EditTranscriptPopupProps> = ({
         words: segment.words.map(w => ({...w}))
       });
       setHasChanges(false);
-      setSaltAnnotations(null);
+      setEditedAnnotations(null);
+      setPlainText(null);
+      setTimeDrafts({});
       setShowConfirmReset(false);
       showNotificationMessage('success', 'Successfully reset to original values');
     }
@@ -663,8 +884,9 @@ const EditTranscriptPopup: React.FC<EditTranscriptPopupProps> = ({
                   <input
                     type="number"
                     step="0.1"
-                    value={editForm.start}
-                    onChange={(e) => updateTiming('start', parseFloat(e.target.value) || 0)}
+                    value={timeDrafts['segment-start'] ?? editForm.start}
+                    onChange={(e) => handleTimeInput('segment-start', e.target.value, (v) => updateTiming('start', v))}
+                    onBlur={() => clearTimeDraft('segment-start')}
                     className="flex-1 px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                   />
                   <button
@@ -684,8 +906,9 @@ const EditTranscriptPopup: React.FC<EditTranscriptPopupProps> = ({
                   <input
                     type="number"
                     step="0.1"
-                    value={editForm.end}
-                    onChange={(e) => updateTiming('end', parseFloat(e.target.value) || 0)}
+                    value={timeDrafts['segment-end'] ?? editForm.end}
+                    onChange={(e) => handleTimeInput('segment-end', e.target.value, (v) => updateTiming('end', v))}
+                    onBlur={() => clearTimeDraft('segment-end')}
                     className="flex-1 px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                   />
                   <button
@@ -1000,8 +1223,9 @@ const EditTranscriptPopup: React.FC<EditTranscriptPopupProps> = ({
                        <input
                          type="number"
                          step="0.1"
-                         value={word.start || 0}
-                         onChange={(e) => updateWord(index, 'start', parseFloat(e.target.value) || 0)}
+                         value={timeDrafts[`word-${index}-start`] ?? (word.start ?? 0)}
+                         onChange={(e) => handleTimeInput(`word-${index}-start`, e.target.value, (v) => updateWord(index, 'start', v))}
+                         onBlur={() => clearTimeDraft(`word-${index}-start`)}
                          className="w-full px-2 py-1 text-xs border border-gray-300 rounded focus:ring-1 focus:ring-blue-500"
                          title="Start time"
                        />
@@ -1012,8 +1236,9 @@ const EditTranscriptPopup: React.FC<EditTranscriptPopupProps> = ({
                        <input
                          type="number"
                          step="0.1"
-                         value={word.end || 0}
-                         onChange={(e) => updateWord(index, 'end', parseFloat(e.target.value) || 0)}
+                         value={timeDrafts[`word-${index}-end`] ?? (word.end ?? 0)}
+                         onChange={(e) => handleTimeInput(`word-${index}-end`, e.target.value, (v) => updateWord(index, 'end', v))}
+                         onBlur={() => clearTimeDraft(`word-${index}-end`)}
                          className="w-full px-2 py-1 text-xs border border-gray-300 rounded focus:ring-1 focus:ring-blue-500"
                          title="End time"
                        />

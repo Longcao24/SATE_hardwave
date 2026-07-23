@@ -10,7 +10,15 @@ import { FirmwarePublishCard } from '@/components/Device/FirmwarePublishCard';
 import { Button } from '@/components/ui/button';
 import {
   ArrowLeft, ShieldCheck, Trash2, RefreshCw, Cpu, HardDrive, Loader2,
+  Activity, ExternalLink,
 } from 'lucide-react';
+
+// Ops surfaces linked from the admin page (open in a new tab).
+const MONITORING_LINKS = [
+  { title: 'Service monitor', desc: 'Live pipeline, fleet & versions', href: 'https://sate-monitor.pages.dev' },
+  { title: 'Status page', desc: 'Uptime & 90-day history', href: 'https://sate-status.longcao.workers.dev' },
+  { title: 'Docs', desc: 'Engineering documentation', href: 'https://sate-docs.pages.dev' },
+];
 
 function timeAgo(iso?: string): string {
   if (!iso) return '—';
@@ -130,6 +138,28 @@ export function AdminPage() {
         {error && (
           <div className="mb-4 rounded-lg bg-red-50 text-red-700 text-sm p-3">{error}</div>
         )}
+
+        {/* Monitoring & status */}
+        <h2 className="flex items-center gap-2 text-xl font-semibold text-gray-900 mb-3">
+          <Activity className="w-5 h-5 text-gray-500" /> Monitoring &amp; status
+        </h2>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-8">
+          {MONITORING_LINKS.map((l) => (
+            <a
+              key={l.href}
+              href={l.href}
+              target="_blank"
+              rel="noreferrer"
+              className="group rounded-xl border border-gray-200 bg-white p-4 hover:border-violet-300 hover:shadow-sm transition"
+            >
+              <div className="flex items-center justify-between">
+                <span className="font-medium text-gray-900">{l.title}</span>
+                <ExternalLink className="w-4 h-4 text-gray-400 group-hover:text-violet-600" />
+              </div>
+              <p className="text-sm text-gray-500 mt-1">{l.desc}</p>
+            </a>
+          ))}
+        </div>
 
         {/* Firmware catalog */}
         <h2 className="flex items-center gap-2 text-xl font-semibold text-gray-900 mb-3">

@@ -2,20 +2,31 @@ import { useState, useRef, useEffect } from 'react';
 import { validateSeekTimestamp } from '@/lib/utils';
 import { type Segment } from '@/services/dataService';
 
+const MAX_URL_REFRESH_ATTEMPTS = 2;
+
 interface UseAudioPlayerProps {
   transcriptData?: Segment[];
+  // Re-signs the current recording's audio URL. Storage URLs are signed for a
+  // limited window, so a long review session can outlive the signature and the
+  // media element then fails on the next seek into an unbuffered region.
+  refreshAudioUrl?: () => Promise<string | null>;
 }
 
-export function useAudioPlayer({ transcriptData = [] }: UseAudioPlayerProps = {}) {
+export function useAudioPlayer({ transcriptData = [], refreshAudioUrl }: UseAudioPlayerProps = {}) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [audioLoaded, setAudioLoaded] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [audioError, setAudioError] = useState<string | null>(null);
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
   const [segmentEndTime, setSegmentEndTime] = useState<number | null>(null);
   const isAutoPausingRef = useRef(false);
+  const audioUrlRef = useRef<string | null>(null);
+  const resumeAtRef = useRef<number | null>(null);
+  const refreshedUrlRef = useRef<string | null>(null);
+  const refreshAttemptsRef = useRef(0);
 
   // Audio effects
   useEffect(() => {
@@ -43,6 +54,14 @@ export function useAudioPlayer({ transcriptData = [] }: UseAudioPlayerProps = {}
       if (audio.duration && !isNaN(audio.duration) && audio.duration > 0) {
         setDuration(audio.duration);
         setAudioLoaded(true);
+        refreshAttemptsRef.current = 0;
+        // Restore the position we were at when the previous source failed.
+        if (resumeAtRef.current !== null) {
+          const resumeAt = Math.max(0, Math.min(resumeAtRef.current, audio.duration));
+          resumeAtRef.current = null;
+          audio.currentTime = resumeAt;
+          setCurrentTime(resumeAt);
+        }
       }
     };
     
@@ -78,7 +97,41 @@ export function useAudioPlayer({ transcriptData = [] }: UseAudioPlayerProps = {}
     };
 
     const handleError = () => {
-      // Audio error occurred
+      if (!audioUrl) return;
+
+      // The source is unusable: everything derived from it (play button, seek
+      // clamping, tick positions) reads duration, so it must not stay stale.
+      setIsPlaying(false);
+      setAudioLoaded(false);
+      setDuration(0);
+
+      // Most likely cause is an expired signed URL. Re-sign once per source and
+      // resume where playback was; without this the player stays wedged until a
+      // full page reload. The attempt cap (reset once a source loads) stops a
+      // permanently unreadable object from re-signing in a loop.
+      if (!refreshAudioUrl || refreshedUrlRef.current === audioUrl || refreshAttemptsRef.current >= MAX_URL_REFRESH_ATTEMPTS) {
+        setAudioError('Audio could not be loaded. Please reload the page.');
+        return;
+      }
+      refreshedUrlRef.current = audioUrl;
+      refreshAttemptsRef.current += 1;
+      const failedUrl = audioUrl;
+      const resumeAt = audio.currentTime;
+      refreshAudioUrl()
+        .then((freshUrl) => {
+          // A different recording may have been opened while we were re-signing.
+          if (audioUrlRef.current !== failedUrl) return;
+          if (!freshUrl || freshUrl === failedUrl) {
+            setAudioError('Audio could not be loaded. Please reload the page.');
+            return;
+          }
+          resumeAtRef.current = resumeAt;
+          setAudioUrl(freshUrl);
+        })
+        .catch(() => {
+          if (audioUrlRef.current !== failedUrl) return;
+          setAudioError('Audio could not be loaded. Please reload the page.');
+        });
     };
 
     const handleLoadStart = () => {
@@ -97,13 +150,6 @@ export function useAudioPlayer({ transcriptData = [] }: UseAudioPlayerProps = {}
     audio.addEventListener('error', handleError);
     audio.addEventListener('loadstart', handleLoadStart);
 
-    // Set up audio source if available
-    if (audioUrl && audio.src !== audioUrl) {
-      audio.src = audioUrl;
-      audio.preload = 'metadata';
-      audio.load();
-    }
-
     return () => {
       audio.removeEventListener('timeupdate', updateTime);
       audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
@@ -116,14 +162,33 @@ export function useAudioPlayer({ transcriptData = [] }: UseAudioPlayerProps = {}
       audio.removeEventListener('error', handleError);
       audio.removeEventListener('loadstart', handleLoadStart);
     };
-  }, [audioUrl, segmentEndTime]);
+  }, [audioUrl, segmentEndTime, refreshAudioUrl]);
 
   // Update audio source when audioUrl changes
   useEffect(() => {
+    audioUrlRef.current = audioUrl;
+
     const audio = audioRef.current;
-    if (audio && audioUrl) {
+    if (!audio) return;
+
+    // Nothing derived from the previous source survives the switch: duration
+    // clamps seeks and positions the flag ticks, so keeping it would apply the
+    // old recording's timeline to the new transcript.
+    setAudioLoaded(false);
+    setDuration(0);
+    setCurrentTime(0);
+    setSegmentEndTime(null);
+    setAudioError(null);
+
+    if (audioUrl) {
       audio.src = audioUrl;
       audio.preload = 'metadata';
+      audio.load();
+    } else if (audio.src) {
+      // Drop the previous recording's audio; leaving it attached would play the
+      // wrong patient under the newly loaded transcript.
+      audio.pause();
+      audio.removeAttribute('src');
       audio.load();
     }
   }, [audioUrl]);
@@ -167,8 +232,9 @@ export function useAudioPlayer({ transcriptData = [] }: UseAudioPlayerProps = {}
           throw playError;
         }
       }
-    } catch (error) {
-      // Error toggling play/pause
+    } catch {
+      setIsPlaying(false);
+      setAudioError('Playback failed. Please try again.');
     }
   };
 
@@ -276,6 +342,7 @@ export function useAudioPlayer({ transcriptData = [] }: UseAudioPlayerProps = {}
     isPlaying,
     audioLoaded,
     audioUrl,
+    audioError,
     playbackSpeed,
     segmentEndTime,
     

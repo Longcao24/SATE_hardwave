@@ -139,28 +139,26 @@ export function useFileUpload(deps: FileUploadDeps) {
         // Set initial filters to show all detected error types
         deps.setActiveFilters(errorTypes);
         
-        // Update pending recording data with processing results
-        if (deps.pendingRecordingData) {
-          deps.setPendingRecordingData((prev: PendingRecordingData | null) => {
-            if (!prev) return null;
-            
-            const updated: PendingRecordingData = {
-              ...prev,
-              transcriptData: normalizedData,
-              errorCounts: errorCounts,
-              isProcessingComplete: true
-            };
-            
-            return updated;
-          });
+        // Update pending recording data with processing results.
+        // `deps` is captured from the render the upload started on, where
+        // pendingRecordingData is still null (this run creates it above), so it must
+        // not gate this update — the functional setter is what reads current state.
+        deps.setPendingRecordingData((prev: PendingRecordingData | null) => {
+          if (!prev) return null;
 
-          // Auto-save disabled - user must explicitly click Save button
-          // if (deps.formMetadata) {
-          //   await deps.saveRecordingWithFreshData(deps.formMetadata, normalizedData, errorCounts, deps.setDataError);
-          //   return;
-          // }
-        }
-        
+          const updated: PendingRecordingData = {
+            ...prev,
+            transcriptData: normalizedData,
+            errorCounts: errorCounts,
+            isProcessingComplete: true
+          };
+
+          return updated;
+        });
+
+        // Auto-save deliberately not done here: saving is driven by the user clicking
+        // Save (useRecordingMetadata's effect picks up isProcessingComplete).
+
         return cachedUrl; // Return the cached URL
 
       } catch (error) {
@@ -169,9 +167,14 @@ export function useFileUpload(deps: FileUploadDeps) {
         const errorDetails = (error as any).errorDetails as ProcessingError;
         if (errorDetails) {
           // Show the new error notification popup
-          deps.showErrorNotificationPopup(errorDetails, errorDetails.retryable ? async () => { 
-            await processFile(); 
-            return;
+          deps.showErrorNotificationPopup(errorDetails, errorDetails.retryable ? async () => {
+            // processFile handles its own errors and resolves with null instead of
+            // throwing; the retry handler closes the popup on a clean resolve, so a
+            // failed retry has to rethrow or the (re-opened) popup is wiped.
+            const retriedUrl = await processFile();
+            if (retriedUrl === null) {
+              throw new Error('Retry failed');
+            }
           } : undefined);
         } else {
           // Fallback to old error handling for uncategorized errors
@@ -192,6 +195,15 @@ export function useFileUpload(deps: FileUploadDeps) {
         if (cachedUrl && cachedUrl.startsWith('blob:')) {
           URL.revokeObjectURL(cachedUrl);
         }
+
+        // Mark the run as FAILED (not complete: there is no transcript, so the
+        // recording genuinely cannot be saved). Without this the save path just
+        // returned on the isProcessingComplete gate and every Save click after a
+        // failed run was a silent no-op with no way to tell what was wrong.
+        deps.setPendingRecordingData((prev: PendingRecordingData | null) => {
+          if (!prev) return null;
+          return { ...prev, processingFailed: true };
+        });
         return null;
       } finally {
         deps.setIsProcessing(false);

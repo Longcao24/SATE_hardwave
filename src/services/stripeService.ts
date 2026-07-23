@@ -165,29 +165,43 @@ export const redirectToCheckout = async (
 };
 
 /**
+ * Statuses that mean the user still has a Stripe subscription: `past_due` and
+ * `trialing` customers keep their plan and must keep the portal button that lets
+ * them fix their card. Only `canceled` reads as no subscription.
+ */
+export const LIVE_SUBSCRIPTION_STATUSES: string[] = ['active', 'trialing', 'past_due'];
+
+export const isLiveSubscriptionStatus = (status: string): boolean =>
+  LIVE_SUBSCRIPTION_STATUSES.includes(status);
+
+/**
  * Get current user's subscription
  */
 export const getCurrentSubscription = async () => {
   try {
     const { data: { user } } = await supabase.auth.getUser();
-    
+
     if (!user) {
       return null;
     }
 
+    // A plan change can briefly leave two live rows (the old one is canceled by
+    // the webhook), so take the newest instead of erroring out on multiple rows
+    // and reporting a paying customer as free.
     const { data, error } = await supabase
       .from('subscriptions')
       .select('*')
       .eq('user_id', user.id)
-      .eq('status', 'active')
-      .maybeSingle();
+      .in('status', LIVE_SUBSCRIPTION_STATUSES)
+      .order('created_at', { ascending: false })
+      .limit(1);
 
     if (error) {
       console.error('Error fetching subscription:', error);
       return null;
     }
 
-    return data;
+    return data?.[0] ?? null;
   } catch (error) {
     console.error('Error getting current subscription:', error);
     return null;
@@ -366,7 +380,7 @@ export const createOneTimePayment = async (
  */
 export const hasActiveSubscription = async (): Promise<boolean> => {
   const subscription = await getCurrentSubscription();
-  return subscription !== null && subscription.status === 'active';
+  return subscription !== null && isLiveSubscriptionStatus(subscription.status);
 };
 
 /**
@@ -383,15 +397,12 @@ export const changeSubscriptionPlan = async (
       throw new Error('User must be authenticated');
     }
 
-    // Get current active subscription
+    // Get the subscription being replaced
     const currentSub = await getCurrentSubscription();
-    
-    // If user has an active subscription, cancel it first
-    if (currentSub) {
-      // Note: The webhook will auto-cancel the old subscription when the new one becomes active
-    }
 
-    // Create new checkout session
+    // The old subscription is canceled server-side once the new one activates —
+    // canceling it here would leave the user with no plan if they abandon
+    // checkout. Carry its Stripe id so the webhook cancels exactly this one.
     return await createCheckoutSession({
       priceId: newPriceId,
       successUrl: `${window.location.origin}/payment/success?upgraded=true`,
@@ -399,6 +410,9 @@ export const changeSubscriptionPlan = async (
       mode: 'subscription',
       metadata: {
         upgrade_from: currentSub?.tier_id || 'free',
+        ...(currentSub?.stripe_subscription_id
+          ? { replaces_subscription_id: currentSub.stripe_subscription_id }
+          : {})
       }
     });
   } catch (error) {

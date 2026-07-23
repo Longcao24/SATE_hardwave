@@ -145,15 +145,25 @@ const AnnotationPopup: React.FC<AnnotationPopupProps> = ({
   // Get the position to use (adjusted or original)
   const getPopupPosition = () => {
     const position = currentAnnotation?.position || annotation?.position;
+    // The coordinates come from the clicked word's getBoundingClientRect (i.e.
+    // viewport-relative). The popup markup lives inside the scrollable, position:
+    // relative .conversationView panel, so a `position: absolute` popup resolves
+    // those coordinates against the SCROLLED panel and renders off-screen once the
+    // transcript is scrolled — which is why clicking an annotation looked dead
+    // (the invisible full-screen backdrop then swallowed the click). `position:
+    // fixed` anchors the popup to the viewport, matching the coordinate space.
+    // This inline value overrides the `absolute` utility class on every branch.
     if (adjustedPosition) {
       return {
+        position: 'fixed' as const,
         left: adjustedPosition.x,
         top: adjustedPosition.y,
         transform: 'translateX(-50%)'
       };
     }
-    
+
     return {
+      position: 'fixed' as const,
       left: position?.x || '50%',
       top: (position?.y || 0) + 8,
       transform: 'translateX(-50%)'

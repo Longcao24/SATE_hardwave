@@ -4,6 +4,113 @@ import { annotationColors } from '@/lib/annotationColors';
 import type { SelectedWord, ContextMenuData } from '../types';
 import type { AnnotationDetails } from '@/components/Annotations/AnnotationPopup';
 
+// Segment objects are shared with the undo history (history.present holds the very same
+// references), so an annotation edit must return a NEW segment: mutating in place changes
+// the stored snapshot too, the change compares equal and is never recorded as undoable.
+const addAnnotationToSegment = (segment: Segment, wordIndex: number, type: string): Segment | null => {
+  const word = segment.words[wordIndex];
+
+  switch (type) {
+    case 'filler':
+      return {
+        ...segment,
+        fillerwords: [...(segment.fillerwords || []), {
+          start: word.start || 0,
+          end: word.end || 0,
+          duration: (word.end || 0) - (word.start || 0),
+          content: word.word
+        }]
+      };
+
+    case 'repetition': {
+      // Check if word is already in a repetition
+      const existingRepetition = (segment.repetitions || []).find(rep => rep.words.includes(wordIndex));
+      if (existingRepetition) return segment;
+      return {
+        ...segment,
+        repetitions: [...(segment.repetitions || []), {
+          words: [wordIndex],
+          content: word.word
+        }]
+      };
+    }
+
+    case 'revision':
+      return {
+        ...segment,
+        revisions: [...(segment.revisions || []), {
+          words: [wordIndex],
+          location: [wordIndex],
+          content: word.word
+        }]
+      };
+
+    case 'mispronunciation':
+      return {
+        ...segment,
+        mispronunciation: [...(segment.mispronunciation || []), {
+          start: word.start || 0,
+          end: word.end || 0,
+          content: word.word,
+          correct_form: word.word // Default to same word, user can edit later
+        }]
+      };
+
+    default:
+      console.warn('Unknown annotation type:', type);
+      return null;
+  }
+};
+
+const removeAnnotationFromSegment = (segment: Segment, wordIndex: number, type: string): Segment | null => {
+  const word = segment.words[wordIndex];
+
+  switch (type) {
+    case 'filler':
+      if (!segment.fillerwords) return segment;
+      return {
+        ...segment,
+        fillerwords: segment.fillerwords.filter(filler =>
+          !(filler.start === word.start && filler.end === word.end)
+        )
+      };
+
+    case 'repetition':
+      if (!segment.repetitions) return segment;
+      return {
+        ...segment,
+        repetitions: segment.repetitions.filter(rep =>
+          !rep.words.includes(wordIndex)
+        ).map(rep => ({
+          ...rep,
+          words: rep.words.filter(idx => idx !== wordIndex)
+        })).filter(rep => rep.words.length > 0)
+      };
+
+    case 'revision':
+      if (!segment.revisions) return segment;
+      return {
+        ...segment,
+        revisions: segment.revisions.filter(rev =>
+          !rev.words?.includes(wordIndex) && !rev.location?.includes(wordIndex)
+        )
+      };
+
+    case 'mispronunciation':
+      if (!segment.mispronunciation) return segment;
+      return {
+        ...segment,
+        mispronunciation: segment.mispronunciation.filter(mp =>
+          !(mp.start === word.start && mp.end === word.end)
+        )
+      };
+
+    default:
+      console.warn('Unknown annotation type:', type);
+      return null;
+  }
+};
+
 export const useAnnotations = (
   transcriptData: Segment[],
   onTranscriptChange?: (updatedSegments: Segment[]) => void,
@@ -485,129 +592,50 @@ export const useAnnotations = (
     return annotationDetails;
   }, [isPlaying, onTogglePlayPause]);
 
-  // Add annotation via context menu
-  const handleAddAnnotation = useCallback((type: string, _position?: 'before' | 'after', contextData?: any) => {
+  // Apply an annotation edit to a single segment and publish the result
+  const applyAnnotationChange = useCallback((
+    contextData: any,
+    update: (segment: Segment, wordIndex: number) => Segment | null
+  ) => {
     if (!onTranscriptChange || !contextData) return;
-    
+
     const { segmentIndex, wordIndex } = contextData;
+    const segment = transcriptData[segmentIndex];
+
+    if (!segment || !segment.words?.[wordIndex]) return;
+
+    const updatedSegment = update(segment, wordIndex);
+    if (!updatedSegment) return;
+
     const updatedSegments = [...transcriptData];
-    const segment = updatedSegments[segmentIndex];
-    const word = segment.words[wordIndex];
-    
-    if (!segment || !word) return;
-    
-    // Add annotation based on type
-    switch (type) {
-      case 'filler':
-        if (!segment.fillerwords) segment.fillerwords = [];
-        segment.fillerwords.push({
-          start: word.start || 0,
-          end: word.end || 0,
-          duration: (word.end || 0) - (word.start || 0),
-          content: word.word
-        });
-        break;
-        
-      case 'repetition':
-        if (!segment.repetitions) segment.repetitions = [];
-        // Check if word is already in a repetition
-        const existingRepetition = segment.repetitions.find(rep => rep.words.includes(wordIndex));
-        if (!existingRepetition) {
-          segment.repetitions.push({
-            words: [wordIndex],
-            content: word.word
-          });
-        }
-        break;
-        
-      case 'revision':
-        if (!segment.revisions) segment.revisions = [];
-        segment.revisions.push({
-          words: [wordIndex],
-          location: [wordIndex],
-          content: word.word
-        });
-        break;
-        
-      case 'mispronunciation':
-        if (!segment.mispronunciation) segment.mispronunciation = [];
-        segment.mispronunciation.push({
-          start: word.start || 0,
-          end: word.end || 0,
-          content: word.word,
-          correct_form: word.word // Default to same word, user can edit later
-        });
-        break;
-        
-      default:
-        console.warn('Unknown annotation type:', type);
-        return;
-    }
-    
+    updatedSegments[segmentIndex] = updatedSegment;
+
     onTranscriptChange(updatedSegments);
   }, [onTranscriptChange, transcriptData]);
+
+  // Add annotation via context menu
+  const handleAddAnnotation = useCallback((type: string, _position?: 'before' | 'after', contextData?: any) => {
+    applyAnnotationChange(contextData, (segment, wordIndex) =>
+      addAnnotationToSegment(segment, wordIndex, type)
+    );
+  }, [applyAnnotationChange]);
 
   // Remove annotation via context menu
   const handleRemoveAnnotation = useCallback((type: string, contextData?: any) => {
-    if (!onTranscriptChange || !contextData) return;
-    
-    const { segmentIndex, wordIndex } = contextData;
-    const updatedSegments = [...transcriptData];
-    const segment = updatedSegments[segmentIndex];
-    const word = segment.words[wordIndex];
-    
-    if (!segment || !word) return;
-    
-    // Remove annotation based on type
-    switch (type) {
-      case 'filler':
-        if (segment.fillerwords) {
-          segment.fillerwords = segment.fillerwords.filter(filler => 
-            !(filler.start === word.start && filler.end === word.end)
-          );
-        }
-        break;
-        
-      case 'repetition':
-        if (segment.repetitions) {
-          segment.repetitions = segment.repetitions.filter(rep => 
-            !rep.words.includes(wordIndex)
-          ).map(rep => ({
-            ...rep,
-            words: rep.words.filter(idx => idx !== wordIndex)
-          })).filter(rep => rep.words.length > 0);
-        }
-        break;
-        
-      case 'revision':
-        if (segment.revisions) {
-          segment.revisions = segment.revisions.filter(rev => 
-            !rev.words?.includes(wordIndex) && !rev.location?.includes(wordIndex)
-          );
-        }
-        break;
-        
-      case 'mispronunciation':
-        if (segment.mispronunciation) {
-          segment.mispronunciation = segment.mispronunciation.filter(mp => 
-            !(mp.start === word.start && mp.end === word.end)
-          );
-        }
-        break;
-        
-      default:
-        console.warn('Unknown annotation type:', type);
-        return;
-    }
-    
-    onTranscriptChange(updatedSegments);
-  }, [onTranscriptChange, transcriptData]);
+    applyAnnotationChange(contextData, (segment, wordIndex) =>
+      removeAnnotationFromSegment(segment, wordIndex, type)
+    );
+  }, [applyAnnotationChange]);
 
-  // Convert annotation type via context menu
+  // Convert annotation type via context menu - both steps run on the same segment, since
+  // transcriptData here is still the pre-change render's array
   const handleConvertAnnotation = useCallback((fromType: string, toType: string, contextData?: any) => {
-    handleRemoveAnnotation(fromType, contextData);
-    handleAddAnnotation(toType, undefined, contextData);
-  }, [handleRemoveAnnotation, handleAddAnnotation]);
+    applyAnnotationChange(contextData, (segment, wordIndex) => {
+      const withoutOldType = removeAnnotationFromSegment(segment, wordIndex, fromType);
+      if (!withoutOldType) return null;
+      return addAnnotationToSegment(withoutOldType, wordIndex, toType);
+    });
+  }, [applyAnnotationChange]);
 
   // Save new annotations
   const saveNewAnnotations = useCallback((newAnnotations: Array<{
@@ -622,15 +650,20 @@ export const useAnnotations = (
     
     newAnnotations.forEach(annotation => {
       const segment = updatedSegments[annotation.segmentIndex];
-      
+      if (!segment) return;
+
       switch (annotation.type) {
         case 'filler':
-          if (!segment.fillerwords) segment.fillerwords = [];
-          segment.fillerwords.push(annotation.data);
+          updatedSegments[annotation.segmentIndex] = {
+            ...segment,
+            fillerwords: [...(segment.fillerwords || []), annotation.data]
+          };
           break;
         case 'repetition':
-          if (!segment.repetitions) segment.repetitions = [];
-          segment.repetitions.push(annotation.data);
+          updatedSegments[annotation.segmentIndex] = {
+            ...segment,
+            repetitions: [...(segment.repetitions || []), annotation.data]
+          };
           break;
         // ... handle other types
       }

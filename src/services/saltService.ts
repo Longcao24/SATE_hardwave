@@ -39,19 +39,93 @@ function isContractionSuffix(suffix: string): boolean {
 }
 
 /**
- * Reconstructs the surface form of a word from lemma and suffix
+ * Normalizes a token for content matching (case and trailing punctuation insensitive)
+ */
+function normalizeWord(word: string | null | undefined): string {
+  return (word || '').trim().toLowerCase().replace(/[.,!?;:]+$/, '');
+}
+
+/**
+ * Doubles the final consonant of a single-syllable CVC stem (stop -> stopp, run -> runn)
+ */
+function doubleFinalConsonant(lemma: string): string {
+  if (/^[^aeiou]*[aeiou][^aeiouwxy]$/.test(lemma.toLowerCase())) {
+    return lemma + lemma[lemma.length - 1];
+  }
+  return lemma;
+}
+
+/**
+ * Reconstructs the surface form of a word from lemma and suffix.
+ * SALT notation records the canonical morpheme code (/s, /ed, /ing, ...) rather than the
+ * spoken spelling, so English orthography has to be re-applied on import; without it
+ * "box/s" would come back as "boxs" and "run/ing" as "runing".
  */
 function reconstructSurface(lemma: string, suffix: string): string {
   if (suffix === "z") {
     return lemma + "'s";
-  } else if (suffix === "3s") {
-    return lemma + "s";
   } else if (isContractionSuffix(suffix)) {
     // Contraction: lemma + contraction suffix (e.g., "do" + "n't" -> "don't")
     return lemma + suffix;
-  } else {
-    return lemma + suffix;
   }
+
+  const lower = lemma.toLowerCase();
+
+  if (suffix === "s" || suffix === "3s") {
+    if (/(s|x|z|ch|sh)$/.test(lower)) return lemma + 'es';
+    if (/[^aeiou]o$/.test(lower)) return lemma + 'es';
+    if (/[^aeiou]y$/.test(lower)) return lemma.slice(0, -1) + 'ies';
+    return lemma + 's';
+  }
+
+  if (suffix === "ed") {
+    if (lower.endsWith('e')) return lemma + 'd';
+    if (/[^aeiou]y$/.test(lower)) return lemma.slice(0, -1) + 'ied';
+    return doubleFinalConsonant(lemma) + 'ed';
+  }
+
+  if (suffix === "ing") {
+    if (lower.endsWith('ie')) return lemma.slice(0, -2) + 'ying';
+    if (lower.endsWith('e') && !lower.endsWith('ee')) return lemma.slice(0, -1) + 'ing';
+    return doubleFinalConsonant(lemma) + 'ing';
+  }
+
+  if (suffix === "en") {
+    return lower.endsWith('e') ? lemma + 'n' : lemma + 'en';
+  }
+
+  return lemma + suffix;
+}
+
+/**
+ * Builds a resolver that recovers the exact surface form recorded on the reference
+ * segment's morphemes (lemma + inflection), falling back to orthographic reconstruction
+ * for morphemes the clinician just typed. Irregular spellings (break/en -> "broken")
+ * can only be recovered this way.
+ */
+function makeSurfaceResolver(
+  referenceSegment?: Segment
+): (lemma: string, suffix: string, inflection: string) => string {
+  const recorded = new Map<string, string[]>();
+
+  for (const morph of referenceSegment?.morphemes || []) {
+    if (!morph || typeof morph.word !== 'string' || typeof morph.lemma !== 'string') continue;
+    const key = `${morph.lemma.toLowerCase()}|${morph.inflectional_morpheme || ''}`;
+    const surfaces = recorded.get(key);
+    if (surfaces) {
+      surfaces.push(morph.word);
+    } else {
+      recorded.set(key, [morph.word]);
+    }
+  }
+
+  return (lemma, suffix, inflection) => {
+    const surfaces = recorded.get(`${lemma.toLowerCase()}|${inflection}`);
+    if (surfaces && surfaces.length > 0) {
+      return surfaces.shift() as string;
+    }
+    return reconstructSurface(lemma, suffix);
+  };
 }
 
 /**
@@ -159,6 +233,33 @@ function findTokenIndexForFiller(
 }
 
 /**
+ * Finds the token a morpheme annotates, matching on the recorded surface form because
+ * morpheme indices in the stored JSON can be misaligned with the word list
+ */
+function findTokenIndexForMorpheme(
+  morph: { word?: string | null; index?: number },
+  tokens: string[],
+  usedMorphIdx: Set<number>
+): number | null {
+  const surface = normalizeWord(morph.word);
+  const idx = morph.index;
+  const idxInRange = typeof idx === 'number' && idx >= 0 && idx < tokens.length && !usedMorphIdx.has(idx);
+
+  if (idxInRange && (!surface || normalizeWord(tokens[idx as number]) === surface)) {
+    return idx as number;
+  }
+
+  if (!surface) return null;
+
+  for (let i = 0; i < tokens.length; i++) {
+    if (usedMorphIdx.has(i)) continue;
+    if (normalizeWord(tokens[i]) === surface) return i;
+  }
+
+  return null;
+}
+
+/**
  * Assigns a pause to the appropriate gap between words
  */
 function assignPauseToGap(
@@ -225,30 +326,37 @@ export function jsonToSalt(segment: Segment, pauseTol: number = 0.12, includePau
   const tokens = [...baseTokens];
   const morphemes = segment.morphemes || [];
 
+  // Morpheme indices in the stored JSON are known to be misaligned with the word list, so
+  // the recorded surface form decides which token is annotated; the index is only trusted
+  // when it agrees with it (or when no surface form was recorded).
+  const usedMorphIdx = new Set<number>();
+
   for (const morph of morphemes) {
-    const idx = morph.index;
-    if (typeof idx === 'number' && idx >= 0 && idx < n) {
-      const form = morph.morpheme_form;
-      const infl = morph.inflectional_morpheme;
+    const form = morph.morpheme_form;
+    const infl = morph.inflectional_morpheme;
 
-      // Skip if no morpheme_form or if it's irregular
-      if (!form || form === '<IRR>') continue;
+    // Skip if no morpheme_form or if it's irregular
+    if (!form || form === '<IRR>') continue;
 
-      // Handle contractions: format as lemma/morpheme_form (e.g., do/n't, I/'m)
-      if (infl === 'Contraction') {
-        const lemma = morph.lemma || tokens[idx];
-        // morpheme_form should contain the contraction suffix (e.g., /'ll, /n't, /'m)
-        // If it already starts with /, use it directly; otherwise add /
-        const contractionSuffix = form.startsWith('/') ? form.substring(1) : form;
-        tokens[idx] = `${lemma}/${contractionSuffix}`;
-        continue;
-      }
+    const idx = findTokenIndexForMorpheme(morph, baseTokens, usedMorphIdx);
+    if (idx === null) continue;
 
-      const suffix = MORPH_MAP[infl || ''];
-      if (suffix) {
-        const lemma = morph.lemma || tokens[idx];
-        tokens[idx] = `${lemma}/${suffix}`;
-      }
+    // Handle contractions: format as lemma/morpheme_form (e.g., do/n't, I/'m)
+    if (infl === 'Contraction') {
+      const lemma = morph.lemma || tokens[idx];
+      // morpheme_form should contain the contraction suffix (e.g., /'ll, /n't, /'m)
+      // If it already starts with /, use it directly; otherwise add /
+      const contractionSuffix = form.startsWith('/') ? form.substring(1) : form;
+      tokens[idx] = `${lemma}/${contractionSuffix}`;
+      usedMorphIdx.add(idx);
+      continue;
+    }
+
+    const suffix = MORPH_MAP[infl || ''];
+    if (suffix) {
+      const lemma = morph.lemma || tokens[idx];
+      tokens[idx] = `${lemma}/${suffix}`;
+      usedMorphIdx.add(idx);
     }
   }
 
@@ -535,7 +643,7 @@ export function formatSaltContent(saltContent: string): string {
 /**
  * Parses SALT format text to extract words and annotations
  */
-function parseSalt(saltText: string): {
+function parseSalt(saltText: string, referenceSegment?: Segment): {
   text: string;
   words: string[];
   mazes: Array<{ content: string; words: number[]; mark_location: number }>;
@@ -563,6 +671,7 @@ function parseSalt(saltText: string): {
   }> = [];
   const pauses_with_gap: Array<[number, number]> = [];
   const first_token_is_pause = rawTokens.length > 0 && rawTokens[0].startsWith(':');
+  const resolveSurface = makeSurfaceResolver(referenceSegment);
 
   let activeMazeStart: number | null = null;
   let wordIndex = 0;
@@ -621,7 +730,7 @@ function parseSalt(saltText: string): {
           
           // Check if it's a regular morpheme
           if (MORPH_INV[suf]) {
-            wordToStore = reconstructSurface(lemma, suf); // Store the inflected form
+            wordToStore = resolveSurface(lemma, suf, MORPH_INV[suf]); // Store the inflected form
             morphemes.push({
               word: wordToStore,
               lemma,
@@ -629,10 +738,10 @@ function parseSalt(saltText: string): {
               inflectional_morpheme: MORPH_INV[suf],
               morpheme_form: `/${suf}`
             });
-          } 
+          }
           // Check if it's a contraction suffix (e.g., 'll, 'd, 've, 're, 'm, n't, 's, 't)
           else if (isContractionSuffix(suf)) {
-            wordToStore = reconstructSurface(lemma, suf); // Store the contracted form (e.g., "don't")
+            wordToStore = resolveSurface(lemma, suf, 'Contraction'); // Store the contracted form (e.g., "don't")
             morphemes.push({
               word: wordToStore,
               lemma,
@@ -682,36 +791,127 @@ function parseSalt(saltText: string): {
 }
 
 /**
+ * Longest-common-subsequence alignment of the re-parsed words onto the reference words.
+ * Returns, for each parsed word, the reference word it is unchanged from (or null).
+ */
+function alignToReference(parsedWords: string[], referenceWords: string[]): Array<number | null> {
+  const a = parsedWords.map(normalizeWord);
+  const b = referenceWords.map(normalizeWord);
+  const n = a.length;
+  const m = b.length;
+
+  const lcs: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      lcs[i][j] = a[i] === b[j]
+        ? lcs[i + 1][j + 1] + 1
+        : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+    }
+  }
+
+  const map: Array<number | null> = new Array(n).fill(null);
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      map[i] = j;
+      i++;
+      j++;
+    } else if (lcs[i + 1][j] >= lcs[i][j + 1]) {
+      i++;
+    } else {
+      j++;
+    }
+  }
+
+  return map;
+}
+
+/**
+ * Rebuilds the word list for an edited utterance while keeping the real ASR timings:
+ * words that survived the edit keep their own start/end, a run of words replaced
+ * one-for-one keeps the spans of the words it replaced, and only genuinely inserted
+ * words get times interpolated inside the surrounding gap.
+ */
+function alignWordTimings(
+  parsedWords: string[],
+  referenceWords: Word[],
+  segStart: number,
+  segEnd: number
+): Word[] {
+  const map = alignToReference(parsedWords, referenceWords.map(w => w.word || ''));
+  const words: Word[] = parsedWords.map((word, i) => {
+    const refIdx = map[i];
+    const refWord = refIdx === null ? null : referenceWords[refIdx];
+    return {
+      word,
+      start: refWord ? refWord.start : null,
+      end: refWord ? refWord.end : null,
+      index: i
+    };
+  });
+
+  // Fill the runs of words that have no counterpart in the reference
+  let i = 0;
+  while (i < words.length) {
+    if (map[i] !== null) {
+      i++;
+      continue;
+    }
+
+    let j = i;
+    while (j < words.length && map[j] === null) j++;
+
+    const refFrom = i > 0 ? (map[i - 1] as number) + 1 : 0;
+    const refTo = j < words.length ? (map[j] as number) : referenceWords.length;
+
+    if (refTo - refFrom === j - i) {
+      // One-for-one replacement (e.g. a typo fix): reuse each replaced word's span
+      for (let k = i; k < j; k++) {
+        words[k].start = referenceWords[refFrom + k - i].start;
+        words[k].end = referenceWords[refFrom + k - i].end;
+      }
+    } else {
+      let prevEnd = segStart;
+      for (let k = i - 1; k >= 0; k--) {
+        if (words[k].end !== null) { prevEnd = words[k].end as number; break; }
+      }
+      let nextStart = segEnd;
+      for (let k = j; k < words.length; k++) {
+        if (words[k].start !== null) { nextStart = words[k].start as number; break; }
+      }
+
+      if (nextStart > prevEnd) {
+        const step = (nextStart - prevEnd) / (j - i);
+        for (let k = i; k < j; k++) {
+          words[k].start = prevEnd + step * (k - i);
+          words[k].end = prevEnd + step * (k - i + 1);
+        }
+      }
+    }
+
+    i = j;
+  }
+
+  return words;
+}
+
+/**
  * Converts SALT format text to a partial Segment with annotations
  * This is used for quick editing where users can type SALT format
  */
 export function saltToJson(saltText: string, referenceSegment?: Segment): Partial<Segment> {
-  const parsed = parseSalt(saltText);
+  const parsed = parseSalt(saltText, referenceSegment);
   console.log('parsed', parsed);
   const ref = referenceSegment || {} as Segment;
   const segStart = ref.start || 0;
   const segEnd = ref.end || segStart;
 
   // Generate basic word timings if we have reference
-  const words: Word[] = [];
+  let words: Word[] = [];
   if (ref.words && ref.words.length > 0) {
-    // Try to preserve existing word timings where possible
-    const totalDuration = segEnd - segStart;
-    const avgWordDuration = totalDuration / parsed.words.length;
-
-    let currentTime = segStart;
-    for (let i = 0; i < parsed.words.length; i++) {
-      const word = parsed.words[i];
-      // Words are already processed correctly in parseSalt
-
-      words.push({
-        word: word,
-        start: currentTime,
-        end: currentTime + avgWordDuration,
-        index: i
-      });
-      currentTime += avgWordDuration;
-    }
+    // Carry the original ASR timings over to every word the edit left untouched
+    words = alignWordTimings(parsed.words, ref.words, segStart, segEnd);
   } else {
     // No reference timing, create words without timing
     for (let i = 0; i < parsed.words.length; i++) {
@@ -770,14 +970,16 @@ export function saltToJson(saltText: string, referenceSegment?: Segment): Partia
               index: -1
             });
           }
-        } else if (gapIndex >= 0 && gapIndex < words.length - 1) {
-          // Pause between words
+        } else if (gapIndex >= 0 && gapIndex < words.length) {
+          // Pause after a word; jsonToSalt emits utterance-final pauses after the last
+          // word, so the last gap has to round-trip too
           const afterWord = words[gapIndex];
-          const beforeWord = words[gapIndex + 1];
-          if (afterWord.end !== null && beforeWord.start !== null) {
+          const beforeWord = gapIndex + 1 < words.length ? words[gapIndex + 1] : null;
+          const gapEnd = beforeWord ? beforeWord.start : (afterWord.end !== null ? afterWord.end + duration : null);
+          if (afterWord.end !== null && gapEnd !== null) {
             pauses.push({
               start: afterWord.end,
-              end: beforeWord.start,
+              end: gapEnd,
               duration,
               index: gapIndex
             });
@@ -791,7 +993,6 @@ export function saltToJson(saltText: string, referenceSegment?: Segment): Partia
             });
           }
         }
-        // Ignore pauses at the end of a segment (gapIndex >= words.length - 1)
       }
     } else {
       // No timing reference, create pauses without specific times
@@ -804,8 +1005,8 @@ export function saltToJson(saltText: string, referenceSegment?: Segment): Partia
             duration,
             index: -1
           });
-        } else if (gapIndex >= 0 && gapIndex < words.length - 1) {
-          // Pause between words - only include if not at the end
+        } else if (gapIndex >= 0 && gapIndex < words.length) {
+          // Pause after a word, including the utterance-final gap
           pauses.push({
             start: null,
             end: null,
@@ -813,7 +1014,6 @@ export function saltToJson(saltText: string, referenceSegment?: Segment): Partia
             index: gapIndex
           });
         }
-        // Ignore pauses at the end of a segment (gapIndex >= words.length - 1)
       }
     }
   }

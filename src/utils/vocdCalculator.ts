@@ -3,6 +3,8 @@
  * Based on VoCD algorithm for measuring lexical diversity
  */
 
+import { isMazeWordOrPunctuation } from '@/services/DataService/speechAnalysis';
+
 interface VoCDResult {
   numTokens: number;
   dHat: number;
@@ -243,20 +245,21 @@ export function computeVocdD(
 
 /**
  * Extract words from segments for VoCD calculation
+ * D is fitted on the pruned sample (mazes excluded), matching how NTW/NDW are counted
  */
 export function extractWordsFromSegments(segments: any[]): string[] {
   const words: string[] = [];
-  
+
   for (const segment of segments) {
     if (segment.words && Array.isArray(segment.words)) {
-      for (const wordObj of segment.words) {
-        if (wordObj.word) {
+      segment.words.forEach((wordObj: any, idx: number) => {
+        if (wordObj.word && !isMazeWordOrPunctuation(wordObj, segment, idx)) {
           words.push(wordObj.word);
         }
-      }
+      });
     }
   }
-  
+
   return words;
 }
 

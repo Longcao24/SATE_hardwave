@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { useAuth } from '@/contexts/AuthProvider';
 import { useTranscriptData } from './useTranscriptData';
 import { useProcessingState } from './useProcessingState';
@@ -97,11 +97,18 @@ export function useTranscriptProcessor() {
   // --- Flag editing (auto-save) ---
   const recordingId = recordingMetadataHook.currentRecordingId;
 
+  // Tail of the in-flight flag writes. Every save sends the FULL flags array, so two
+  // overlapping requests are last-write-wins in the DB: if an older one lands last it
+  // drops the newer flag. Chain them so the DB sees the same order as the UI.
+  const flagSaveChain = useRef<Promise<unknown>>(Promise.resolve());
+
   const saveFlags = useCallback(async (flags: number[], notes: FlagNotes) => {
     if (!recordingId) return;
     setCurrentRecordingFlags(flags);
     setCurrentRecordingFlagNotes(notes);
-    await updateRecordingFlags(recordingId, flags, notes);
+    const save = flagSaveChain.current.then(() => updateRecordingFlags(recordingId, flags, notes));
+    flagSaveChain.current = save.catch(() => undefined);
+    await save;
   }, [recordingId]);
 
   // Add a new flag at rawMs. rawMs is the exact stored value (caller already

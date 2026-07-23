@@ -12,6 +12,7 @@ import {
 import { type IssueCounts, type Segment } from '@/services/dataService';
 import { getBackgroundColor,  getAnnotationLabel, getAnnotationDescription } from '@/lib/annotationColors';
 import { calculateSpeakerVocd } from '@/utils/vocdCalculator';
+import { isUtteranceBoundary } from '@/services/DataService/speechAnalysis';
 import { fetchChildesNorms, type ChildesNormsResponse } from '@/services/childesNormsService';
 
 import { type SpeechAnalysis } from '@/services/dataService';
@@ -376,8 +377,10 @@ const RightSidebar: React.FC<RightSidebarProps> = ({
     segment.words.forEach((word: any) => {
       currentUtterance.push(word);
       
-      // Check if this word ends a sentence (contains period, question mark, or exclamation)
-      if (word.word.includes('.') || word.word.includes('?') || word.word.includes('!')) {
+      // Same boundary rule as the analysis service — a bare `.` test broke
+      // "Mr.", "2.5" and "U.S." into extra utterances and deflated MLU, which is
+      // z-scored against the CHILDES norms right below.
+      if (isUtteranceBoundary(word.word)) {
         // Only create utterance if it has meaningful words (not just punctuation/fillers)
         const meaningfulWords = currentUtterance.filter((w: any) => 
           !isMazeWordOrPunctuation(w, segment)

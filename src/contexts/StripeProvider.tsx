@@ -1,6 +1,7 @@
-import React, { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
+import React, { createContext, useContext, useRef, useState, useEffect, type ReactNode } from 'react';
 import {
   getCurrentSubscription,
+  isLiveSubscriptionStatus,
   type SubscriptionTier,
   SUBSCRIPTION_TIERS
 } from '@/services/stripeService';
@@ -38,8 +39,13 @@ export const StripeProvider: React.FC<StripeProviderProps> = ({ children }) => {
   const { user } = useAuth();
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  // Identifies the newest refresh; an older fetch that resolves late must not
+  // overwrite it, or a signed-out account's tier sticks to the new account.
+  const refreshIdRef = useRef(0);
 
   const refreshSubscription = async () => {
+    const refreshId = ++refreshIdRef.current;
+
     if (!user) {
       setSubscription(null);
       setIsLoading(false);
@@ -49,12 +55,16 @@ export const StripeProvider: React.FC<StripeProviderProps> = ({ children }) => {
     setIsLoading(true);
     try {
       const currentSubscription = await getCurrentSubscription();
+      if (refreshId !== refreshIdRef.current) return;
       setSubscription(currentSubscription);
     } catch (error) {
+      if (refreshId !== refreshIdRef.current) return;
       console.error('Error refreshing subscription:', error);
       setSubscription(null);
     } finally {
-      setIsLoading(false);
+      if (refreshId === refreshIdRef.current) {
+        setIsLoading(false);
+      }
     }
   };
 
@@ -72,7 +82,7 @@ export const StripeProvider: React.FC<StripeProviderProps> = ({ children }) => {
   const value: StripeContextType = {
     subscription,
     isLoading,
-    hasActiveSubscription: subscription !== null && subscription.status === 'active',
+    hasActiveSubscription: subscription !== null && isLiveSubscriptionStatus(subscription.status),
     currentTier,
     refreshSubscription
   };

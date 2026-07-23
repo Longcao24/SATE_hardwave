@@ -2,6 +2,93 @@ import type { TranscriptData, SpeechAnalysis, Segment, Word } from './types';
 import { countErrors } from './errorCounter';
 import { getErrorAnnotations } from './errorAnnotations';
 
+// Titles/abbreviations that end in a period without ending a sentence
+const ABBREVIATIONS = new Set([
+  'mr', 'mrs', 'ms', 'dr', 'prof', 'sr', 'jr', 'st', 'vs', 'etc', 'eg', 'ie', 'approx'
+]);
+
+// A token only ends an utterance when the sentence punctuation is token-final:
+// a '.' inside a token is a decimal ("2.5") or an initialism ("U.S."), not a boundary.
+export const isUtteranceBoundary = (wordText: string): boolean => {
+  // Ignore trailing quotes/brackets so `go."` still terminates.
+  const token = wordText.trim().replace(/["'”’)\]]+$/, '');
+  if (!/[.?!]$/.test(token)) return false;
+  if (token.endsWith('?') || token.endsWith('!')) return true;
+  // Ellipsis marks hesitation / trailing off, not a sentence end
+  if (token.endsWith('..')) return false;
+  const stem = token.slice(0, -1);
+  if (ABBREVIATIONS.has(stem.toLowerCase())) return false;
+  if (stem.includes('.') && /^(?:[A-Za-z]\.)*[A-Za-z]$/.test(stem)) return false;
+  return true;
+};
+
+// Helper function to check if a word is a maze word (filler, repetition, or revision) or punctuation
+export const isMazeWordOrPunctuation = (word: Word, segment: Segment, wordPositionIndex?: number): boolean => {
+  const wordText = word.word;
+  // Use word.index if available, otherwise fall back to positional index
+  const wordIndex = word.index ?? wordPositionIndex;
+
+  // Check for basic punctuation and empty content
+  const cleanWord = wordText.toLowerCase().replace(/[.,!?;:]/g, '');
+  if (!cleanWord || /^[.,!?;:]+$/.test(wordText) || wordText.includes('[') || wordText.includes(']')) {
+    return true;
+  }
+
+  // Check if word is annotated as a filler word
+  // Use multiple matching strategies: time-based, content-based, and index-based
+  if (segment.fillerwords && segment.fillerwords.length > 0) {
+    const timeTolerance = 0.05; // 50ms tolerance for floating-point comparison
+    const isFillerWord = segment.fillerwords.some((filler: any) => {
+      // Match by timing with tolerance
+      if (word.start !== null && word.end !== null &&
+          filler.start !== null && filler.end !== null) {
+        const startMatch = Math.abs(filler.start - word.start) < timeTolerance;
+        const endMatch = Math.abs(filler.end - word.end) < timeTolerance;
+        if (startMatch && endMatch) return true;
+      }
+      // Match by content (only if filler has non-empty content)
+      if (filler.content && filler.content.trim() !== '' &&
+          cleanWord === filler.content.toLowerCase().replace(/[.,!?;:]/g, '')) {
+        return true;
+      }
+      // Match by index if available
+      if (typeof filler.index === 'number' && filler.index === wordIndex) {
+        return true;
+      }
+      return false;
+    });
+    if (isFillerWord) return true;
+  }
+
+  // Check if word is annotated as a repetition
+  // Repetitions use 'words' array containing word indices
+  if (segment.repetitions && wordIndex !== undefined) {
+    const isRepetition = segment.repetitions.some((rep: any) => {
+      return rep.words &&
+             Array.isArray(rep.words) &&
+             rep.words.includes(wordIndex);
+    });
+    if (isRepetition) return true;
+  }
+
+  // Check if word is annotated as a revision (also a maze word)
+  // Revisions use 'words' or 'location' array containing word indices
+  if (segment.revisions && wordIndex !== undefined) {
+    const isRevision = segment.revisions.some((rev: any) => {
+      const wordIndices = rev.location || rev.words || [];
+      return Array.isArray(wordIndices) && wordIndices.includes(wordIndex);
+    });
+    if (isRevision) return true;
+  }
+
+  // Keep commonly known filler words as backup (in case not annotated)
+  if (cleanWord === 'um' || cleanWord === 'uh' || cleanWord === 'uh-huh' || cleanWord === 'mm-hmm') {
+    return true;
+  }
+
+  return false;
+};
+
 // Function to split a segment into utterances based on sentence boundaries
 const splitSegmentIntoUtterances = (segment: Segment): Array<{words: Word[], morphemes?: any[]}> => {
   const utterances: Array<{words: Word[], morphemes?: any[]}> = [];
@@ -10,8 +97,8 @@ const splitSegmentIntoUtterances = (segment: Segment): Array<{words: Word[], mor
   segment.words.forEach((word) => {
     currentUtterance.push(word);
     
-    // Check if this word ends a sentence (contains period, question mark, or exclamation)
-    if (word.word.includes('.') || word.word.includes('?') || word.word.includes('!')) {
+    // Check if this word ends a sentence (token-final period, question mark, or exclamation)
+    if (isUtteranceBoundary(word.word)) {
       // Only create utterance if it has meaningful words (not just punctuation/fillers)
       const meaningfulWords = currentUtterance.filter(w => {
         const cleanWord = w.word.toLowerCase().replace(/[.,!?;:]/g, '');
@@ -93,73 +180,6 @@ export const calculateSpeechAnalysis = (
   const errorRate = totalWords > 0 ? (totalErrors / totalWords) * 100 : 0;
   const availableErrorTypes = getErrorAnnotations(transcriptData.segments);
   const speakers = new Set(includedSegments.map(s => s.speaker));
-
-  // Helper function to check if a word is a maze word (filler, repetition, or revision) or punctuation
-  const isMazeWordOrPunctuation = (word: Word, segment: Segment, wordPositionIndex?: number): boolean => {
-    const wordText = word.word;
-    // Use word.index if available, otherwise fall back to positional index
-    const wordIndex = word.index ?? wordPositionIndex;
-    
-    // Check for basic punctuation and empty content
-    const cleanWord = wordText.toLowerCase().replace(/[.,!?;:]/g, '');
-    if (!cleanWord || /^[.,!?;:]+$/.test(wordText) || wordText.includes('[') || wordText.includes(']')) {
-      return true;
-    }
-    
-    // Check if word is annotated as a filler word
-    // Use multiple matching strategies: time-based, content-based, and index-based
-    if (segment.fillerwords && segment.fillerwords.length > 0) {
-      const timeTolerance = 0.05; // 50ms tolerance for floating-point comparison
-      const isFillerWord = segment.fillerwords.some((filler: any) => {
-        // Match by timing with tolerance
-        if (word.start !== null && word.end !== null && 
-            filler.start !== null && filler.end !== null) {
-          const startMatch = Math.abs(filler.start - word.start) < timeTolerance;
-          const endMatch = Math.abs(filler.end - word.end) < timeTolerance;
-          if (startMatch && endMatch) return true;
-        }
-        // Match by content (only if filler has non-empty content)
-        if (filler.content && filler.content.trim() !== '' && 
-            cleanWord === filler.content.toLowerCase().replace(/[.,!?;:]/g, '')) {
-          return true;
-        }
-        // Match by index if available
-        if (typeof filler.index === 'number' && filler.index === wordIndex) {
-          return true;
-        }
-        return false;
-      });
-      if (isFillerWord) return true;
-    }
-    
-    // Check if word is annotated as a repetition
-    // Repetitions use 'words' array containing word indices
-    if (segment.repetitions && wordIndex !== undefined) {
-      const isRepetition = segment.repetitions.some((rep: any) => {
-        return rep.words && 
-               Array.isArray(rep.words) && 
-               rep.words.includes(wordIndex);
-      });
-      if (isRepetition) return true;
-    }
-    
-    // Check if word is annotated as a revision (also a maze word)
-    // Revisions use 'words' or 'location' array containing word indices
-    if (segment.revisions && wordIndex !== undefined) {
-      const isRevision = segment.revisions.some((rev: any) => {
-        const wordIndices = rev.location || rev.words || [];
-        return Array.isArray(wordIndices) && wordIndices.includes(wordIndex);
-      });
-      if (isRevision) return true;
-    }
-    
-    // Keep commonly known filler words as backup (in case not annotated)
-    if (cleanWord === 'um' || cleanWord === 'uh' || cleanWord === 'uh-huh' || cleanWord === 'mm-hmm') {
-      return true;
-    }
-    
-    return false;
-  };
 
   // Calculate Number of Total Words (NTW) and Number of Different Words (NDW)
   let ntw = 0;

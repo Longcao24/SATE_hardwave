@@ -15,6 +15,8 @@ export interface PendingRecordingData {
   patientId?: string;
   patientName?: string;
   isProcessingComplete?: boolean;
+  /** Processing ended in an error, so no transcript exists and Save cannot succeed. */
+  processingFailed?: boolean;
 }
 
 export class RecordingMetadataService {
