@@ -9,13 +9,15 @@ export const useRecordingStats = (recordings: any[] | undefined, patientId?: str
   useEffect(() => {
     const loadPatientRecordingStats = async () => {
       if (!recordings || recordings.length === 0 || !patientId) {
+        setRecordingStats([]);   // clear: a stale set outlived its recordings
         setLoadingStats(false);
         return;
       }
 
       const patientRecordings = recordings.filter(r => r.patient_id === patientId);
-      
+
       if (patientRecordings.length === 0) {
+        setRecordingStats([]);   // deleting the last recording must empty the view
         setLoadingStats(false);
         return;
       }
@@ -42,7 +44,11 @@ export const useRecordingStats = (recordings: any[] | undefined, patientId?: str
               totalWords,
               totalIssues,
               errorRate,
-              speakers
+              speakers,
+              mluw: data.analysis?.mluw || 0,
+              ndw: data.analysis?.ndw || 0,
+              speakingRate: data.analysis?.speakingRate || 0,
+              numberOfPauses: data.analysis?.numberOfPauses || 0,
             });
           }
           

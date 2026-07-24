@@ -4,6 +4,7 @@ import { Calendar, Clock, Activity, TrendingUp, BarChart3, ArrowRight } from 'lu
 import { type Patient } from '@/services/patientService';
 import { type RecordingStats } from '../types';
 import { formatDate, formatDuration } from '../utils';
+import { ProgressChart } from './ProgressChart';
 
 interface AnalyticsTabProps {
   patient: Patient;
@@ -68,7 +69,13 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({
         </div>
       ) : (
         <>
-          {/* Progress Trends */}
+          {/* Interactive progress chart — variation of a chosen metric over sessions */}
+          <ProgressChart
+            recordingStats={filteredStats}
+            patientName={`${patient?.first_name ?? ''} ${patient?.last_name ?? ''}`.trim()}
+          />
+
+          {/* Per-session breakdown (kept as a table-style companion to the chart) */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Error Rate Trend */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">

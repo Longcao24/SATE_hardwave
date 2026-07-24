@@ -9,6 +9,11 @@ export interface RecordingStats {
   totalIssues: number;
   errorRate: number;
   speakers: string[];
+  // Clinical metrics for the progress chart (from the recording's SpeechAnalysis).
+  mluw: number;               // mean length of utterance, words
+  ndw: number;                // number of different words (vocabulary)
+  speakingRate: number;       // words per minute
+  numberOfPauses: number;
 }
 
 // Extend Window interface to include custom properties
