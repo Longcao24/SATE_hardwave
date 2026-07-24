@@ -1,4 +1,4 @@
-// SATE Device API — Supabase Edge Function              [v17]
+// SATE Device API — Supabase Edge Function              [v18]
 // Replaces the mock-server's Express endpoints with a single Edge Function
 // that does internal path routing. Authenticated via Supabase JWT (users) or a
 // device key (the recorder).
@@ -20,6 +20,8 @@
 // v17: a `record` command may carry {seconds:N} — the firmware stops the take
 //      ITSELF at exactly N seconds of PCM (sample-exact), instead of the caller
 //      racing a `stop` through the poll channel (+3-12 s of slop)
+// v18: GET /health/alerts?key=… — secret-gated error digest (pipeline errors/stuck,
+//      recent errors, offline devices) for the 5-min status worker's email alerts.
 // v16: GET /sessions/upload-progress — live bytes of an IN-FLIGHT chunked upload
 //      (sums the _tmp/<patient>/s<n>/<offset>.part objects; read-only, user-authed)
 // v14: async processing state machine. GET /sessions returns `status` + `attempts`
@@ -124,6 +126,15 @@ serve(async (req) => {
 
   // Recorder asks whether a session is durably on the server before it frees
   // the local SD copy (fw >=1.5.13 verified trim). Device-key auth only.
+  // [v18] Error digest for the alerting worker — gated by a shared secret (no user
+  // JWT), read-only. Returns only what an alert needs: whether anything is wrong.
+  if (subPath === '/health/alerts' && method === 'GET') {
+    const key = url.searchParams.get('key') || '';
+    const want = Deno.env.get('HEALTH_ALERT_KEY') || '';
+    if (!want || key !== want) return err('forbidden', 403);
+    return await healthAlerts(supabase);
+  }
+
   if (subPath === '/sessions/verify' && method === 'GET' && authHeader.startsWith('Bearer key-')) {
     return await handleSessionVerify(supabase, req);
   }
@@ -513,6 +524,46 @@ async function ownerEmailMap(supabase: any): Promise<Record<string, string>> {
 // Aggregated health for the service-monitoring dashboard. Admin-gated (service
 // role, sate_admins). Live DB-derived: pipeline state machine, device fleet +
 // firmware versions, stuck jobs, recent errors. Read-only.
+// [v18] Compact error digest for the email-alerting worker. Same signals adminStatus
+// surfaces, trimmed to what makes an alert: pipeline errors, wedged (stuck) jobs, the
+// most recent error rows, and devices that have gone offline. Read-only, service role.
+async function healthAlerts(supabase: any) {
+  const now = Date.now();
+  const STUCK_MS = 45 * 60 * 1000;
+  const { count: errorCount } = await supabase.from('sate_device_sessions')
+    .select('id', { count: 'exact', head: true }).eq('status', 'error');
+  const stuckCutoff = new Date(now - STUCK_MS).toISOString();
+  const { data: stuck } = await supabase.from('sate_device_sessions')
+    .select('id, device_serial, session_number, attempts, processing_started_at')
+    .eq('status', 'processing').lt('processing_started_at', stuckCutoff)
+    .order('processing_started_at', { ascending: true }).limit(25);
+  const { data: recentErrors } = await supabase.from('sate_device_sessions')
+    .select('id, device_serial, session_number, attempts, process_error, created_at')
+    .eq('status', 'error').order('created_at', { ascending: false }).limit(10);
+  await supabase.from('sate_devices')
+    .update({ online: false, state: 'idle' })
+    .lt('last_seen', new Date(now - 45000).toISOString()).eq('online', true);
+  const { data: offline } = await supabase.from('sate_devices')
+    .select('serial, last_seen, fw').eq('online', false)
+    .order('last_seen', { ascending: false }).limit(25);
+  const errors = recentErrors || [];
+  const stuckList = stuck || [];
+  const offlineList = offline || [];
+  return json({
+    generated_at: new Date().toISOString(),
+    // A stable signature of the CURRENT problem set, so the worker only mails on a CHANGE.
+    signature: JSON.stringify({
+      e: errors.map((r: any) => `${r.device_serial}#${r.session_number}`).sort(),
+      s: stuckList.map((r: any) => r.id).sort(),
+    }),
+    error_count: errorCount || 0,
+    stuck_count: stuckList.length,
+    recent_errors: errors,
+    stuck_list: stuckList,
+    offline_devices: offlineList,
+  });
+}
+
 async function adminStatus(supabase: any) {
   const now = Date.now();
   const STUCK_MS = 45 * 60 * 1000;               // matches cf-processor STUCK_MINUTES
