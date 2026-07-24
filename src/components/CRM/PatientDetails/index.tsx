@@ -394,42 +394,38 @@ const PatientDetails: React.FC = () => {
           timestamp: Date.now()
         };
 
-        // Update pending recording data with processing results
-        if (!pendingRecordingData) {
-          console.error('❌ No pendingRecordingData found after processing! This is the problem.');
-          return;
-        }
+        // Update pending recording data with processing results.
+        // pendingRecordingData here is captured from the render this upload started
+        // on, where it is still null (this run creates it above), so it must not
+        // gate this update — the functional setter is what reads current state.
+        console.log('🔄 Updating pendingRecordingData...');
+        setPendingRecordingData(prev => {
+          if (!prev) return null;
 
-        if (pendingRecordingData) {
-          console.log('🔄 Updating pendingRecordingData...');
-          setPendingRecordingData(prev => {
-            if (!prev) return null;
-            
-            const updated = {
-              ...prev,
-              transcriptData: processedData,
-              errorCounts: errorCounts,
-              isProcessingComplete: true
-            };
-            
-            console.log('✅ Updated pendingRecordingData:', {
-              hasTranscriptData: !!updated.transcriptData,
-              hasErrorCounts: !!updated.errorCounts,
-              isProcessingComplete: updated.isProcessingComplete,
-              transcriptSegments: updated.transcriptData?.segments?.length
-            });
-            
-            return updated;
+          const updated = {
+            ...prev,
+            transcriptData: processedData,
+            errorCounts: errorCounts,
+            isProcessingComplete: true
+          };
+
+          console.log('✅ Updated pendingRecordingData:', {
+            hasTranscriptData: !!updated.transcriptData,
+            hasErrorCounts: !!updated.errorCounts,
+            isProcessingComplete: updated.isProcessingComplete,
+            transcriptSegments: updated.transcriptData?.segments?.length
           });
 
-          // Auto-save disabled - user must explicitly click Save button
-          // if (formMetadata) {
-          //   console.log('📝 Form metadata exists, saving with fresh data...');
-          //   // Use the fresh data directly instead of waiting for state update
-          //   await saveRecordingWithFreshData(formMetadata, processedData, errorCounts);
-          //   return;
-          // }
-        }
+          return updated;
+        });
+
+        // Auto-save disabled - user must explicitly click Save button
+        // if (formMetadata) {
+        //   console.log('📝 Form metadata exists, saving with fresh data...');
+        //   // Use the fresh data directly instead of waiting for state update
+        //   await saveRecordingWithFreshData(formMetadata, processedData, errorCounts);
+        //   return;
+        // }
 
       } catch (error) {
         console.error('Failed to process and save audio:', error);
@@ -444,6 +440,15 @@ const PatientDetails: React.FC = () => {
           const errorMessage = error instanceof Error ? error.message : 'Failed to process audio file';
           setProcessingError(errorMessage);
         }
+
+        // Mark the run as FAILED (not complete: there is no transcript, so the
+        // recording genuinely cannot be saved). Without this, Save after a failed
+        // run fell through the isProcessingComplete gate as a silent no-op and the
+        // processingFailed feedback branch in handleMetadataFormSave never fired.
+        setPendingRecordingData(prev => {
+          if (!prev) return null;
+          return { ...prev, processingFailed: true };
+        });
       } finally {
         setIsProcessing(false);
         setProcessingProgress(0);

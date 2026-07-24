@@ -165,7 +165,10 @@ export function useRecordingMetadata(user: User | null) {
     if (pendingRecordingData.processingFailed) {
       // Tell the user why Save cannot work instead of returning silently — the
       // form re-enables Save after a failed run, so this was an invisible dead end.
-      setDataError('Processing failed, so there is no transcript to save yet. Retry processing from the error notice, or upload the file again.');
+      // A dismissable alert, NOT setDataError: with no transcript loaded, dataError
+      // sends MainApp into its full-page fatal error branch, which unmounts the
+      // form and the error notice whose Retry this message points at.
+      window.alert('Processing failed, so there is no transcript to save yet. Retry processing from the error notice, or upload the file again.');
       return;
     }
 

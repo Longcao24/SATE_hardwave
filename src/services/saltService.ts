@@ -98,34 +98,55 @@ function reconstructSurface(lemma: string, suffix: string): string {
 }
 
 /**
- * Builds a resolver that recovers the exact surface form recorded on the reference
- * segment's morphemes (lemma + inflection), falling back to orthographic reconstruction
- * for morphemes the clinician just typed. Irregular spellings (break/en -> "broken")
- * can only be recovered this way.
+ * Rewrites the parsed morpheme words with the exact surface forms recorded on the
+ * reference segment, pairing each parsed token with its reference word through an LCS
+ * alignment (morpheme tokens compare by lemma + inflection, so an irregular surface
+ * like break/en -> "broken" still lines up with its own word). Handing surfaces out
+ * positionally instead would rewrite a DIFFERENT occurrence's spelling whenever the
+ * edit deleted or reordered words sharing a lemma. Morphemes the clinician just typed
+ * keep their orthographic reconstruction.
  */
-function makeSurfaceResolver(
+function applyRecordedSurfaces(
+  words: string[],
+  pendingMorphemes: Array<{ index: number; lemma: string; suffix: string; inflection: string }>,
   referenceSegment?: Segment
-): (lemma: string, suffix: string, inflection: string) => string {
-  const recorded = new Map<string, string[]>();
+): void {
+  const refWords = referenceSegment?.words || [];
+  if (pendingMorphemes.length === 0 || refWords.length === 0) return;
+
+  // Mirror jsonToSalt's morpheme placement so the keys describe the SALT it emitted
+  const refTokens = refWords.map(w => w.word || '');
+  const refKeys = refTokens.map(normalizeWord);
+  const refIsMorph: boolean[] = new Array(refTokens.length).fill(false);
+  const usedRefIdx = new Set<number>();
 
   for (const morph of referenceSegment?.morphemes || []) {
-    if (!morph || typeof morph.word !== 'string' || typeof morph.lemma !== 'string') continue;
-    const key = `${morph.lemma.toLowerCase()}|${morph.inflectional_morpheme || ''}`;
-    const surfaces = recorded.get(key);
-    if (surfaces) {
-      surfaces.push(morph.word);
-    } else {
-      recorded.set(key, [morph.word]);
-    }
+    const form = morph?.morpheme_form;
+    const infl = morph?.inflectional_morpheme;
+    if (!form || form === '<IRR>') continue;
+    if (infl !== 'Contraction' && !MORPH_MAP[infl || '']) continue;
+
+    const idx = findTokenIndexForMorpheme(morph, refTokens, usedRefIdx);
+    if (idx === null) continue;
+
+    const lemma = morph.lemma || refTokens[idx];
+    refKeys[idx] = `${lemma.toLowerCase()}|${infl || ''}`;
+    refIsMorph[idx] = true;
+    usedRefIdx.add(idx);
   }
 
-  return (lemma, suffix, inflection) => {
-    const surfaces = recorded.get(`${lemma.toLowerCase()}|${inflection}`);
-    if (surfaces && surfaces.length > 0) {
-      return surfaces.shift() as string;
+  const parsedKeys = words.map(normalizeWord);
+  for (const pending of pendingMorphemes) {
+    parsedKeys[pending.index] = `${pending.lemma.toLowerCase()}|${pending.inflection}`;
+  }
+
+  const map = lcsAlign(parsedKeys, refKeys);
+  for (const pending of pendingMorphemes) {
+    const refIdx = map[pending.index];
+    if (refIdx !== null && refIsMorph[refIdx]) {
+      words[pending.index] = refTokens[refIdx];
     }
-    return reconstructSurface(lemma, suffix);
-  };
+  }
 }
 
 /**
@@ -671,7 +692,9 @@ function parseSalt(saltText: string, referenceSegment?: Segment): {
   }> = [];
   const pauses_with_gap: Array<[number, number]> = [];
   const first_token_is_pause = rawTokens.length > 0 && rawTokens[0].startsWith(':');
-  const resolveSurface = makeSurfaceResolver(referenceSegment);
+  // Morpheme words parse with a reconstructed surface first; the recorded surfaces are
+  // matched back on by alignment once the whole word sequence is known.
+  const pendingMorphemes: Array<{ index: number; lemma: string; suffix: string; inflection: string }> = [];
 
   let activeMazeStart: number | null = null;
   let wordIndex = 0;
@@ -730,25 +753,13 @@ function parseSalt(saltText: string, referenceSegment?: Segment): {
           
           // Check if it's a regular morpheme
           if (MORPH_INV[suf]) {
-            wordToStore = resolveSurface(lemma, suf, MORPH_INV[suf]); // Store the inflected form
-            morphemes.push({
-              word: wordToStore,
-              lemma,
-              index: wordIndex,
-              inflectional_morpheme: MORPH_INV[suf],
-              morpheme_form: `/${suf}`
-            });
+            wordToStore = reconstructSurface(lemma, suf); // Store the inflected form
+            pendingMorphemes.push({ index: wordIndex, lemma, suffix: suf, inflection: MORPH_INV[suf] });
           }
           // Check if it's a contraction suffix (e.g., 'll, 'd, 've, 're, 'm, n't, 's, 't)
           else if (isContractionSuffix(suf)) {
-            wordToStore = resolveSurface(lemma, suf, 'Contraction'); // Store the contracted form (e.g., "don't")
-            morphemes.push({
-              word: wordToStore,
-              lemma,
-              index: wordIndex,
-              inflectional_morpheme: 'Contraction',
-              morpheme_form: `/${suf}`
-            });
+            wordToStore = reconstructSurface(lemma, suf); // Store the contracted form (e.g., "don't")
+            pendingMorphemes.push({ index: wordIndex, lemma, suffix: suf, inflection: 'Contraction' });
           } else {
             // Unknown morpheme format, just use the first part
             wordToStore = parts[0];
@@ -780,6 +791,21 @@ function parseSalt(saltText: string, referenceSegment?: Segment): {
     }
   }
 
+  applyRecordedSurfaces(words, pendingMorphemes, referenceSegment);
+  for (const pending of pendingMorphemes) {
+    morphemes.push({
+      word: words[pending.index],
+      lemma: pending.lemma,
+      index: pending.index,
+      inflectional_morpheme: pending.inflection,
+      morpheme_form: `/${pending.suffix}`
+    });
+  }
+  // Recorded surfaces may have rewritten words inside a maze
+  for (const maze of mazes) {
+    maze.content = maze.words.map(i => words[i]).join(' ');
+  }
+
   return {
     text: words.join(' '),
     words,
@@ -791,12 +817,10 @@ function parseSalt(saltText: string, referenceSegment?: Segment): {
 }
 
 /**
- * Longest-common-subsequence alignment of the re-parsed words onto the reference words.
- * Returns, for each parsed word, the reference word it is unchanged from (or null).
+ * Longest-common-subsequence alignment of two token sequences.
+ * Returns, for each item of `a`, the index in `b` it is unchanged from (or null).
  */
-function alignToReference(parsedWords: string[], referenceWords: string[]): Array<number | null> {
-  const a = parsedWords.map(normalizeWord);
-  const b = referenceWords.map(normalizeWord);
+function lcsAlign(a: string[], b: string[]): Array<number | null> {
   const n = a.length;
   const m = b.length;
 
@@ -825,6 +849,14 @@ function alignToReference(parsedWords: string[], referenceWords: string[]): Arra
   }
 
   return map;
+}
+
+/**
+ * Longest-common-subsequence alignment of the re-parsed words onto the reference words.
+ * Returns, for each parsed word, the reference word it is unchanged from (or null).
+ */
+function alignToReference(parsedWords: string[], referenceWords: string[]): Array<number | null> {
+  return lcsAlign(parsedWords.map(normalizeWord), referenceWords.map(normalizeWord));
 }
 
 /**
@@ -881,12 +913,12 @@ function alignWordTimings(
         if (words[k].start !== null) { nextStart = words[k].start as number; break; }
       }
 
-      if (nextStart > prevEnd) {
-        const step = (nextStart - prevEnd) / (j - i);
-        for (let k = i; k < j; k++) {
-          words[k].start = prevEnd + step * (k - i);
-          words[k].end = prevEnd + step * (k - i + 1);
-        }
+      // Contiguous ASR spans leave a zero-width gap, but an inserted word must still get
+      // a real time — a null start/end breaks word-click playback and split-time math.
+      const step = Math.max(0, nextStart - prevEnd) / (j - i);
+      for (let k = i; k < j; k++) {
+        words[k].start = prevEnd + step * (k - i);
+        words[k].end = prevEnd + step * (k - i + 1);
       }
     }
 
@@ -927,15 +959,41 @@ export function saltToJson(saltText: string, referenceSegment?: Segment): Partia
   }
 
   // Convert mazes to repetitions and revisions
-  // For simplicity, treat all parenthesized content as repetitions
-  // In a more sophisticated implementation, you could analyze context
   const repetitions: Array<{ content: string; words: number[]; mark_location: number }> = [];
   const revisions: Array<{ content: string; words: number[]; mark_location: number }> = [];
 
-  // Split mazes into repetitions and revisions based on heuristics
+  // A maze keeps the annotation type it had on the reference segment — the length
+  // heuristic alone reclassifies a multi-word repetition as a revision (and a
+  // single-word revision as a repetition) on every round-trip.
+  const refMap = ref.words && ref.words.length > 0
+    ? alignToReference(parsed.words, ref.words.map(w => w.word || ''))
+    : [];
+  const refRepetitionIdx = new Set<number>();
+  for (const rep of ref.repetitions || []) {
+    for (const w of rep.words || []) refRepetitionIdx.add(w);
+  }
+  const refRevisionIdx = new Set<number>();
+  for (const rev of ref.revisions || []) {
+    for (const w of rev.words || []) refRevisionIdx.add(w);
+  }
+
   for (const maze of parsed.mazes) {
-    // For now, treat single words as repetitions, multiple as revisions
-    if (maze.words.length === 1) {
+    const refIdxs = maze.words
+      .map(i => refMap[i])
+      .filter((idx): idx is number => typeof idx === 'number');
+    // Only an intact maze (every word descending from the reference annotation) keeps its
+    // recorded type; a maze the clinician rewrote is genuinely new content.
+    const intact = refIdxs.length === maze.words.length && refIdxs.length > 0;
+    const wasRepetition = intact && refIdxs.every(idx => refRepetitionIdx.has(idx));
+    const wasRevision = intact && refIdxs.every(idx => refRevisionIdx.has(idx));
+
+    if (wasRepetition && !wasRevision) {
+      repetitions.push(maze);
+    } else if (wasRevision && !wasRepetition) {
+      revisions.push(maze);
+    } else if (maze.words.length === 1) {
+      // New maze the reference knows nothing about: single words as repetitions,
+      // multiple as revisions
       repetitions.push(maze);
     } else {
       revisions.push(maze);

@@ -36,6 +36,10 @@ interface AnnotationSet {
   // Also anchored by word index (TranscriptSegment matches `omission.index === wordIndex`),
   // so it has to shift with the others or it slides onto the neighbouring word.
   morphemeOmissions: NonNullable<Segment['morpheme_omissions']>;
+  // jsonToSalt writes a filler as a single-word maze, which parses back as a repetition —
+  // fillers must be reconciled out of the parsed repetitions or every filler is
+  // double-counted (kept as a filler AND re-emitted as a repetition).
+  fillerwords: NonNullable<Segment['fillerwords']>;
 }
 
 const annotationsOf = (segment: Segment): AnnotationSet => ({
@@ -43,7 +47,8 @@ const annotationsOf = (segment: Segment): AnnotationSet => ({
   revisions: segment.revisions || [],
   pauses: segment.pauses || [],
   morphemes: segment.morphemes || [],
-  morphemeOmissions: segment.morpheme_omissions || []
+  morphemeOmissions: segment.morpheme_omissions || [],
+  fillerwords: segment.fillerwords || []
 });
 
 const normalizeWord = (word: string): string => word.toLowerCase().replace(/[^a-z0-9']/g, '');
@@ -108,14 +113,14 @@ const restoreWordTimings = (
     let runEnd = k;
     while (runEnd + 1 < result.length && match[runEnd + 1] < 0) runEnd++;
 
-    const from = k > 0 ? result[k - 1].end : segStart;
-    const to = runEnd + 1 < result.length ? result[runEnd + 1].start : segEnd;
-    if (from !== null && to !== null && to > from) {
-      const step = (to - from) / (runEnd - k + 1);
-      for (let idx = k; idx <= runEnd; idx++) {
-        result[idx].start = from + step * (idx - k);
-        result[idx].end = from + step * (idx - k + 1);
-      }
+    // Contiguous ASR spans leave a zero-width gap, but an inserted word must still get
+    // a real time — a null start/end breaks word-click playback and split-time math.
+    const from = (k > 0 ? result[k - 1].end : null) ?? segStart;
+    const to = Math.max(from, (runEnd + 1 < result.length ? result[runEnd + 1].start : null) ?? segEnd);
+    const step = (to - from) / (runEnd - k + 1);
+    for (let idx = k; idx <= runEnd; idx++) {
+      result[idx].start = from + step * (idx - k);
+      result[idx].end = from + step * (idx - k + 1);
     }
 
     k = runEnd;
@@ -167,7 +172,10 @@ const shiftAnnotations = (set: AnnotationSet, position: number, delta: 1 | -1): 
       .map(morph => (typeof morph.index === 'number' ? { ...morph, index: shiftIndex(morph.index) } : morph)),
     morphemeOmissions: (set.morphemeOmissions || [])
       .filter((om: any) => delta === 1 || om.index !== position)
-      .map((om: any) => (typeof om.index === 'number' ? { ...om, index: shiftIndex(om.index) } : om))
+      .map((om: any) => (typeof om.index === 'number' ? { ...om, index: shiftIndex(om.index) } : om)),
+    // Fillers are anchored by start/end timing, not word index, so an insert/delete of
+    // another word leaves them in place.
+    fillerwords: set.fillerwords
   };
 };
 
@@ -398,8 +406,36 @@ const EditTranscriptPopup: React.FC<EditTranscriptPopupProps> = ({
       .map(morph => ({ ...morph, index: originalToNew[morph.index] ?? -1 }))
       .filter(morph => morph.index >= 0 && !parsedMorphemes.some((m: any) => m.index === morph.index));
 
+    // SALT has no filler notation — jsonToSalt writes one as a single-word maze, which
+    // parses back as a repetition. A filler survives only while its word is still
+    // parenthesized, and that span is reclassified back into fillerwords (mirrors the
+    // inline-edit save path) so it is neither double-counted nor unremovable.
+    const parsedRepetitions = parsedSegment.repetitions || [];
+    const fillerwords: NonNullable<Segment['fillerwords']> = [];
+    const fillerSpans = new Set<number>();
+    for (const filler of segment?.fillerwords || []) {
+      const sourceIndex = originalWords.findIndex(w => w.start === filler.start && w.end === filler.end);
+      const newIndex = sourceIndex >= 0 ? originalToNew[sourceIndex] : -1;
+      if (newIndex < 0) continue;
+
+      const stillMazed = parsedRepetitions.some(rep => rep.words.length === 1 && rep.words[0] === newIndex);
+      if (!stillMazed) continue;
+
+      const newWord = words[newIndex];
+      fillerwords.push({
+        ...filler,
+        start: newWord.start,
+        end: newWord.end,
+        duration: newWord.start !== null && newWord.end !== null
+          ? newWord.end - newWord.start
+          : filler.duration
+      });
+      fillerSpans.add(newIndex);
+    }
+
     setEditedAnnotations({
-      repetitions: parsedSegment.repetitions || [],
+      fillerwords,
+      repetitions: parsedRepetitions.filter(rep => !(rep.words.length === 1 && fillerSpans.has(rep.words[0]))),
       revisions: parsedSegment.revisions || [],
       pauses: parsedSegment.pauses || [],
       morphemes: [...parsedMorphemes, ...carriedMorphemes].sort((a, b) => a.index - b.index),
@@ -759,6 +795,7 @@ const EditTranscriptPopup: React.FC<EditTranscriptPopupProps> = ({
       updatedSegment.pauses = editedAnnotations.pauses;
       updatedSegment.morphemes = editedAnnotations.morphemes;
       updatedSegment.morpheme_omissions = editedAnnotations.morphemeOmissions;
+      updatedSegment.fillerwords = editedAnnotations.fillerwords;
     }
 
     onSave(updatedSegment);
