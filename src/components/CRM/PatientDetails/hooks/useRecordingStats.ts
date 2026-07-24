@@ -7,6 +7,8 @@ export const useRecordingStats = (recordings: any[] | undefined, patientId?: str
   const [loadingStats, setLoadingStats] = useState(true);
 
   useEffect(() => {
+    let cancelled = false;   // stale in-flight run must not overwrite the next patient's stats
+
     const loadPatientRecordingStats = async () => {
       if (!recordings || recordings.length === 0 || !patientId) {
         setRecordingStats([]);   // clear: a stale set outlived its recordings
@@ -28,6 +30,7 @@ export const useRecordingStats = (recordings: any[] | undefined, patientId?: str
       for (const recording of patientRecordings) {
         try {
           const data = await loadRecording(recording.id);
+          if (cancelled) return;
           if (data) {
             const totalWords = data.transcript.segments.reduce((sum, seg) => 
               sum + (seg.words?.length || 0), 0
@@ -57,11 +60,16 @@ export const useRecordingStats = (recordings: any[] | undefined, patientId?: str
         }
       }
 
+      if (cancelled) return;
       setRecordingStats(stats);
       setLoadingStats(false);
     };
 
     loadPatientRecordingStats();
+
+    return () => {
+      cancelled = true;
+    };
   }, [recordings, patientId]);
 
   return { recordingStats, loadingStats };
