@@ -1,9 +1,11 @@
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { DevicePanel } from './DevicePanel';
 import { DeviceSessionStatus } from './DeviceSessionStatus';
 import { FirmwareUpdateBanner } from './FirmwareUpdateBanner';
 import { FirmwarePublishCard } from './FirmwarePublishCard';
 import { useDeviceContext } from '@/contexts/DeviceProvider';
+import { deviceApiService } from '@/services/device/deviceApiService';
 import { Button } from '@/components/ui/button';
 import { ArrowLeft, Mic } from 'lucide-react';
 
@@ -24,6 +26,15 @@ function DeviceRecordingsColumn() {
 
 export function DevicePage() {
   const navigate = useNavigate();
+
+  // Publish firmware is a fleet-wide admin control (sate_admins) — same gate as
+  // the Admin page/button; every other card here stays available to all users.
+  const [isAdmin, setIsAdmin] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    deviceApiService.amIAdmin().then((ok) => { if (!cancelled) setIsAdmin(ok); });
+    return () => { cancelled = true; };
+  }, []);
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -60,7 +71,7 @@ export function DevicePage() {
           {/* Left: device */}
           <div className="space-y-4">
             <FirmwareUpdateBanner />
-            <FirmwarePublishCard />
+            {isAdmin && <FirmwarePublishCard />}
             <DevicePanel />
           </div>
 

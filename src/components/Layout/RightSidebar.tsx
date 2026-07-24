@@ -1171,7 +1171,9 @@ const RightSidebar: React.FC<RightSidebarProps> = ({
                   });
                   
                   const dValue = vocdResult.dHat;
-                  const hasEnoughTokens = vocdResult.numTokens >= 35;
+                  // The calculator returns a sentinel (dHat: 0, empty curves) when it can't fit —
+                  // it needs >= 3 curve points, i.e. >= 37 tokens, not just >= nMin (35).
+                  const hasEnoughTokens = vocdResult.avgCurve.length > 0;
                   
                   return (
                     <div className="p-3 bg-indigo-50 rounded-lg border border-indigo-100 col-span-2">
@@ -1197,7 +1199,7 @@ const RightSidebar: React.FC<RightSidebarProps> = ({
                         <>
                           <div className="text-sm text-gray-500">N/A</div>
                           <div className="text-xs text-gray-500">
-                            Insufficient data ({vocdResult.numTokens} tokens, need 35+)
+                            Insufficient data ({vocdResult.numTokens} tokens, need 37+)
                           </div>
                         </>
                       )}

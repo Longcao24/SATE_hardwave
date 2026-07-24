@@ -27,6 +27,7 @@ export function useAudioPlayer({ transcriptData = [], refreshAudioUrl }: UseAudi
   const resumeAtRef = useRef<number | null>(null);
   const refreshedUrlRef = useRef<string | null>(null);
   const refreshAttemptsRef = useRef(0);
+  const pendingRefreshUrlRef = useRef<string | null>(null);
 
   // Audio effects
   useEffect(() => {
@@ -126,6 +127,7 @@ export function useAudioPlayer({ transcriptData = [], refreshAudioUrl }: UseAudi
             return;
           }
           resumeAtRef.current = resumeAt;
+          pendingRefreshUrlRef.current = freshUrl;
           setAudioUrl(freshUrl);
         })
         .catch(() => {
@@ -167,6 +169,19 @@ export function useAudioPlayer({ transcriptData = [], refreshAudioUrl }: UseAudi
   // Update audio source when audioUrl changes
   useEffect(() => {
     audioUrlRef.current = audioUrl;
+
+    // A new source gets its own refresh budget — one recording's failed
+    // re-signs must not lock out the next. Skip the reset only when this
+    // change is our own re-signed URL for the same recording, so a
+    // permanently unreadable object still can't re-sign in a loop.
+    if (audioUrl !== null && audioUrl === pendingRefreshUrlRef.current) {
+      pendingRefreshUrlRef.current = null;
+    } else {
+      pendingRefreshUrlRef.current = null;
+      refreshAttemptsRef.current = 0;
+      refreshedUrlRef.current = null;
+      resumeAtRef.current = null;
+    }
 
     const audio = audioRef.current;
     if (!audio) return;
