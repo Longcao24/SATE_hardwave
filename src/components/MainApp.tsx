@@ -487,6 +487,7 @@ export function MainApp() {
                 speechAnalysis={transcriptProcessor.speechAnalysis || undefined}
                 selectedSpeaker={transcriptProcessor.selectedSpeaker}
                 onSpeakerChange={transcriptProcessor.setSelectedSpeaker}
+                recordingId={transcriptProcessor.currentRecordingId || undefined}
                 width={sidebarManager.rightSidebarWidth}
               />
             </div>

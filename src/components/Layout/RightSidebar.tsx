@@ -30,6 +30,7 @@ interface RightSidebarProps {
   speechAnalysis?: SpeechAnalysis;
   selectedSpeaker?: string;
   onSpeakerChange?: (speaker: string) => void;
+  recordingId?: string;
   width?: number;
 }
 
@@ -45,6 +46,7 @@ const RightSidebar: React.FC<RightSidebarProps> = ({
   
   selectedSpeaker,
   onSpeakerChange,
+  recordingId,
   width = 320
 }) => {
   const collapsedWidth = 70; // Width when collapsed
@@ -59,12 +61,30 @@ const RightSidebar: React.FC<RightSidebarProps> = ({
   const [normError, setNormError] = useState<string | null>(null);
   const [norms, setNorms] = useState<ChildesNormsResponse | null>(null);
 
+  // Persist the "Sample Details" form (year/month/range) so it's entered once and
+  // remembered per recording; changing it and re-running just overwrites the saved set.
+  const normFormKey = `sate_norm_form:${recordingId || 'default'}`;
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(normFormKey);
+      if (!raw) return;
+      const f = JSON.parse(raw);
+      if (typeof f.year === 'string') setNormYear(f.year);
+      if (typeof f.month === 'string') setNormMonth(f.month);
+      if (typeof f.range === 'string') setNormRange(f.range);
+    } catch { /* localStorage unavailable — keep defaults */ }
+  }, [normFormKey]);
+
   const runNormComparison = async () => {
     const year = parseInt(normYear, 10);
     if (Number.isNaN(year)) {
       setNormError('Year is required.');
       return;
     }
+    // Save the current form so it pre-fills next time.
+    try {
+      localStorage.setItem(normFormKey, JSON.stringify({ year: normYear, month: normMonth, range: normRange }));
+    } catch { /* ignore */ }
     setNormLoading(true);
     setNormError(null);
     try {
