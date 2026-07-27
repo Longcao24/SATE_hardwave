@@ -9,6 +9,7 @@ interface ActionButtonsPanelProps {
   isEditable?: boolean;
   undoRedo: UndoRedoReturn;
   transcriptData: Segment[];
+  recordingId?: string;
   onTranscriptChange?: (updatedSegments: Segment[]) => void;
   onSaveChanges?: () => void;
   onCancelEdit?: () => void;
@@ -19,6 +20,7 @@ export const ActionButtonsPanel: React.FC<ActionButtonsPanelProps> = ({
   isEditable,
   undoRedo,
   transcriptData,
+  recordingId,
   onTranscriptChange,
   onSaveChanges,
   onCancelEdit,
@@ -145,6 +147,7 @@ export const ActionButtonsPanel: React.FC<ActionButtonsPanelProps> = ({
       <SateReportPopup
         isOpen={showSateReportPopup}
         onClose={() => setShowSateReportPopup(false)}
+        recordingId={recordingId}
       />
     </>
   );

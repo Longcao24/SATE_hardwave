@@ -216,9 +216,39 @@ function fullHtmlDoc(body: string, forWord: boolean): string {
     `<body>${body}</body></html>`;
 }
 
-export const SateReportPopup: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, onClose }) => {
+// Persist the typed patient age so it's entered once and remembered. Keyed per
+// recording when we know which one; falls back to a global key otherwise.
+const ageStorageKey = (recordingId?: string) =>
+  recordingId ? `sate_report_age:${recordingId}` : 'sate_report_age';
+
+export const SateReportPopup: React.FC<{ isOpen: boolean; onClose: () => void; recordingId?: string }> = ({
+  isOpen, onClose, recordingId,
+}) => {
+  const storageKey = ageStorageKey(recordingId);
+  const [age, setAge] = React.useState<string>('6;0');
+
+  // Load the saved age whenever the report opens for a (different) recording.
+  React.useEffect(() => {
+    if (!isOpen) return;
+    try {
+      const saved = localStorage.getItem(storageKey);
+      if (saved != null && saved !== '') setAge(saved);
+    } catch { /* localStorage unavailable — keep the default */ }
+  }, [isOpen, storageKey]);
+
+  const onAgeChange = (v: string) => {
+    setAge(v);
+    try { localStorage.setItem(storageKey, v); } catch { /* ignore */ }
+  };
+
   if (!isOpen) return null;
-  const body = buildReportBody(REPORT);
+
+  // Inject the saved/typed age into the report so the preview AND both exports use it.
+  const data: ReportData = {
+    ...REPORT,
+    header: REPORT.header.map((h) => (h.label === 'Age' ? { ...h, value: age } : h)),
+  };
+  const body = buildReportBody(data);
 
   const exportPdf = () => {
     // Print via a hidden iframe (Save as PDF) — preserves the exact layout/colors.
@@ -256,6 +286,16 @@ export const SateReportPopup: React.FC<{ isOpen: boolean; onClose: () => void }>
         <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
           <h2 className="text-base font-semibold text-gray-900">SATE Report</h2>
           <div className="flex items-center gap-2">
+            <label className="flex items-center gap-1.5 text-sm text-gray-600 mr-1">
+              <span className="whitespace-nowrap">Patient age</span>
+              <input
+                value={age}
+                onChange={(e) => onAgeChange(e.target.value)}
+                placeholder="Y;M"
+                className="w-16 px-2 py-1 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-teal-500 focus:outline-none"
+                title="Enter once (e.g. 6;0) — it's saved and reused for this report"
+              />
+            </label>
             <button onClick={exportPdf}
               className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800 transition-colors">
               <FileText className="w-4 h-4" /> Export PDF

@@ -200,6 +200,7 @@ const MainContent: React.FC<MainContentProps> = ({
                 isEditable={isEditable}
                 undoRedo={undoRedo}
                 transcriptData={transcriptData}
+                recordingId={recordingId}
                 onTranscriptChange={onTranscriptChange}
                 onSaveChanges={onSaveChanges}
                 onCancelEdit={onCancelEdit}
