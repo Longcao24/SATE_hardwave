@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Undo, Redo, Download, Save, X, Edit2 } from 'lucide-react';
+import { Undo, Redo, Download, Save, X, Edit2, FileText } from 'lucide-react';
 import { SaltExportPopup } from '@/components/Modals/SaltExportPopup';
+import { SateReportPopup } from '@/components/Modals/SateReportPopup';
 import type { Segment } from '@/services/dataService';
 import type { UndoRedoReturn } from '@/hooks/useUndoRedo';
 
@@ -24,6 +25,7 @@ export const ActionButtonsPanel: React.FC<ActionButtonsPanelProps> = ({
   onShowCancelConfirmation,
 }) => {
   const [showSaltExportPopup, setShowSaltExportPopup] = useState(false);
+  const [showSateReportPopup, setShowSateReportPopup] = useState(false);
 
   return (
     <>
@@ -68,6 +70,16 @@ export const ActionButtonsPanel: React.FC<ActionButtonsPanelProps> = ({
         >
           <Download className="w-4 h-4" />
           Export SALT
+        </button>
+
+        {/* Generate SATE Report */}
+        <button
+          onClick={() => setShowSateReportPopup(true)}
+          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-teal-700 bg-white border border-teal-300 rounded-lg hover:bg-teal-50 focus:ring-2 focus:ring-teal-500 focus:ring-offset-2 focus:outline-none transition-all duration-200 shadow-sm"
+          title="Generate a SATE clinical report (PDF / Word)"
+        >
+          <FileText className="w-4 h-4" />
+          SATE Report
         </button>
 
       {/* Edit Mode Toggle */}
@@ -127,6 +139,12 @@ export const ActionButtonsPanel: React.FC<ActionButtonsPanelProps> = ({
         isOpen={showSaltExportPopup}
         onClose={() => setShowSaltExportPopup(false)}
         transcriptData={transcriptData}
+      />
+
+      {/* SATE Report Popup */}
+      <SateReportPopup
+        isOpen={showSateReportPopup}
+        onClose={() => setShowSateReportPopup(false)}
       />
     </>
   );
