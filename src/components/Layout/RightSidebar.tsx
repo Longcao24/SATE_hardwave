@@ -72,6 +72,9 @@ const RightSidebar: React.FC<RightSidebarProps> = ({
       if (typeof f.year === 'string') setNormYear(f.year);
       if (typeof f.month === 'string') setNormMonth(f.month);
       if (typeof f.range === 'string') setNormRange(f.range);
+      // Restore the last comparison RESULT too, so the bars render immediately
+      // without having to re-run — persisting the outcome, not just the inputs.
+      if (f.norms) setNorms(f.norms as ChildesNormsResponse);
     } catch { /* localStorage unavailable — keep defaults */ }
   }, [normFormKey]);
 
@@ -99,6 +102,12 @@ const RightSidebar: React.FC<RightSidebarProps> = ({
         range,
       });
       setNorms(res);
+      // Remember the full result (form + fetched norms) so it's restored on reopen.
+      try {
+        localStorage.setItem(normFormKey, JSON.stringify({
+          year: normYear, month: normMonth, range: normRange, norms: res,
+        }));
+      } catch { /* ignore */ }
     } catch (e: any) {
       setNormError(e?.message || 'Failed to fetch norms.');
       setNorms(null);
