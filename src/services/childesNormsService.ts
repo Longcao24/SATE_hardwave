@@ -1,10 +1,12 @@
 // CHILDES normative-metrics API client.
-// Backend returns age-windowed reference means/SDs (MLUm, MLUw) from CHILDES
-// corpora, used by the Analysis tab to compare a speaker against TD norms.
+// Returns age-windowed reference means/SDs (MLUm, MLUw) from CHILDES corpora, used by
+// the Analysis tab to compare a speaker against TD norms.
+//
+// Calls go through the `childes-norms` Supabase edge function, which proxies the
+// upstream norms service server-side and adds the CORS headers the upstream lacks — a
+// direct browser fetch to it fails with "Failed to fetch".
 
-const BASE_URL =
-  (import.meta.env.VITE_CHILDES_API_URL as string | undefined) ||
-  'https://childes-metrics.ngrok.app';
+import { supabase } from '../lib/supabase';
 
 export interface ChildesMetric {
   mean: number;
@@ -41,22 +43,19 @@ export interface ChildesNormsQuery {
 export async function fetchChildesNorms(
   q: ChildesNormsQuery,
 ): Promise<ChildesNormsResponse> {
-  const params = new URLSearchParams();
-  params.set('language', q.language ?? 'Eng-NA');
-  params.set('task', q.task ?? 'narrative');
-  if (q.clinical) params.set('clinical', q.clinical);
-  params.set('year', String(q.year));
-  if (q.month !== undefined && q.month !== null && !Number.isNaN(q.month)) {
-    params.set('month', String(q.month));
-    if (q.range !== undefined && q.range !== null && !Number.isNaN(q.range)) {
-      params.set('range', String(q.range));
-    }
+  const { data, error } = await supabase.functions.invoke('childes-norms', {
+    body: {
+      language: q.language ?? 'Eng-NA',
+      task: q.task ?? 'narrative',
+      clinical: q.clinical,
+      year: q.year,
+      month: q.month,
+      range: q.range,
+    },
+  });
+  if (error) throw new Error(error.message || 'Failed to fetch norms.');
+  if (data && (data as { error?: string }).error) {
+    throw new Error((data as { error: string }).error);
   }
-  params.set('samples', '0'); // means + counts only
-
-  const res = await fetch(`${BASE_URL}/query?${params.toString()}`);
-  if (!res.ok) {
-    throw new Error(`CHILDES norms API ${res.status}: ${await res.text()}`);
-  }
-  return (await res.json()) as ChildesNormsResponse;
+  return data as ChildesNormsResponse;
 }
