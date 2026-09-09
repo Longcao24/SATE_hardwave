@@ -97,7 +97,18 @@ export const getRecordingUrl = async (path: string): Promise<string | null> => {
 };
 
 // Load recording data from database with full analysis
-export const loadRecording = async (recordingId: string): Promise<{
+/**
+ * Load a recording.
+ *
+ * `opts.baseline` is what makes a later save able to detect a conflict, and ONLY the transcript
+ * editor may pass it. A READ MUST NOT MUTATE THE WRITE-SAFETY TOKEN: this function is also
+ * called by the sidebar's patient-context effect, by the patient stats loop and by the report
+ * service, and any of those landing between the editor's load and its Save used to re-stamp the
+ * baseline to the server's CURRENT version — so a stale save was accepted with no 409 and the
+ * other clinician's edits were silently overwritten. That defeated the whole compare-and-swap
+ * while every direct test of the RPC still passed.
+ */
+export const loadRecording = async (recordingId: string, opts?: { baseline?: boolean }): Promise<{
   transcript: TranscriptData;
   errorCounts: IssueCounts;
   analysis: SpeechAnalysis;
@@ -121,9 +132,11 @@ export const loadRecording = async (recordingId: string): Promise<{
     }
 
     const audioUrl = await getRecordingUrl(recording.file_path);
-    // Remember which version this editor is working from, so a save can tell the server
-    // "I edited version N" and be refused if someone else has saved since.
-    lastSeenVersion.set(recordingId, Number(recording.version ?? 1));
+    if (opts?.baseline) {
+      // The version this editor is working from. A save sends it as the expected version and
+      // is refused if the row has moved on since.
+      lastSeenVersion.set(recordingId, Number(recording.version ?? 1));
+    }
 
     return {
       transcript: recording.transcript as TranscriptData,
@@ -256,6 +269,9 @@ export const deleteRecording = async (
 // of silently overwriting the other editor's work.
 const lastSeenVersion = new Map<string, number>();
 
+/** Drop every baseline. Called on sign-out: the next user's editor must capture its own. */
+export const clearTranscriptBaselines = () => lastSeenVersion.clear();
+
 // Update existing recording with modified transcript data
 export const updateRecording = async (
   recordingId: string,
@@ -271,10 +287,18 @@ export const updateRecording = async (
     // previous transcript in recording_versions and does a compare-and-swap on `version`,
     // so two people editing the same transcript no longer means one of them silently
     // loses their work. A direct .update() had no version check at all: last write won.
+    const expectedVersion = lastSeenVersion.get(recordingId) ?? null;
+    if (expectedVersion === null) {
+      // Should not happen: the editor always loads with baseline:true before it can edit.
+      // Saving anyway (refusing would lose the user's work) but WITHOUT conflict detection —
+      // so make the gap visible rather than pretending the CAS ran.
+      console.warn(`save_transcript: no baseline version for ${recordingId} — saving without `
+        + `conflict detection. A concurrent edit will not be caught.`);
+    }
     const { data, error: updateError } = await supabase
       .rpc('save_transcript', {
         p_recording_id: recordingId,
-        p_expected_version: lastSeenVersion.get(recordingId) ?? null,
+        p_expected_version: expectedVersion,
         p_transcript: transcriptData,
         p_error_counts: errorCounts,
         p_analysis: analysis,

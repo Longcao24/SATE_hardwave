@@ -1,4 +1,4 @@
-// SATE Device API — Supabase Edge Function              [v23]
+// SATE Device API — Supabase Edge Function              [v24]
 // Replaces the mock-server's Express endpoints with a single Edge Function
 // that does internal path routing. Authenticated via Supabase JWT (users) or a
 // device key (the recorder).
@@ -20,6 +20,11 @@
 // v17: a `record` command may carry {seconds:N} — the firmware stops the take
 //      ITSELF at exactly N seconds of PCM (sample-exact), instead of the caller
 //      racing a `stop` through the poll channel (+3-12 s of slop)
+// v24: GET /devices/:id/commands now requires the presented device key to MATCH that device —
+//      it previously accepted the bare prefix `Bearer key-` for any device id, which leaked the
+//      queued record command's patient payload and let a caller consume another recorder's
+//      commands (swallowing a queued stop/record). POST /devices/register refuses a serial that
+//      is already claimed by a different account.
 // v23: DELETE /sessions/:id checks EVERY removal's error instead of swallowing it, keeps the
 //      session row on a partial failure so the delete stays retryable, and records what was
 //      actually removed — the audit row used to assert a deletion that may not have happened.
@@ -120,7 +125,23 @@ serve(async (req) => {
   const deviceCommandMatch = subPath.match(/^\/devices\/([^/]+)\/commands$/);
   if (deviceCommandMatch && method === 'GET') {
     const deviceId = deviceCommandMatch[1];
+    // [v24] This used to authorize on `authHeader.startsWith('Bearer key-')` and never compare
+    // the presented key to the :deviceId in the URL — so the literal header `Bearer key-` with
+    // any device id was accepted. That let anyone: read the queued `record` command's payload
+    // (patient id, name, age, session type, clinician) and the OTA url; overwrite that device's
+    // row; and — worst — CONSUME its commands, because the handler marks every unconsumed row
+    // consumed. The real recorder polling seconds later got an empty list, so a queued `stop`
+    // was swallowed (the take ran to the ~62-min ceiling) and a queued `record` never started
+    // (the clinical session was simply never captured).
+    //
+    // The key is `'key-' + device id` (handleDeviceRegister), which is exactly what the firmware
+    // stores and sends, so an equality check is what the fleet is already doing — no device is
+    // affected. NOTE this only makes the key self-consistent; it does NOT make it a secret,
+    // because it is still derived from the serial. See the header note on device-key auth.
     if (authHeader.startsWith('Bearer key-')) {
+      if (authHeader !== `Bearer ${deviceKeyFor(deviceId)}`) {
+        return err('Device key does not match this device', 401);
+      }
       return await handleDeviceHeartbeat(supabase, req, deviceId);
     }
   }
@@ -320,6 +341,20 @@ async function handleDeviceRegister(supabase: any, req: Request) {
   }
 
   const id = 'dev-' + serial.toLowerCase();
+
+  // [v24] The upsert below keys on `id`, which is derived from the serial — so without this
+  // check a caller holding a claim token for THEIR OWN account could re-point an already
+  // provisioned recorder at themselves just by naming its serial. The physical device keeps
+  // working (its stored key is unchanged and still valid), so every subsequent patient session
+  // would land in the new owner's account while disappearing from the real clinician's.
+  // Re-registering your own device is normal (factory reset, re-claim) and stays allowed.
+  const { data: owned } = await supabase.from('sate_devices')
+    .select('user_id').eq('id', id).maybeSingle();
+  if (owned && owned.user_id && owned.user_id !== userId) {
+    return err('That recorder is already claimed by another account. Have its current owner '
+      + 'remove it first, or factory-reset the device.', 409);
+  }
+
   const { error } = await supabase.from('sate_devices').upsert({
     id, user_id: userId, name: serial, serial, fw: fw || '', online: true,
     ip: req.headers.get('x-forwarded-for') || '',
@@ -328,7 +363,7 @@ async function handleDeviceRegister(supabase: any, req: Request) {
   }, { onConflict: 'id' });
   if (error) throw new Error(error.message);
 
-  return json({ device_id: id, device_key: 'key-' + id, slp: slpName, slp_id: slpId });
+  return json({ device_id: id, device_key: deviceKeyFor(id), slp: slpName, slp_id: slpId });
 }
 
 async function sendCommand(supabase: any, userId: string, deviceId: string, req: Request) {
@@ -354,6 +389,16 @@ async function sendCommand(supabase: any, userId: string, deviceId: string, req:
     }, { onConflict: 'user_id,patient_id' });
   }
   return noContent();
+}
+
+/**
+ * The device key for a device id. Derived, NOT a secret — it is `'key-' + id` and the id is
+ * `'dev-' + serial`, so anyone who can read the serial off the case (or hear it over BLE) can
+ * compute it. Keep every device-key route going through this ONE function so that when the
+ * fleet is re-keyed to a stored random secret there is a single place to change.
+ */
+function deviceKeyFor(deviceId: string): string {
+  return 'key-' + deviceId;
 }
 
 async function handleDeviceHeartbeat(supabase: any, req: Request, deviceId: string) {
@@ -1030,7 +1075,15 @@ async function storeSessionRecord(
   }
 
   const sessionId = 's-' + crypto.randomUUID().slice(0, 8);
-  const storagePath = `${userId}/${meta.device_serial}/${sessionId}.wav`;
+  // [v24] device_serial goes into a storage PATH, and on the user-authed POST /sessions it comes
+  // straight from the request body (the phone app uploads for a Plaud/BLE device that has no
+  // device key). Unsanitised, a serial like "../../<other-uuid>/x" aims a SERVICE-KEY,
+  // x-upsert:true write at another account's prefix. patient_id on the chunk path is already
+  // stripped for exactly this reason (see partDir) — the serial was the one that got missed.
+  // Only the path segment is sanitised: the ROW keeps the raw serial, because /sessions/verify
+  // and the dedup probe match on the value the recorder sends.
+  const serialSegment = String(meta.device_serial || '').replace(/[^A-Za-z0-9_-]/g, '') || 'unknown';
+  const storagePath = `${userId}/${serialSegment}/${sessionId}.wav`;
 
   // THROW - never just log. This used to `console.error` and carry on inserting
   // the row, so a rejected upload still returned 2xx: the recorder marked the

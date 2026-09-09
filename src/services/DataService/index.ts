@@ -31,6 +31,7 @@ export {
   loadAndAnalyzeLocalJSON,
   deleteRecording,
   updateRecording,
+  clearTranscriptBaselines,
   updateRecordingName,
 } from './recordingStorage';
 

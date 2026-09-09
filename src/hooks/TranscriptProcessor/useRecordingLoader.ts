@@ -93,7 +93,9 @@ export function useRecordingLoader(deps: RecordingLoaderDeps) {
       deps.setIsEditMode(false);
       
       // Load complete recording data
-      const recordingData = await loadRecording(recordingId);
+      // baseline:true — this is the EDITOR's load, so it is the one read allowed to set the
+      // version a later save will be checked against.
+      const recordingData = await loadRecording(recordingId, { baseline: true });
       if (recordingData) {
         // Normalize segments to ensure all pauses have proper index field
         const normalizedSegments = normalizeSegments(recordingData.transcript.segments);

@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
+import { clearTranscriptBaselines } from '@/services/dataService';
 import type { Session, User } from '@supabase/supabase-js';
 import { validateInviteCode, useInviteCode } from '@/services/inviteCodeService';
 
@@ -224,6 +225,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const signOut = async () => {
     const { error } = await supabase.auth.signOut();
     if (error) throw error;
+    // The transcript conflict-detection baselines are per-editor-session and must not outlive
+    // the account: the next user to open the same recording has to capture their own, or their
+    // first save would be checked against a version this browser saw as somebody else.
+    clearTranscriptBaselines();
   };
 
   const value: AuthContextValue = {

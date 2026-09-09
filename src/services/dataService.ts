@@ -40,6 +40,7 @@ export {
   loadAndAnalyzeLocalJSON,
   deleteRecording,
   updateRecording,
+  clearTranscriptBaselines,
   updateRecordingName,
   updateRecordingMetadata,
   updateRecordingPatient,
