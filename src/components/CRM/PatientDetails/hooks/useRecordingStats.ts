@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { loadRecording } from '@/services/dataService';
 import { type RecordingStats } from '../types';
+import { recordingLabel } from '@/services/recordingName';
 
 export const useRecordingStats = (recordings: any[] | undefined, patientId?: string) => {
   const [recordingStats, setRecordingStats] = useState<RecordingStats[]>([]);
@@ -41,7 +42,7 @@ export const useRecordingStats = (recordings: any[] | undefined, patientId?: str
 
             stats.push({
               id: recording.id,
-              fileName: recording.recording_name || recording.file_name,
+              fileName: recordingLabel(recording.recording_name || recording.file_name),
               createdAt: recording.created_at,
               duration: data.analysis?.totalDuration || 0,
               totalWords,

@@ -4,13 +4,15 @@
 // Sessions whose audio held no speech are marked "No text in audio" (no report
 // is created) and can be deleted from here.
 
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { UploadedSession } from '@/services/device/deviceTypes';
 import { formatSessionDuration, timeAgo } from '@/hooks/useDevices';
-import { CheckCircle2, Loader2, AlertCircle, FileAudio, MicOff, Trash2, Clock, RotateCw } from 'lucide-react';
+import { CheckCircle2, Loader2, AlertCircle, FileAudio, MicOff, Trash2, Clock, RotateCw, Sparkles } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { deviceApiService } from '@/services/device/deviceApiService';
 import { useDeviceContext } from '@/contexts/DeviceProvider';
+import { notesApiService, isWorking, noteStageLabel } from '@/services/notesApiService';
+import { sessionLabel } from '@/services/recordingName';
 
 interface DeviceSessionStatusProps {
   sessions: UploadedSession[];
@@ -44,6 +46,106 @@ export function DeviceSessionStatus({ sessions }: DeviceSessionStatusProps) {
   const { refresh } = useDeviceContext();
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [retryingId, setRetryingId] = useState<string | null>(null);
+
+  // Voice Notes is an opt-in feature an admin turns on per account. Everything below is
+  // additive: with it off, this list renders exactly as it always has.
+  const [notesOn, setNotesOn] = useState(false);
+  const [noteOf, setNoteOf] = useState<Record<string, { id: string; status: string; title: string | null; chunks_done?: number; chunks_total?: number }>>({});
+  const [optedOut, setOptedOut] = useState<Set<string>>(new Set());
+  const [makingId, setMakingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    notesApiService.access().then((a) => { if (!cancelled) setNotesOn(Boolean(a?.enabled)); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const loadNotes = useCallback(async () => {
+    if (!notesOn || sessions.length === 0) return;
+    const res = await notesApiService.bySource(sessions.map((s) => s.id));
+    setNoteOf(res.notes);
+    setOptedOut(new Set(res.optedOut));
+  }, [notesOn, sessions]);
+
+  useEffect(() => { loadNotes(); }, [loadNotes]);
+
+  // A note being transcribed will finish on its own; check back until it settles so the
+  // button flips from "Making…" to "View note" without a page reload.
+  useEffect(() => {
+    if (!Object.values(noteOf).some((n) => isWorking(n.status))) return;
+    const t = setTimeout(loadNotes, 5000);
+    return () => clearTimeout(t);
+  }, [noteOf, loadNotes]);
+
+  // Auto-generate a note for a new recording, so nobody has to press anything.
+  //
+  // ⚠️ RECENT ONLY, and one at a time. This account has 176 sessions; sweeping the whole
+  // history on first page load would spend real money on Workers AI and bury the list under a
+  // hundred notes nobody asked for. A 24-hour window is what "new recordings get a note"
+  // actually means — anything older is still one click away on its own row.
+  //
+  // It runs while the page is open, which is the honest limit of doing this client-side: the
+  // alternative is forwarding from the upload path, and that path is the one that has already
+  // destroyed a recording once when it was got wrong.
+  const AUTO_NOTE_WINDOW_MS = 24 * 60 * 60 * 1000;
+  const autoTried = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!notesOn || makingId) return;
+    const now = Date.now();
+    const next = sessions.find((s) =>
+      statusOf(s) === 'ready' &&
+      !noteOf[s.id] &&
+      !optedOut.has(s.id) &&        // deleted on purpose — do not undo that
+      !autoTried.current.has(s.id) &&
+      now - new Date(s.at).getTime() < AUTO_NOTE_WINDOW_MS,
+    );
+    if (!next) return;
+    // Marked before the call, not after: a failure must not be retried on every render.
+    autoTried.current.add(next.id);
+    (async () => {
+      setMakingId(next.id);
+      try {
+        await notesApiService.fromSession({
+          session_id: next.id,
+          device_serial: next.device_serial,
+          session_number: next.session_number,
+          flags: Array.isArray(next.flags) ? next.flags : undefined,
+        });
+        await loadNotes();
+      } catch (err) {
+        console.error('Auto meeting note failed:', err);   // the row's button still offers a retry
+      } finally {
+        setMakingId(null);
+      }
+    })();
+  }, [notesOn, sessions, noteOf, optedOut, makingId, loadNotes, AUTO_NOTE_WINDOW_MS]);
+
+  const handleMakeNote = async (e: React.MouseEvent, s: UploadedSession) => {
+    e.stopPropagation();
+    const existing = noteOf[s.id];
+    if (existing) { navigate(`/notes#${existing.id}`); return; }
+    if (makingId) return;
+    setMakingId(s.id);
+    try {
+      const res = await notesApiService.fromSession({
+        session_id: s.id,
+        device_serial: s.device_serial,
+        session_number: s.session_number,
+        folder_id: s.patient_id,
+        // Carry the flag-button marks across. They live on the clinical session row and are
+        // the one thing this hardware records that a phone cannot; a note without them loses
+        // exactly the moments the user reached out and marked.
+        flags: Array.isArray(s.flags) ? s.flags : undefined,
+      });
+      navigate(`/notes#${res.id}`);
+    } catch (err) {
+      console.error('Failed to generate a meeting note:', err);
+      window.alert(`Could not generate a meeting note: ${(err as Error).message}`);
+    } finally {
+      setMakingId(null);
+    }
+  };
 
   const handleRetry = async (e: React.MouseEvent, s: UploadedSession) => {
     e.stopPropagation();
@@ -80,9 +182,11 @@ export function DeviceSessionStatus({ sessions }: DeviceSessionStatusProps) {
 
   return (
     <div className="mt-6">
-      <h3 className="text-sm font-bold text-gray-900 mb-1">Recent Sessions</h3>
+      <h3 className="text-sm font-bold text-gray-900 mb-1">
+        Sessions{sessions.length > 0 && <span className="ml-1.5 font-medium text-gray-400">{sessions.length}</span>}
+      </h3>
       <p className="text-xs text-gray-400 mb-3">
-        Uploaded to SATE and processed automatically — no sync needed.
+        Every take this recorder has uploaded. Processed automatically — no sync needed.
       </p>
       <div className="device-sessions-list">
         {sessions.length === 0 ? (
@@ -105,7 +209,7 @@ export function DeviceSessionStatus({ sessions }: DeviceSessionStatusProps) {
               >
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-semibold text-gray-900 truncate">
-                    Session {s.session_number} · {s.patient_id}
+                    {sessionLabel(s.device_serial, s.session_number)} · {s.patient_id}
                   </p>
                   <p className="text-xs text-gray-400 mt-0.5">
                     {formatSessionDuration(s.bytes, s.sample_rate)} · {timeAgo(s.at)}
@@ -160,6 +264,40 @@ export function DeviceSessionStatus({ sessions }: DeviceSessionStatusProps) {
                       <RotateCw className="w-3 h-3" />
                     )}
                     Retry
+                  </button>
+                )}
+
+                {/* A meeting note only makes sense for a recording that HAS speech. The clinical
+                    pipeline already decided that: a "No text in audio" session would only
+                    produce a hallucinated summary, so it is not offered one. Sessions still
+                    processing are not offered one either — wait for that verdict. */}
+                {notesOn && ready && (
+                  <button
+                    type="button"
+                    onClick={(e) => handleMakeNote(e, s)}
+                    disabled={makingId === s.id}
+                    title={
+                      noteOf[s.id]
+                        ? (isWorking(noteOf[s.id].status)
+                            ? noteStageLabel(noteOf[s.id])
+                            : 'Open the meeting note for this recording')
+                        : 'Transcribe and summarise this recording as a meeting note'
+                    }
+                    className="ml-2 flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 rounded-lg hover:bg-indigo-100 disabled:opacity-50"
+                  >
+                    {makingId === s.id ? (
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                    ) : (
+                      <Sparkles className="w-3 h-3" />
+                    )}
+                    {noteOf[s.id]
+                      ? (isWorking(noteOf[s.id].status)
+                          // Say which part it is on, so a long recording does not look stuck.
+                          ? (noteOf[s.id].chunks_total
+                              ? `Note ${noteOf[s.id].chunks_done ?? 0}/${noteOf[s.id].chunks_total}`
+                              : 'Note…')
+                          : 'View note')
+                      : 'Meeting note'}
                   </button>
                 )}
 

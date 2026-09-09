@@ -10,6 +10,7 @@ import type {
   FirmwareInfo,
   AdminDevice,
   AdminFirmware,
+  AdminUser,
 } from './deviceTypes';
 import { supabase } from '@/lib/supabase';
 
@@ -213,6 +214,10 @@ export const deviceApiService = {
   /** Every recorder in the system, with its owner's email. */
   async adminListDevices(): Promise<AdminDevice[]> {
     return req<AdminDevice[]>('/admin/devices');
+  },
+  /** Every account in the system, for the admin user manager. */
+  async adminListUsers(): Promise<AdminUser[]> {
+    return req<AdminUser[]>('/admin/users');
   },
   /** Every published firmware release. */
   async adminListFirmware(): Promise<AdminFirmware[]> {

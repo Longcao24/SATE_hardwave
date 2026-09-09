@@ -111,7 +111,7 @@ export const loadRecording = async (recordingId: string): Promise<{
   try {
     const { data: recording, error } = await supabase
       .from('recordings')
-      .select('transcript, error_counts, analysis, file_path, file_name, recording_name, created_at, flags, flag_notes')
+      .select('transcript, error_counts, analysis, file_path, file_name, recording_name, created_at, flags, flag_notes, version')
       .eq('id', recordingId)
       .single();
 
@@ -121,6 +121,9 @@ export const loadRecording = async (recordingId: string): Promise<{
     }
 
     const audioUrl = await getRecordingUrl(recording.file_path);
+    // Remember which version this editor is working from, so a save can tell the server
+    // "I edited version N" and be refused if someone else has saved since.
+    lastSeenVersion.set(recordingId, Number(recording.version ?? 1));
 
     return {
       transcript: recording.transcript as TranscriptData,
@@ -248,32 +251,50 @@ export const deleteRecording = async (
   }
 };
 
+// The version of each recording this browser last loaded or saved. A transcript save
+// sends it as the expected version; if the row has moved on, the save is refused instead
+// of silently overwriting the other editor's work.
+const lastSeenVersion = new Map<string, number>();
+
 // Update existing recording with modified transcript data
 export const updateRecording = async (
   recordingId: string,
   transcriptData: TranscriptData,
   userId: string
-): Promise<{ success: boolean; error?: string }> => {
+): Promise<{ success: boolean; error?: string; conflict?: boolean }> => {
   try {
     // Recalculate error counts and analysis with updated transcript
     const errorCounts = countErrors(transcriptData.segments);
     const analysis = calculateSpeechAnalysis(transcriptData);
 
-    // Update the recording in the database
-    const { error: updateError } = await supabase
-      .from('recordings')
-      .update({
-        transcript: transcriptData,
-        error_counts: errorCounts,
-        analysis: analysis,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', recordingId)
-      .eq('user_id', userId); // Ensure user can only update their own recordings
+    // Save through save_transcript() rather than a direct table update. It keeps the
+    // previous transcript in recording_versions and does a compare-and-swap on `version`,
+    // so two people editing the same transcript no longer means one of them silently
+    // loses their work. A direct .update() had no version check at all: last write won.
+    const { data, error: updateError } = await supabase
+      .rpc('save_transcript', {
+        p_recording_id: recordingId,
+        p_expected_version: lastSeenVersion.get(recordingId) ?? null,
+        p_transcript: transcriptData,
+        p_error_counts: errorCounts,
+        p_analysis: analysis,
+        p_segments_edited: true,
+      });
 
     if (updateError) {
+      if (updateError.code === 'PT409') {
+        return {
+          success: false,
+          conflict: true,
+          error: 'Someone else saved changes to this transcript while you were editing. '
+               + 'Reload the recording to see their version before saving again.',
+        };
+      }
       return { success: false, error: `Database update failed: ${updateError.message}` };
     }
+
+    const saved = Array.isArray(data) ? data[0] : data;
+    if (saved?.version != null) lastSeenVersion.set(recordingId, Number(saved.version));
 
     // Refresh recordings list in React Query cache
     queryClient.invalidateQueries({ queryKey: ['recordings', userId] });

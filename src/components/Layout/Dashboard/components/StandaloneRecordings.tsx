@@ -1,4 +1,5 @@
 import React from 'react';
+import { recordingLabel } from '@/services/recordingName';
 import { useNavigate } from 'react-router-dom';
 import { 
   FileAudio, 
@@ -74,7 +75,7 @@ const StandaloneRecordings: React.FC<StandaloneRecordingsProps> = ({
               <div className="flex items-center justify-between">
                 <div className="flex-1 min-w-0">
                   <h3 className="text-lg font-medium text-gray-900 mb-1 truncate" title={recording.recording_name || recording.file_name}>
-                    {truncateFileName(recording.recording_name || recording.file_name, 60)}
+                    {truncateFileName(recordingLabel(recording.recording_name || recording.file_name), 60)}
                   </h3>
                   <div className="flex items-center gap-4 text-sm text-gray-600">
                     <span className="flex items-center gap-1">

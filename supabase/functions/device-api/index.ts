@@ -1,4 +1,4 @@
-// SATE Device API — Supabase Edge Function              [v18]
+// SATE Device API — Supabase Edge Function              [v22]
 // Replaces the mock-server's Express endpoints with a single Edge Function
 // that does internal path routing. Authenticated via Supabase JWT (users) or a
 // device key (the recorder).
@@ -20,6 +20,10 @@
 // v17: a `record` command may carry {seconds:N} — the firmware stops the take
 //      ITSELF at exactly N seconds of PCM (sample-exact), instead of the caller
 //      racing a `stop` through the poll channel (+3-12 s of slop)
+// v22: POST /firmware is admin-gated (it was reachable by any signed-in account);
+//      DELETE /sessions/:id also removes the derived `recordings` row + its audio
+//      (delete used to leave the clinical copy behind); retry and delete both write
+//      a `sate_session_audit` row so a failure stays traceable after a retry clears it.
 // v18: GET /health/alerts?key=… — secret-gated error digest (pipeline errors/stuck,
 //      recent errors, offline devices) for the 5-min status worker's email alerts.
 // v16: GET /sessions/upload-progress — live bytes of an IN-FLIGHT chunked upload
@@ -179,6 +183,10 @@ serve(async (req) => {
       return await getLatestFirmware(supabase);
     }
     if (subPath === '/firmware' && method === 'POST') {
+      // [v22] This publishes an OTA image to the WHOLE fleet. It used to sit above the
+      // `/admin` block with no authorization check at all, so any signed-in account could
+      // push firmware to every recorder. Gate it like the rest of the admin surface.
+      if (!(await isAdmin(supabase, user.email))) return err('Forbidden', 403);
       return await publishFirmware(supabase, req);
     }
 
@@ -196,6 +204,12 @@ serve(async (req) => {
       }
       if (subPath === '/admin/devices' && method === 'GET') {
         return await adminListDevices(supabase);
+      }
+      // [v21] Every account in the system, so an admin can grant a per-account
+      // feature (Voice Notes) from the app's own user manager instead of a
+      // separate console. Read-only: this lists who exists, nothing more.
+      if (subPath === '/admin/users' && method === 'GET') {
+        return await adminListUsers(supabase);
       }
       if (subPath === '/admin/firmware' && method === 'GET') {
         return await adminListFirmware(supabase);
@@ -234,7 +248,8 @@ serve(async (req) => {
       }, wavBytes);
     }
     if (subPath === '/sessions' && method === 'GET') {
-      return await listSessions(supabase, user.id, url.searchParams.get('device'));
+      return await listSessions(supabase, user.id, url.searchParams.get('device'),
+                                url.searchParams.get('limit'));
     }
     if (subPath === '/sessions/upload-progress' && method === 'GET') {
       return await uploadProgress(supabase, user.id, url.searchParams.get('device_serial') || '');
@@ -641,6 +656,36 @@ async function adminListDevices(supabase: any) {
   return json((data || []).map((d: any) => ({ ...d, owner_email: emails[d.user_id] || '' })));
 }
 
+// [v21] All accounts, with the number of recorders each one owns.
+// The uuid is the point: a per-account feature grant is keyed on the Supabase auth
+// id, and asking a user to read their own uuid out of a JWT is not a workflow.
+async function adminListUsers(supabase: any) {
+  const users: any[] = [];
+  let page = 1;
+  for (;;) {
+    const { data, error } = await supabase.auth.admin.listUsers({ page, perPage: 1000 });
+    if (error) throw new Error(error.message);
+    if (!data?.users?.length) break;
+    users.push(...data.users);
+    if (data.users.length < 1000) break;
+    page++;
+  }
+  const { data: devs } = await supabase.from('sate_devices').select('user_id');
+  const deviceCount: Record<string, number> = {};
+  for (const d of devs || []) deviceCount[d.user_id] = (deviceCount[d.user_id] || 0) + 1;
+  const { data: admins } = await supabase.from('sate_admins').select('email');
+  const adminSet = new Set((admins || []).map((a: any) => (a.email || '').toLowerCase()));
+
+  return json(users.map((u) => ({
+    id: u.id,
+    email: u.email || '',
+    created_at: u.created_at,
+    last_sign_in_at: u.last_sign_in_at || null,
+    devices: deviceCount[u.id] || 0,
+    is_admin: adminSet.has((u.email || '').toLowerCase()),
+  })).sort((a, b) => a.email.localeCompare(b.email)));
+}
+
 async function adminListFirmware(supabase: any) {
   const { data, error } = await supabase.from('sate_firmware')
     .select('id, version, url, notes, created_at')
@@ -1015,12 +1060,31 @@ async function storeSessionRecord(
   return json({ id: sessionId });
 }
 
-async function listSessions(supabase: any, userId: string, deviceSerial: string | null) {
+// v19: the cap was 20, which quietly hid a recorder's older takes — the Devices page is the
+// only place a session's history exists once the audio has been reclaimed from the card, so a
+// take falling off the list looks like it was never made. Default 200 (months of use for a
+// recorder that runs a few times a day; the firmware only numbers 1..99 anyway), overridable
+// per request. Still bounded: this is one JSON response, and an unbounded list is a footgun
+// for an account with a fleet.
+const SESSION_LIST_DEFAULT = 200;
+const SESSION_LIST_MAX     = 1000;
+
+async function listSessions(
+  supabase: any, userId: string, deviceSerial: string | null, limitParam: string | null,
+) {
+  const asked = Number(limitParam);
+  const limit = Number.isFinite(asked) && asked > 0
+    ? Math.min(asked, SESSION_LIST_MAX)
+    : SESSION_LIST_DEFAULT;
   let query = supabase.from('sate_device_sessions')
-    .select('id, device_serial, patient_id, session_number, sample_rate, bytes, created_at, processed, processed_at, recording_id, process_error, no_text, status, attempts')
+    // v20: `flags` joined the list. The flag button's ms offsets were stored on the row from
+    // the beginning but never returned here, so nothing downstream of this endpoint could see
+    // them — a meeting note generated from a session silently lost every mark the user had
+    // pressed the button for, which is the one thing the hardware does that a phone cannot.
+    .select('id, device_serial, patient_id, session_number, sample_rate, bytes, created_at, processed, processed_at, recording_id, process_error, no_text, status, attempts, flags')
     .eq('user_id', userId).order('created_at', { ascending: false });
   if (deviceSerial) query = query.eq('device_serial', deviceSerial);
-  const { data, error } = await query.limit(20);
+  const { data, error } = await query.limit(limit);
   if (error) throw new Error(error.message);
   return json((data || []).map((s: any) => ({ ...s, at: s.created_at })));
 }
@@ -1030,9 +1094,16 @@ async function listSessions(supabase: any, userId: string, deviceSerial: string 
 // gives the fresh try its full stall budget again.
 async function retrySession(supabase: any, userId: string, sessionId: string) {
   const { data: row } = await supabase.from('sate_device_sessions')
-    .select('id, status').eq('id', sessionId).eq('user_id', userId).maybeSingle();
+    .select('id, status, process_error, attempts').eq('id', sessionId).eq('user_id', userId).maybeSingle();
   if (!row) return err('Session not found', 404);
   if (row.status !== 'error') return err('Only a failed session can be retried', 409);
+  // [v22] Clearing process_error/attempts is what lets the retry start clean, but it also
+  // erased every trace of the failure being retried. Record it first, so "previous failure
+  // remains traceable" is actually true.
+  await auditSession(supabase, sessionId, userId, 'retry', {
+    previous_error: row.process_error, previous_attempts: row.attempts,
+    previous_status: row.status,
+  });
   const { error } = await supabase.from('sate_device_sessions')
     .update({ status: 'queued', process_error: null, attempts: 0 })
     .eq('id', sessionId).eq('user_id', userId);
@@ -1043,17 +1114,56 @@ async function retrySession(supabase: any, userId: string, sessionId: string) {
 // Delete a single uploaded session (its DB row + the stored WAV). Scoped to the
 // caller's own sessions. Used for "no text in audio" sessions and any cleanup.
 // A linked recording, if any, is left intact (delete that from the report view).
+// [v22] Deleting a session used to remove the session row and its device-sessions object
+// and stop there — the `recordings` row the pipeline derived from it, and that row's copy
+// of the audio in the recordings bucket, both survived. The take still showed in the web
+// app and the audio was still downloadable, so "delete" did not delete the clinical data.
+// Now the derived record goes too, and the deletion is written to the audit trail (which
+// deliberately outlives the row).
 async function deleteSession(supabase: any, userId: string, sessionId: string) {
   const { data: row } = await supabase.from('sate_device_sessions')
-    .select('storage_path').eq('id', sessionId).eq('user_id', userId).maybeSingle();
+    .select('storage_path, recording_id, device_serial, session_number, patient_id, bytes')
+    .eq('id', sessionId).eq('user_id', userId).maybeSingle();
   if (!row) return err('Session not found', 404);
+
   if (row.storage_path) {
     await supabase.storage.from('device-sessions').remove([row.storage_path]).catch(() => {});
   }
+
+  let removedRecording: string | null = null;
+  if (row.recording_id) {
+    const { data: rec } = await supabase.from('recordings')
+      .select('id, file_path').eq('id', row.recording_id).eq('user_id', userId).maybeSingle();
+    if (rec) {
+      if (rec.file_path) {
+        await supabase.storage.from('recordings').remove([rec.file_path]).catch(() => {});
+      }
+      // recording_versions cascades from this delete, so the edit history goes as well.
+      await supabase.from('recordings').delete().eq('id', rec.id).eq('user_id', userId);
+      removedRecording = rec.id;
+    }
+  }
+
   const { error } = await supabase.from('sate_device_sessions')
     .delete().eq('id', sessionId).eq('user_id', userId);
   if (error) throw new Error(error.message);
+
+  await auditSession(supabase, sessionId, userId, 'delete', {
+    device_serial: row.device_serial, session_number: row.session_number,
+    patient_id: row.patient_id, bytes: row.bytes,
+    storage_path: row.storage_path, removed_recording: removedRecording,
+  });
   return noContent();
+}
+
+// Append-only trail. Best effort: an audit write must never fail the user's action, but
+// it must also never be silently skipped, so a failure is logged.
+async function auditSession(
+  supabase: any, sessionId: string, userId: string, action: string, detail: unknown,
+) {
+  const { error } = await supabase.from('sate_session_audit')
+    .insert({ session_id: sessionId, user_id: userId, action, detail });
+  if (error) console.error(`audit ${action} ${sessionId} failed:`, error.message);
 }
 
 async function getSessionAudio(supabase: any, userId: string, sessionId: string) {

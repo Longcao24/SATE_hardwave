@@ -73,6 +73,17 @@ export interface AdminDevice extends ManagedDevice {
   created_at?: string;
 }
 
+/** An account in the system (admin user manager). `id` is the Supabase auth uuid — the key
+ *  a per-account feature grant is written against. */
+export interface AdminUser {
+  id: string;
+  email: string;
+  created_at?: string;
+  last_sign_in_at?: string | null;
+  devices: number;
+  is_admin: boolean;
+}
+
 /** A published firmware release row (admin firmware manager). */
 export interface AdminFirmware {
   id: string;
@@ -87,6 +98,8 @@ export interface AdminFirmware {
 // ---------------------------------------------------------------------------
 
 export interface UploadedSession {
+  /** Flag-button marks, ms from the start of the take. Absent on older rows. */
+  flags?: number[] | null;
   id: string;
   device_serial: string;
   patient_id: string;

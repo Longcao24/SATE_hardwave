@@ -1,7 +1,9 @@
 import React from 'react';
+import { useLocation } from 'react-router-dom';
 import { AudioLines, MoreVertical, Edit, UserPlus, UserX, Trash2, Plus } from 'lucide-react';
 import { type Recording } from '@/hooks/useRecordings';
 import { type Patient } from '@/services/patientService';
+import { recordingLabel } from '@/services/recordingName';
 
 interface RecordingsListProps {
   recordings: Recording[] | undefined;
@@ -42,6 +44,14 @@ export const RecordingsList: React.FC<RecordingsListProps> = ({
   truncateFileName,
   onCreateRecording
 }) => {
+  // The recording currently open in the report view, so the list can show WHICH one you are
+  // looking at. Read from the URL rather than passed down: this list is several levels below
+  // the route and the id is already in the path.
+  const location = useLocation();
+  const openId = location.pathname.startsWith('/report/')
+    ? location.pathname.slice('/report/'.length).split('/')[0]
+    : null;
+
   // Helper function to get patient name from patient_id
   const getPatientName = (patientId: string | null | undefined) => {
     if (!patientId) return null;
@@ -101,15 +111,22 @@ export const RecordingsList: React.FC<RecordingsListProps> = ({
         <ul className="space-y-2">
           {recordings?.map((r: Recording) => {
             const patientName = getPatientName(r.patient_id);
-            const recordingDisplayName = r.recording_name || r.file_name || r.file_path.split('/').pop() || '';
+            const rawName = r.recording_name || r.file_name || r.file_path.split('/').pop() || '';
+            const recordingDisplayName = recordingLabel(rawName);
+            const isOpen = openId === r.id;
             
             return (
             <li key={r.id} className="group relative">
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => onRecordingClick(r)}
-                  className="flex-1 text-left text-sm text-gray-800 hover:bg-gray-100 p-2 rounded-lg flex justify-between items-start"
-                  title={patientName ? `${recordingDisplayName} (${patientName})` : recordingDisplayName}
+                  className={`flex-1 text-left text-sm p-2 rounded-lg flex justify-between items-start transition-colors ${
+                    isOpen
+                      ? 'bg-blue-50 text-blue-900 font-semibold'
+                      : 'text-gray-800 hover:bg-gray-100'
+                  }`}
+                  aria-current={isOpen ? 'true' : undefined}
+                  title={patientName ? `${rawName} (${patientName})` : rawName}
                 >
                   <div className="flex flex-col gap-0.5 truncate flex-1 min-w-0">
                     <span className="truncate">

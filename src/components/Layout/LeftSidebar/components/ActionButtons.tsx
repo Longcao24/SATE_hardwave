@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { LayoutDashboard, Mic, ShieldCheck } from 'lucide-react';
+import { LayoutDashboard, Mic, ShieldCheck, FileAudio } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { deviceApiService } from '@/services/device/deviceApiService';
+import { notesApiService } from '@/services/notesApiService';
 
 interface ActionButtonsProps {
   showDashboardButton: boolean;
@@ -17,6 +18,16 @@ export const ActionButtons: React.FC<ActionButtonsProps> = ({
   useEffect(() => {
     let cancelled = false;
     deviceApiService.amIAdmin().then((ok) => { if (!cancelled) setIsAdmin(ok); });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Voice Notes is off unless an admin enabled it for this account, so a clinical user never
+  // sees that the feature exists. access() swallows its own errors: if that service is down,
+  // the entry simply does not appear rather than breaking this sidebar.
+  const [hasNotes, setHasNotes] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    notesApiService.access().then((a) => { if (!cancelled) setHasNotes(Boolean(a?.enabled)); });
     return () => { cancelled = true; };
   }, []);
 
@@ -41,6 +52,17 @@ export const ActionButtons: React.FC<ActionButtonsProps> = ({
         <Mic className="w-4 h-4" />
         Manage Devices
       </Button>
+
+      {hasNotes && (
+        <Button
+          onClick={() => onNavigate('/notes')}
+          variant="outline"
+          className="w-full text-sm bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100 hover:border-blue-300 flex items-center justify-center gap-2"
+        >
+          <FileAudio className="w-4 h-4" />
+          Voice Notes
+        </Button>
+      )}
 
       {isAdmin && (
         <Button

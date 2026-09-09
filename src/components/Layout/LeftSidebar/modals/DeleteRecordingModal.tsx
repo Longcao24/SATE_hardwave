@@ -1,6 +1,7 @@
 import React from 'react';
 import { AlertTriangle, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { recordingLabel } from '@/services/recordingName';
 
 interface DeleteRecordingModalProps {
   isOpen: boolean;
@@ -35,7 +36,7 @@ export const DeleteRecordingModal: React.FC<DeleteRecordingModalProps> = ({
         </div>
         
         <p className="text-gray-700 mb-6">
-          Are you sure you want to delete "<strong>{truncateFileName(recordingName)}</strong>"? 
+          Are you sure you want to delete "<strong>{truncateFileName(recordingLabel(recordingName))}</strong>"? 
           This will permanently remove the recording and all associated data.
         </p>
         

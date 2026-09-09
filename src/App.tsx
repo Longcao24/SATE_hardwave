@@ -17,6 +17,7 @@ import { PaymentCancel } from './components/Stripe/PaymentCancel';
 import { UserProfilePage } from './components/Profile/UserProfilePage';
 import InviteCodesPage from './components/Profile/InviteCodesPage';
 import { DevicePage } from './components/Device/DevicePage';
+import { NotesPage } from '@/components/Notes/NotesPage';
 import { AdminPage } from './components/Admin/AdminPage';
 
 // Protected Route component
@@ -131,6 +132,17 @@ function App() {
         }
       />
       
+      {/* Voice Notes Route — the consumer lane. Additive: the page self-guards on the
+          account's access flag, and nothing clinical routes through it. */}
+      <Route
+        path="/notes"
+        element={
+          <ProtectedRoute>
+            <NotesPage />
+          </ProtectedRoute>
+        }
+      />
+
       {/* Admin Route (system-wide; page self-guards to admins) */}
       <Route
         path="/admin"

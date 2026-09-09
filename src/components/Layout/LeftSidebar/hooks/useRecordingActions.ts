@@ -3,6 +3,7 @@ import { useAuth } from '@/contexts/AuthProvider';
 import { type Recording } from '@/hooks/useRecordings';
 import { type Patient } from '@/services/patientService';
 import { updateRecordingName, updateRecordingPatient } from '@/services/dataService';
+import { recordingLabel } from '@/services/recordingName';
 
 interface ActionToastState {
   show: boolean;
@@ -57,7 +58,8 @@ export const useRecordingActions = (patients: Patient[]) => {
   const handleRenameClick = useCallback((recording: Recording, e: React.MouseEvent) => {
     e.stopPropagation();
     setRenameRecordingId(recording.id);
-    setRenameValue(recording.recording_name || recording.file_name || '');
+    // Start from the name the user is looking at (R-S13), not `device_SATE-…_s13.wav`.
+    setRenameValue(recordingLabel(recording.recording_name || recording.file_name) || '');
   }, []);
 
   const handleRenameConfirm = useCallback(async () => {
@@ -150,7 +152,7 @@ export const useRecordingActions = (patients: Patient[]) => {
     setMoveToStandaloneConfirm({
       show: true,
       recordingId: recording.id,
-      recordingName: recording.recording_name || recording.file_name || 'Unknown',
+      recordingName: recordingLabel(recording.recording_name || recording.file_name) || 'Unknown',
       patientName
     });
   }, [patients]);

@@ -1,6 +1,7 @@
 import React from 'react';
 import { UserX } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { recordingLabel } from '@/services/recordingName';
 
 interface MoveToStandaloneModalProps {
   isOpen: boolean;
@@ -37,7 +38,7 @@ export const MoveToStandaloneModal: React.FC<MoveToStandaloneModalProps> = ({
         </div>
         
         <p className="text-gray-700 mb-6">
-          Are you sure you want to move "<strong>{truncateFileName(recordingName)}</strong>" 
+          Are you sure you want to move "<strong>{truncateFileName(recordingLabel(recordingName))}</strong>" 
           to standalone recordings? This will remove its association with <strong>{patientName}</strong>.
         </p>
         

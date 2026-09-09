@@ -1,16 +1,24 @@
 // AdminPage — system-wide management for SATE admins (users in sate_admins).
-// Two sections: every recorder across all accounts, and the firmware catalog
-// (publish a new release, delete old ones). Non-admins are bounced to home.
+// Sections: the accounts in the system (and which per-account features they have), every
+// recorder across all accounts, and the firmware catalog. Non-admins are bounced to home.
+//
+// The Users section is where a feature is GIVEN to an account. Meeting notes (the consumer
+// lane) is off for everyone until an admin turns it on here — which is the whole reason a
+// clinical user never sees that the feature exists. The switch used to live on the notes
+// Worker's own /console page: a second URL, a second admin list, and a grant that could only
+// be given to an account that had already visited that lane. It belongs with the people who
+// already administer this system, so it lives here.
 
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { deviceApiService } from '@/services/device/deviceApiService';
-import type { AdminDevice, AdminFirmware } from '@/services/device/deviceTypes';
+import type { AdminDevice, AdminFirmware, AdminUser } from '@/services/device/deviceTypes';
+import { notesApiService, type NotesGrant } from '@/services/notesApiService';
 import { FirmwarePublishCard } from '@/components/Device/FirmwarePublishCard';
 import { Button } from '@/components/ui/button';
 import {
   ArrowLeft, ShieldCheck, Trash2, RefreshCw, Cpu, HardDrive, Loader2,
-  Activity, ExternalLink,
+  Activity, ExternalLink, Users, Mic,
 } from 'lucide-react';
 
 // Ops surfaces linked from the admin page (open in a new tab).
@@ -43,6 +51,12 @@ export function AdminPage() {
   const [allowed, setAllowed] = useState<boolean | null>(null);
   const [devices, setDevices] = useState<AdminDevice[]>([]);
   const [firmware, setFirmware] = useState<AdminFirmware[]>([]);
+  const [users, setUsers] = useState<AdminUser[]>([]);
+  // null = the notes service did not answer. Distinct from "nobody has access": the toggles
+  // are disabled rather than shown as off, because showing a grant we could not read as OFF
+  // invites an admin to "fix" it and overwrite a grant that was actually on.
+  const [grants, setGrants] = useState<Record<string, NotesGrant> | null>({});
+  const [savingUser, setSavingUser] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -50,12 +64,17 @@ export function AdminPage() {
     setBusy(true);
     setError(null);
     try {
-      const [d, f] = await Promise.all([
+      const [d, f, u, g] = await Promise.all([
         deviceApiService.adminListDevices(),
         deviceApiService.adminListFirmware(),
+        deviceApiService.adminListUsers(),
+        // Its own backend, its own failure. A notes outage must not blank the admin page.
+        notesApiService.adminListGrants(),
       ]);
       setDevices(d);
       setFirmware(f);
+      setUsers(u);
+      setGrants(g && Object.fromEntries(g.map((x) => [x.user_id, x])));
     } catch (e) {
       setError((e as Error).message || 'Failed to load');
     } finally {
@@ -80,6 +99,26 @@ export function AdminPage() {
       setFirmware((prev) => prev.filter((x) => x.id !== fw.id));
     } catch (e) {
       setError((e as Error).message || 'Delete failed');
+    }
+  };
+
+  const setNotesAccess = async (u: AdminUser, enabled: boolean) => {
+    setSavingUser(u.id);
+    // Optimistic: the switch answers immediately, and a failure puts it back rather than
+    // leaving the page claiming a grant the server never took.
+    const before = grants;
+    setGrants((prev) => ({
+      ...(prev || {}),
+      [u.id]: { ...(prev?.[u.id] as NotesGrant), user_id: u.id, email: u.email, enabled, mode: enabled ? 'notes' : 'clinical', notes: prev?.[u.id]?.notes ?? 0 },
+    }));
+    try {
+      await notesApiService.adminSetAccess(u.id, u.email, enabled);
+      setError(null);
+    } catch (e) {
+      setGrants(before);
+      setError((e as Error).message || 'Could not change access');
+    } finally {
+      setSavingUser(null);
     }
   };
 
@@ -138,6 +177,69 @@ export function AdminPage() {
         {error && (
           <div className="mb-4 rounded-lg bg-red-50 text-red-700 text-sm p-3">{error}</div>
         )}
+
+        {/* Users & feature access */}
+        <h2 className="flex items-center gap-2 text-xl font-semibold text-gray-900 mb-1">
+          <Users className="w-5 h-5 text-gray-500" /> Users ({users.length})
+        </h2>
+        <p className="text-sm text-gray-500 mb-3">
+          Turn per-account features on or off. Meeting notes is off for every account until it
+          is granted here.
+        </p>
+        <div className="rounded-xl border border-gray-200 bg-white overflow-hidden mb-8">
+          <div className="hidden sm:grid grid-cols-[1fr_auto_auto_auto] gap-4 px-4 py-2 bg-gray-50 text-xs font-semibold uppercase tracking-wide text-gray-500">
+            <span>Account</span>
+            <span className="text-right">Recorders</span>
+            <span className="text-right">Last sign-in</span>
+            <span className="text-right">Meeting notes</span>
+          </div>
+          {users.length === 0 && (
+            <div className="p-4 text-sm text-gray-500">No accounts yet.</div>
+          )}
+          <div className="divide-y divide-gray-100">
+            {users.map((u) => {
+              const grant = grants?.[u.id];
+              const on = Boolean(grant?.enabled);
+              // Unknown, not off: see the `grants === null` note above.
+              const unknown = grants === null;
+              return (
+                <div key={u.id} className="grid grid-cols-[1fr_auto] sm:grid-cols-[1fr_auto_auto_auto] gap-4 items-center px-4 py-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-gray-900 truncate">{u.email || '(no email)'}</span>
+                      {u.is_admin && (
+                        <span className="text-xs bg-violet-100 text-violet-700 rounded px-1.5 py-0.5 shrink-0">admin</span>
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-400 truncate" title={u.id}>
+                      joined {timeAgo(u.created_at)}
+                      {grant?.notes ? ` · ${grant.notes} note${grant.notes > 1 ? 's' : ''}` : ''}
+                    </p>
+                  </div>
+                  <span className="hidden sm:block text-sm text-gray-600 text-right tabular-nums">{u.devices}</span>
+                  <span className="hidden sm:block text-sm text-gray-500 text-right">
+                    {u.last_sign_in_at ? timeAgo(u.last_sign_in_at) : 'never'}
+                  </span>
+                  <button
+                    onClick={() => setNotesAccess(u, !on)}
+                    disabled={unknown || savingUser === u.id}
+                    title={unknown ? 'The notes service did not answer — try Refresh' : on ? 'Revoke meeting notes' : 'Grant meeting notes'}
+                    className={`justify-self-end inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold transition disabled:opacity-50 ${
+                      on
+                        ? 'border-green-200 bg-green-50 text-green-700 hover:bg-green-100'
+                        : 'border-gray-200 bg-white text-gray-500 hover:bg-gray-50'
+                    }`}
+                  >
+                    {savingUser === u.id
+                      ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      : <Mic className="w-3.5 h-3.5" />}
+                    {unknown ? 'unknown' : on ? 'On' : 'Off'}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
 
         {/* Monitoring & status */}
         <h2 className="flex items-center gap-2 text-xl font-semibold text-gray-900 mb-3">

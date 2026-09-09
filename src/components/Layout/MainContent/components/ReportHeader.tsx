@@ -1,6 +1,7 @@
 import React from 'react';
 import { Edit2, Check, X } from 'lucide-react';
 import { formatDuration, formatDate } from '../utils';
+import { recordingLabel } from '@/services/recordingName';
 
 interface ReportHeaderProps {
   recordingName?: string;
@@ -60,7 +61,7 @@ export const ReportHeader: React.FC<ReportHeaderProps> = ({
         ) : (
           <div className="flex items-center gap-2 flex-1">
             <h2 className="text-xl font-semibold text-gray-800">
-              {recordingName || "Untitled Report"}
+              {recordingLabel(recordingName) || "Untitled Report"}
             </h2>
             <button
               onClick={onEditStart}
