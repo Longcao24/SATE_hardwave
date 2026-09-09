@@ -1,4 +1,4 @@
-// SATE Device API — Supabase Edge Function              [v22]
+// SATE Device API — Supabase Edge Function              [v23]
 // Replaces the mock-server's Express endpoints with a single Edge Function
 // that does internal path routing. Authenticated via Supabase JWT (users) or a
 // device key (the recorder).
@@ -20,6 +20,9 @@
 // v17: a `record` command may carry {seconds:N} — the firmware stops the take
 //      ITSELF at exactly N seconds of PCM (sample-exact), instead of the caller
 //      racing a `stop` through the poll channel (+3-12 s of slop)
+// v23: DELETE /sessions/:id checks EVERY removal's error instead of swallowing it, keeps the
+//      session row on a partial failure so the delete stays retryable, and records what was
+//      actually removed — the audit row used to assert a deletion that may not have happened.
 // v22: POST /firmware is admin-gated (it was reachable by any signed-in account);
 //      DELETE /sessions/:id also removes the derived `recordings` row + its audio
 //      (delete used to leave the clinical copy behind); retry and delete both write
@@ -1126,22 +1129,59 @@ async function deleteSession(supabase: any, userId: string, sessionId: string) {
     .eq('id', sessionId).eq('user_id', userId).maybeSingle();
   if (!row) return err('Session not found', 404);
 
+  // [v23] Every removal below used to be fire-and-forget: `.remove([...]).catch(() => {})` plus
+  // an unchecked `.delete()`. supabase-js storage does NOT throw on an API failure — it resolves
+  // with { data, error } — so that `.catch` caught nothing and the error was never read. The
+  // route then returned 204 and wrote an audit row asserting the audio was gone. A failed
+  // deletion therefore reported success AND left an audit trail that said the clinical data was
+  // destroyed when it was still sitting in the bucket, playable. An audit trail that lies is
+  // worse than none, because it is the thing people check instead of looking.
+  const failures: string[] = [];
+  // Storage treats "already gone" as an error on some paths; that is the desired end state.
+  const gone = (m?: string) => !!m && /not found|does not exist|no such/i.test(m);
+
+  let sessionObject: 'removed' | 'absent' | 'failed' = 'absent';
   if (row.storage_path) {
-    await supabase.storage.from('device-sessions').remove([row.storage_path]).catch(() => {});
+    const { error } = await supabase.storage.from('device-sessions').remove([row.storage_path]);
+    if (!error || gone(error.message)) sessionObject = 'removed';
+    else { sessionObject = 'failed'; failures.push(`device-sessions object: ${error.message}`); }
   }
 
   let removedRecording: string | null = null;
+  let recordingObject: 'removed' | 'absent' | 'failed' = 'absent';
   if (row.recording_id) {
-    const { data: rec } = await supabase.from('recordings')
+    const { data: rec, error: lookupErr } = await supabase.from('recordings')
       .select('id, file_path').eq('id', row.recording_id).eq('user_id', userId).maybeSingle();
-    if (rec) {
+    if (lookupErr) failures.push(`recordings lookup: ${lookupErr.message}`);
+    else if (rec) {
+      // Object BEFORE row: the row is the only pointer to the object, so dropping it first
+      // would strand the audio where nothing can find it again.
       if (rec.file_path) {
-        await supabase.storage.from('recordings').remove([rec.file_path]).catch(() => {});
+        const { error } = await supabase.storage.from('recordings').remove([rec.file_path]);
+        if (!error || gone(error.message)) recordingObject = 'removed';
+        else { recordingObject = 'failed'; failures.push(`recordings object: ${error.message}`); }
       }
-      // recording_versions cascades from this delete, so the edit history goes as well.
-      await supabase.from('recordings').delete().eq('id', rec.id).eq('user_id', userId);
-      removedRecording = rec.id;
+      if (recordingObject !== 'failed') {
+        const { error } = await supabase.from('recordings').delete()
+          .eq('id', rec.id).eq('user_id', userId);
+        if (error) failures.push(`recordings row: ${error.message}`);
+        else removedRecording = rec.id;
+      }
     }
+  }
+
+  // The session row is deleted LAST and only on a clean sweep. While it exists the take is
+  // still listed, still auditable and the delete can simply be retried; remove it after a
+  // partial failure and whatever survived becomes an orphan with no pointer to it.
+  if (failures.length) {
+    await auditSession(supabase, sessionId, userId, 'delete_failed', {
+      device_serial: row.device_serial, session_number: row.session_number,
+      session_object: sessionObject, recording_object: recordingObject,
+      removed_recording: removedRecording, failures,
+    });
+    return err(
+      `Could not fully delete this session: ${failures.join('; ')}. The session was kept so ` +
+      `the delete can be retried — nothing was left orphaned.`, 500);
   }
 
   const { error } = await supabase.from('sate_device_sessions')
@@ -1151,7 +1191,8 @@ async function deleteSession(supabase: any, userId: string, sessionId: string) {
   await auditSession(supabase, sessionId, userId, 'delete', {
     device_serial: row.device_serial, session_number: row.session_number,
     patient_id: row.patient_id, bytes: row.bytes,
-    storage_path: row.storage_path, removed_recording: removedRecording,
+    storage_path: row.storage_path, session_object: sessionObject,
+    recording_object: recordingObject, removed_recording: removedRecording,
   });
   return noContent();
 }
