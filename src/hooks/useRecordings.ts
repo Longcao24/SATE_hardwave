@@ -11,6 +11,10 @@ export interface Recording {
   recording_name?: string; // Add recording name
   protocol?: string; // Add protocol
   notes?: string; // Add notes
+  /** The device session this recording was made from, or null for a file uploaded straight
+   *  from the web app. Only a recording WITH one can become a meeting note — the notes
+   *  service fetches its audio by session, never by recording. */
+  source_session_id?: string | null;
 }
 
 export const useRecordings = () => {
@@ -29,7 +33,7 @@ export const useRecordings = () => {
       
       const { data, error } = await supabase
         .from('recordings')
-        .select('id, file_name, created_at, file_path, patient_id, recording_name, protocol, notes')
+        .select('id, file_name, created_at, file_path, patient_id, recording_name, protocol, notes, source_session_id')
         .eq('user_id', user.id)
         .order('created_at', { ascending: false });
 

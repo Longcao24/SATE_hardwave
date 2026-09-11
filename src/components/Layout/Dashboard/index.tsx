@@ -15,6 +15,10 @@ import DeviceOverview from './components/DeviceOverview';
 
 // Import custom hook
 import { useDashboardData } from './hooks/useDashboardData';
+import { AssignPatientModal } from '@/components/Layout/LeftSidebar/modals/AssignPatientModal';
+import { updateRecordingPatient } from '@/services/dataService';
+import { useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 
 // Import types
 import type { DashboardProps } from './types';
@@ -32,6 +36,11 @@ const Dashboard: React.FC<DashboardProps> = ({ onImport, onUseSampleData }) => {
   const [showFirstTimeGuide, setShowFirstTimeGuide] = useState(false);
   const [showImportPopup, setShowImportPopup] = useState(false);
   const [importPatientId, setImportPatientId] = useState<string | undefined>(undefined);
+  // Assigning a patient used to be reachable only from the sidebar's overflow menu, while the
+  // one screen that lists every UNASSIGNED recording offered no way to do it.
+  const [assignRecordingId, setAssignRecordingId] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
 
   // Show first-time guide for new users
   useEffect(() => {
@@ -257,11 +266,36 @@ const Dashboard: React.FC<DashboardProps> = ({ onImport, onUseSampleData }) => {
         )}
 
         {/* Standalone Recordings (No Patient) */}
-        <StandaloneRecordings 
+        <StandaloneRecordings
           recordings={recordings}
           timeFilter={timeFilter}
+          patients={patients}
+          loadingPatients={loadingPatients}
+          onAssignPatient={setAssignRecordingId}
         />
       </div>
+
+      <AssignPatientModal
+        isOpen={!!assignRecordingId}
+        recordingId={assignRecordingId}
+        recordings={recordings}
+        patients={patients}
+        loadingPatients={loadingPatients}
+        onCancel={() => setAssignRecordingId(null)}
+        onCreateNewPatient={() => { setAssignRecordingId(null); navigate('/patients/new'); }}
+        onAssign={async (patientId) => {
+          if (!assignRecordingId || !user) return;
+          const result = await updateRecordingPatient(assignRecordingId, patientId, user.id);
+          if (!result.success) {
+            window.alert(`Could not assign the patient: ${result.error}`);
+            return;
+          }
+          // The row leaves the standalone list the moment this refetches, which is the
+          // feedback — no toast needed.
+          queryClient.invalidateQueries({ queryKey: ['recordings', user.id] });
+          setAssignRecordingId(null);
+        }}
+      />
 
       {/* Create Recording Popup */}
       <CreateRecordingPopup
