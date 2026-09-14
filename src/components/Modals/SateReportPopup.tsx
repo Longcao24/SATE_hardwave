@@ -1,102 +1,90 @@
 import React from 'react';
-import { X, FileText, FileType } from 'lucide-react';
+import { X, FileText, FileType, Sparkles, Loader2, AlertTriangle } from 'lucide-react';
+import { type Segment } from '@/services/dataService';
+import { segmentsToSalt } from '@/services/saltService';
+import {
+  generateLsaReport,
+  type LsaReportResponse,
+  type LsaMetricRow,
+  type LsaDerivedCounts,
+} from '@/services/lsaReportService';
 
 // ---------------------------------------------------------------------------
-// SATE Report — a single-sample clinical report matching the SALT-style layout.
+// SATE Report — a single-sample clinical report for THIS recording.
 //
-// v1 uses the worked example's own text as PLACEHOLDER content, so the feature
-// generates the report exactly as shown out of the box; real recording data can
-// be threaded into REPORT later. The report body is built as one inline-styled
-// HTML string so it renders identically in the on-screen preview, the print /
-// PDF output, and the Word (.doc) export.
+// The transcript on screen is converted to SALT and sent to the SATE LSA Report
+// service, which parses the counts deterministically and runs one LLM call for the
+// domain observations, limitations and summary. Everything rendered below comes from
+// that response — there is no example/placeholder content left in this file.
+//
+// The report body is built as one inline-styled HTML string so it renders identically
+// in the on-screen preview, the print / PDF output, and the Word (.doc) export.
 // ---------------------------------------------------------------------------
-
-interface MetricRow {
-  metric: string;
-  value: string;
-  z: number;          // standardized position, SD from mean
-  reversed?: boolean; // true = higher is the concern side (e.g. Mazes)
-  status: string;
-  statusKind: 'typical' | 'above' | 'below';
-}
-
-interface AssessmentRow {
-  domain: string;
-  observation: string;
-  status: string;
-  statusKind: 'strength' | 'monitor' | 'ok' | 'short';
-}
-
-interface ReportData {
-  title: string;
-  header: { label: string; value: string }[];
-  transcript: string[];
-  transcriptCodes: string;
-  metrics: MetricRow[];
-  metricsLegend: string[];
-  assessment: AssessmentRow[];
-  limitations: string[];
-  summary: string;
-}
-
-// The worked example (placeholder content).
-const REPORT: ReportData = {
-  title: 'SATE Report',
-  header: [
-    { label: 'Speaker', value: 'Child (C)' },
-    { label: 'Age', value: '6;0' },
-    { label: 'Language', value: 'English' },
-    { label: 'Task', value: 'Narrative (picture-elicited)' },
-    { label: 'Utterances', value: '8' },
-    { label: 'Format', value: 'SALT' },
-  ],
-  transcript: [
-    'C The giraffe see/3s an elephant.',
-    'C And the elephant is bounce/ing a ball.',
-    'C And the ball fell in the water.',
-    'C And the giraffe see/3s it.',
-    'C And the giraffe go/3s in the water.',
-    'C (And tr) and try/3s to get the ball.',
-    'C And then the giraffe got to the ball and give/3s it to the elephant.',
-    'C And the elephant thank/ed him.',
-  ],
-  transcriptCodes: 'Codes: /3s 3rd-sg;  /ing progressive;  /ed past;  ( ) maze (excluded).',
-  metrics: [
-    { metric: 'MLU words', value: '7.00', z: 0.6, status: 'Typical', statusKind: 'typical' },
-    { metric: 'MLU morphemes', value: '7.88', z: 0.9, status: 'Typical', statusKind: 'typical' },
-    { metric: 'Total Words', value: '56', z: 0.0, status: 'Typical', statusKind: 'typical' },
-    { metric: 'Different Words', value: '23', z: -0.4, status: 'Typical', statusKind: 'typical' },
-    { metric: 'Type–Token Ratio', value: '0.41', z: -0.5, status: 'Typical', statusKind: 'typical' },
-    { metric: 'Mazes (%)', value: '12.5', z: 0.6, reversed: true, status: 'Typical', statusKind: 'typical' },
-    { metric: 'Grammatical (%)', value: '100', z: 2.1, status: 'Above avg', statusKind: 'above' },
-  ],
-  metricsLegend: [
-    'Every bar shares one standardized axis (−3 to +3 SD from the tentative reference mean): green = typical (±1 SD), the ▼ marks the metric’s z-score; red = concern side, blue = opposite.',
-    'Mazes are reversed (higher = more mazes = concern). Norm values are illustrative only; raw values are in the Value column.',
-  ],
-  assessment: [
-    { domain: 'Morphology', statusKind: 'strength', status: 'Strength',
-      observation: 'All inflections correct in obligatory contexts: 3rd-sg -s (5/5), -ing, -ed, irregular past. No errors; the tense/agreement markers most sensitive to DLD are intact.' },
-    { domain: 'Tense consistency', statusKind: 'monitor', status: 'Monitor',
-      observation: 'Alternates present (sees/goes/tries/gives) and past (fell/got/thanked) across the story and within utterance 7. A discourse-cohesion feature, not a grammatical error; common at this age.' },
-    { domain: 'Syntax', statusKind: 'ok', status: 'Age-appropriate',
-      observation: 'Mainly simple SVO with “and / and then” chaining; emerging complexity (one infinitival complement, one coordinated clause).' },
-    { domain: 'Lexical diversity', statusKind: 'short', status: 'Short sample',
-      observation: 'Varied, concrete vocabulary (8 distinct verbs); not interpretable at this sample length.' },
-    { domain: 'Narrative / Pragmatics', statusKind: 'strength', status: 'Strength',
-      observation: 'Coherent event sequence with a problem–resolution structure; appropriate pronoun reference (it = ball, him = elephant).' },
-  ],
-  limitations: [
-    'Only 8 utterances — a screening-level sample; all normative comparisons are illustrative and cannot support a diagnosis.',
-    'Narrative task; norm bands are tentative and require a narrative-, age-matched reference, with count metrics (TNW, NDW, TTR, Mazes) matched to the same number of analyzed utterances.',
-    'Recommend re-administration with ≥ 50 utterances (conversation) or ≥ 100 (Wisconsin / SALT narrative conventions).',
-  ],
-  summary:
-    'Within the limits of this short sample, morphosyntax is a clear strength: tense and agreement markers are intact with no morphological errors, the narrative is coherent with emerging complex syntax, and MLU is age-appropriate (upper range). The single point to monitor is narrative tense consistency — a discourse-cohesion feature rather than a grammatical deficit. Findings are preliminary; a longer sample is recommended for confirmation.',
-};
 
 const esc = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+// The service writes **emphasis** in its prose; render it rather than printing asterisks.
+const escRich = (s: string) =>
+  esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/(?<!\w)\*(.+?)\*(?!\w)/g, '<i>$1</i>');
+
+// --- SALT speaker labels ---------------------------------------------------
+// SALT attributes every line carrying the same prefix to one speaker, so each speaker
+// in this recording needs its own label. C (child) and E (examiner/adult) are the
+// conventional ones and are assigned first, so a same-letter name cannot take them.
+const preferredLabel = (name: string): { label: string; conventional: boolean } => {
+  const n = name.toLowerCase();
+  if (n.startsWith('child')) return { label: 'C', conventional: true };
+  if (n.startsWith('adult') || n.startsWith('examiner')) return { label: 'E', conventional: true };
+  return { label: (name.trim()[0] || 'S').toUpperCase(), conventional: false };
+};
+
+function buildSpeakerLabels(speakers: string[]): Record<string, string> {
+  const taken = new Set<string>();
+  const labels: Record<string, string> = {};
+  const ordered = [
+    ...speakers.filter((s) => preferredLabel(s).conventional),
+    ...speakers.filter((s) => !preferredLabel(s).conventional),
+  ];
+  for (const speaker of ordered) {
+    const preferred = preferredLabel(speaker).label;
+    let label = preferred;
+    if (taken.has(label)) {
+      const letters = speaker.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(1);
+      label = Array.from(letters).find((l) => !taken.has(l)) || '';
+      if (!label) {
+        for (let i = 2; i < 100 && !label; i++) {
+          if (!taken.has(`${preferred}${i}`)) label = `${preferred}${i}`;
+        }
+      }
+    }
+    taken.add(label);
+    labels[speaker] = label;
+  }
+  return labels;
+}
+
+// --- report rendering ------------------------------------------------------
+
+const H = '#0c6b74';                                   // section / title accent
+const INK = '#16202e', MUT = '#5c6b7a', HAIR = '#e3e7ec';
+
+// Domain verdicts as the service names them.
+const DOMAIN_BG: Record<string, string> = {
+  'STRENGTH': '#d6f5df',
+  'AGE-APPROPRIATE': '#eef3ee',
+  'MONITOR': '#ffe8cf',
+  'CONCERN': '#fbd9d9',
+  'INSUFFICIENT DATA': '#eceff2',
+};
+const METRIC_FG: Record<string, string> = {
+  'TYPICAL': '#15803d',
+  'ABOVE AVG': '#1d4ed8',
+  'BELOW AVG': '#b45309',
+  'MONITOR': '#b45309',
+  'CONCERN': '#b91c1c',
+  'NO REF': '#64748b',
+};
 
 // A standardized-position bar: red / green(±1 SD) / blue track with a ▼ at the z-score.
 function barHtml(z: number, reversed?: boolean): string {
@@ -117,61 +105,132 @@ function barHtml(z: number, reversed?: boolean): string {
   );
 }
 
-const STATUS_BG: Record<string, string> = {
-  strength: '#d6f5df', monitor: '#ffe8cf', ok: '#eef3ee', short: '#eceff2',
-};
-const STATUS_FG: Record<string, string> = {
-  typical: '#15803d', above: '#1d4ed8', below: '#b91c1c',
-};
+const h2 = (n: number, t: string) =>
+  `<h2 style="font-size:14px;color:${H};margin:22px 0 8px;padding-bottom:3px;` +
+  `border-bottom:1px solid ${HAIR};font-family:Georgia,'Times New Roman',serif;">` +
+  `<span style="color:${H};">${n}</span>&nbsp;&nbsp;${t}</h2>`;
 
-// The full report body as inline-styled HTML — shared by preview, print, and Word.
-function buildReportBody(r: ReportData): string {
-  const H = '#0c6b74';           // section / title accent
-  const INK = '#16202e', MUT = '#5c6b7a', HAIR = '#e3e7ec';
-  const h2 = (n: number, t: string) =>
-    `<h2 style="font-size:14px;color:${H};margin:22px 0 8px;padding-bottom:3px;` +
-    `border-bottom:1px solid ${HAIR};font-family:Georgia,'Times New Roman',serif;">` +
-    `<span style="color:${H};">${n}</span>&nbsp;&nbsp;${t}</h2>`;
+const num = (v: unknown, digits = 2): string =>
+  typeof v === 'number' && Number.isFinite(v) ? v.toFixed(digits) : '—';
+const int = (v: unknown): string =>
+  typeof v === 'number' && Number.isFinite(v) ? String(Math.round(v)) : '—';
 
-  const headerLine = r.header
+// Section 2 when reference values were supplied: the service's own metrics table.
+function metricsTableHtml(rows: LsaMetricRow[]): string {
+  const body = rows.map((m) => {
+    const reversed = m.direction === 'higher_worse';
+    const ref = m.td_mean != null
+      ? `${num(m.td_mean)}${m.td_sd != null ? ` (${num(m.td_sd)})` : ''}`
+      : '—';
+    const bar = m.z != null
+      ? barHtml(m.z, reversed)
+      : `<span style="font-size:11px;color:${MUT};font-style:italic;">no reference values supplied</span>`;
+    return `
+    <tr>
+      <td style="padding:7px 10px;border-bottom:1px solid ${HAIR};">${esc(m.label || m.key)}</td>
+      <td style="padding:7px 10px;border-bottom:1px solid ${HAIR};text-align:right;font-variant-numeric:tabular-nums;">${esc(m.value_str || (m.value != null ? String(m.value) : '—'))}</td>
+      <td style="padding:7px 10px;border-bottom:1px solid ${HAIR};text-align:right;color:${MUT};font-variant-numeric:tabular-nums;">${esc(ref)}</td>
+      <td style="padding:7px 14px;border-bottom:1px solid ${HAIR};width:34%;">${bar}</td>
+      <td style="padding:7px 10px;border-bottom:1px solid ${HAIR};color:${METRIC_FG[m.status] || INK};font-weight:600;white-space:nowrap;">${esc(m.status)}${m.z != null ? `<span style="color:${MUT};font-weight:400;"> (z ${m.z >= 0 ? '+' : '−'}${Math.abs(m.z).toFixed(2)})</span>` : ''}</td>
+    </tr>`;
+  }).join('');
+  const ticks = ['−3', '−2', '−1', '0', '1', '2', '3'].map((t) => `<span>${t}</span>`).join('');
+  return (
+    `<table style="width:100%;border-collapse:collapse;font-size:12.5px;color:${INK};">` +
+    `<thead><tr style="text-align:left;">` +
+    `<th style="padding:6px 10px;border-bottom:2px solid ${HAIR};">Metric</th>` +
+    `<th style="padding:6px 10px;border-bottom:2px solid ${HAIR};text-align:right;">Value</th>` +
+    `<th style="padding:6px 10px;border-bottom:2px solid ${HAIR};text-align:right;">Ref. mean (SD)</th>` +
+    `<th style="padding:6px 14px;border-bottom:2px solid ${HAIR};">Standardized position (SD from mean)</th>` +
+    `<th style="padding:6px 10px;border-bottom:2px solid ${HAIR};">Status</th>` +
+    `</tr></thead><tbody>${body}</tbody></table>` +
+    `<div style="display:flex;justify-content:space-between;width:34%;margin:2px 0 0 auto;padding:0 14px;` +
+    `font-size:9.5px;color:#94a3b8;font-variant-numeric:tabular-nums;">${ticks}</div>`
+  );
+}
+
+// Section 2 with no reference values: the counts the service parsed from the transcript.
+function countsTableHtml(c: LsaDerivedCounts): string {
+  const errorCodes = Object.entries(c.error_code_counts || {})
+    .map(([code, n]) => `${code} ×${n}`).join(', ');
+  const rows: Array<[string, string, string]> = [
+    ['Analysed utterances', int(c.target_utterances), 'target speaker, excluding other speakers'],
+    ['Total Words (TNW)', int(c.approx_TNW), 'maze words excluded'],
+    ['Different Words (NDW)', int(c.approx_NDW), ''],
+    ['Type–Token Ratio', num(c.approx_TTR, 3), 'NDW / TNW'],
+    ['MLU words', num(c.approx_MLU_w), 'mean length of utterance'],
+    ['MLU morphemes', num(c.approx_MLU_m), 'includes bound morphemes'],
+    ['Mazes', `${num(c.approx_maze_pct_words, 1)}%`, `${int(c.maze_count)} mazes, ${int(c.maze_words)} words`],
+    ['Unintelligible', `${num(c.approx_unintelligible_pct_words, 1)}%`, `${int(c.unintelligible_word_tokens)} word tokens`],
+    ['Omitted words', int(c.omitted_words), 'marked *word'],
+    ['Omitted bound morphemes', int(c.omitted_bound_morphemes), 'marked word/*3s, word/*ed'],
+    ...(c.approx_SI_mean != null
+      ? [['Subordination Index', num(c.approx_SI_mean), 'from [SI-n] codes'] as [string, string, string]]
+      : []),
+    ...(errorCodes ? [['Error codes', errorCodes, ''] as [string, string, string]] : []),
+  ];
+  const body = rows.map(([label, value, note]) => `
+    <tr>
+      <td style="padding:7px 10px;border-bottom:1px solid ${HAIR};">${esc(label)}</td>
+      <td style="padding:7px 10px;border-bottom:1px solid ${HAIR};text-align:right;font-weight:600;font-variant-numeric:tabular-nums;">${esc(value)}</td>
+      <td style="padding:7px 10px;border-bottom:1px solid ${HAIR};color:${MUT};font-size:11.5px;">${esc(note)}</td>
+    </tr>`).join('');
+  return (
+    `<table style="width:100%;border-collapse:collapse;font-size:12.5px;color:${INK};">` +
+    `<thead><tr style="text-align:left;">` +
+    `<th style="padding:6px 10px;border-bottom:2px solid ${HAIR};">Measure</th>` +
+    `<th style="padding:6px 10px;border-bottom:2px solid ${HAIR};text-align:right;">Value</th>` +
+    `<th style="padding:6px 10px;border-bottom:2px solid ${HAIR};">Basis</th>` +
+    `</tr></thead><tbody>${body}</tbody></table>` +
+    `<p style="font-size:11px;color:${MUT};font-style:italic;margin:8px 0 0;line-height:1.5;">` +
+    `All values are counted from the transcript, not estimated by the language model. No ` +
+    `typically-developing reference values were supplied for this sample, so no z-scores or ` +
+    `normative statuses are shown; the domain judgments below come from the transcript itself.</p>`
+  );
+}
+
+function buildReportBody(
+  r: LsaReportResponse,
+  meta: { speaker: string; speakerCode: string; age: string; task: string; language: string; date: string },
+  transcriptLines: string[],
+): string {
+  const c = r.derived_counts || {};
+  const header = [
+    { label: 'Speaker', value: `${meta.speaker} (${meta.speakerCode})` },
+    { label: 'Age', value: meta.age },
+    { label: 'Language', value: meta.language },
+    { label: 'Task', value: meta.task },
+    { label: 'Utterances', value: `${int(c.target_utterances)} (${meta.speakerCode}) / ${int(c.utterances_all_speakers)} total` },
+    { label: 'Format', value: 'SALT' },
+    { label: 'Date', value: meta.date },
+  ];
+  const headerLine = header
     .map((h) => `<span style="margin-right:16px;white-space:nowrap;"><b>${esc(h.label)}:</b> ${esc(h.value)}</span>`)
     .join('');
 
+  const numbered = transcriptLines
+    .map((line, i) => `<span style="color:#94a3b8;">${String(i + 1).padStart(2, ' ')}</span>  ${esc(line)}`)
+    .join('\n');
   const transcript =
     `<div style="border:1px solid ${HAIR};border-radius:8px;background:#fbfcfd;padding:12px 14px;` +
     `font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:12px;line-height:1.7;color:${INK};` +
-    `white-space:pre-wrap;">${r.transcript.map(esc).join('\n')}</div>` +
-    `<p style="font-size:11.5px;color:${MUT};margin:6px 0 0;font-style:italic;">${esc(r.transcriptCodes)}</p>`;
+    `white-space:pre-wrap;">${numbered}</div>` +
+    `<p style="font-size:11.5px;color:${MUT};margin:6px 0 0;font-style:italic;">` +
+    `Codes: /3s /ed /ing bound morpheme · /*3s omitted bound morpheme · *word omitted word · ` +
+    `[EW:x] error code (target x) · ( ) maze (excluded from counts) · X unintelligible. ` +
+    `Line numbers match the utterance references in the observations below.</p>`;
 
-  const metricRows = r.metrics.map((m) => `
-    <tr>
-      <td style="padding:7px 10px;border-bottom:1px solid ${HAIR};">${esc(m.metric)}</td>
-      <td style="padding:7px 10px;border-bottom:1px solid ${HAIR};text-align:right;font-variant-numeric:tabular-nums;">${esc(m.value)}</td>
-      <td style="padding:7px 14px;border-bottom:1px solid ${HAIR};width:42%;">${barHtml(m.z, m.reversed)}</td>
-      <td style="padding:7px 10px;border-bottom:1px solid ${HAIR};color:${STATUS_FG[m.statusKind] || INK};font-weight:600;">${esc(m.status)}</td>
-    </tr>`).join('');
-  const axisTicks = ['−3', '−2', '−1', '0', '1', '2', '3']
-    .map((t) => `<span>${t}</span>`).join('');
-  const metricsTable =
-    `<table style="width:100%;border-collapse:collapse;font-size:12.5px;color:${INK};">` +
-    `<thead><tr style="text-align:left;color:${INK};">` +
-    `<th style="padding:6px 10px;border-bottom:2px solid ${HAIR};">Metric</th>` +
-    `<th style="padding:6px 10px;border-bottom:2px solid ${HAIR};text-align:right;">Value</th>` +
-    `<th style="padding:6px 14px;border-bottom:2px solid ${HAIR};">Standardized position (SD from mean)</th>` +
-    `<th style="padding:6px 10px;border-bottom:2px solid ${HAIR};">Status</th>` +
-    `</tr></thead><tbody>${metricRows}</tbody></table>` +
-    `<div style="display:flex;justify-content:space-between;width:42%;margin:2px 0 0 auto;padding:0 14px;` +
-    `font-size:9.5px;color:#94a3b8;font-variant-numeric:tabular-nums;">${axisTicks}</div>` +
-    r.metricsLegend.map((l) =>
-      `<p style="font-size:11px;color:${MUT};font-style:italic;margin:8px 0 0;line-height:1.5;">${esc(l)}</p>`).join('');
+  const metrics = (r.metrics_table && r.metrics_table.length > 0)
+    ? metricsTableHtml(r.metrics_table)
+    : countsTableHtml(c);
 
-  const assessmentRows = r.assessment.map((a) => `
+  const assessmentRows = (r.analysis.domains || []).map((d) => `
     <tr>
-      <td style="padding:9px 10px;border-bottom:1px solid ${HAIR};font-weight:700;vertical-align:top;width:20%;">${esc(a.domain)}</td>
-      <td style="padding:9px 10px;border-bottom:1px solid ${HAIR};vertical-align:top;line-height:1.5;">${esc(a.observation)}</td>
+      <td style="padding:9px 10px;border-bottom:1px solid ${HAIR};font-weight:700;vertical-align:top;width:18%;">${esc(d.domain)}</td>
+      <td style="padding:9px 10px;border-bottom:1px solid ${HAIR};vertical-align:top;line-height:1.5;">${escRich(d.observation)}</td>
       <td style="padding:9px 10px;border-bottom:1px solid ${HAIR};vertical-align:top;width:15%;">` +
-        `<span style="display:inline-block;padding:2px 8px;border-radius:5px;font-size:11.5px;font-weight:600;` +
-        `background:${STATUS_BG[a.statusKind]};color:${INK};">${esc(a.status)}</span></td>
+        `<span style="display:inline-block;padding:2px 8px;border-radius:5px;font-size:11px;font-weight:600;` +
+        `background:${DOMAIN_BG[d.status] || '#eceff2'};color:${INK};">${esc(d.status)}</span></td>
     </tr>`).join('');
   const assessmentTable =
     `<table style="width:100%;border-collapse:collapse;font-size:12.5px;color:${INK};">` +
@@ -181,25 +240,39 @@ function buildReportBody(r: ReportData): string {
     `<th style="padding:6px 10px;border-bottom:2px solid ${HAIR};">Status</th>` +
     `</tr></thead><tbody>${assessmentRows}</tbody></table>`;
 
-  const limitations =
-    `<ul style="margin:4px 0 0;padding-left:20px;font-size:12.5px;color:${INK};line-height:1.6;">` +
-    r.limitations.map((l) => `<li style="margin:0 0 5px;">${esc(l)}</li>`).join('') + `</ul>`;
+  const limitationItems = [
+    ...(r.analysis.limitations || []),
+    ...(r.warnings || []),
+    ...(r.analysis.reference_concerns || []),
+  ];
+  const limitations = limitationItems.length
+    ? `<ul style="margin:4px 0 0;padding-left:20px;font-size:12.5px;color:${INK};line-height:1.6;">` +
+      limitationItems.map((l) => `<li style="margin:0 0 5px;">${escRich(l)}</li>`).join('') + `</ul>`
+    : `<p style="font-size:12.5px;color:${MUT};margin:4px 0 0;">None reported.</p>`;
 
   const summary =
-    `<p style="font-size:12.5px;color:${INK};line-height:1.6;margin:4px 0 0;">${esc(r.summary)}</p>`;
+    `<p style="font-size:12.5px;color:${INK};line-height:1.6;margin:4px 0 0;">${escRich(r.analysis.summary || '')}</p>`;
+
+  const model = [r.llm?.provider, r.llm?.model].filter(Boolean).join(' / ');
+  const footer =
+    `<p style="font-size:10.5px;color:${MUT};line-height:1.5;margin:26px 0 0;padding-top:8px;` +
+    `border-top:1px solid ${HAIR};">Generated by SATE from this recording's transcript (SALT). ` +
+    `The counts and any z-scores are computed from the transcript; the observations, limitations ` +
+    `and summary were drafted with AI assistance${model ? ` (${esc(model)})` : ''} and must be reviewed ` +
+    `by a licensed speech-language pathologist before clinical use.</p>`;
 
   return (
     `<div style="font-family:Georgia,'Times New Roman',serif;color:${INK};max-width:720px;margin:0 auto;">` +
       `<div style="text-align:center;border-bottom:2px solid ${H};padding-bottom:10px;margin-bottom:14px;">` +
-        `<h1 style="font-size:20px;color:${H};margin:0;font-family:Georgia,'Times New Roman',serif;">${esc(r.title)} ` +
-        `<span style="color:${MUT};font-size:14px;font-weight:normal;">(Example)</span></h1>` +
+        `<h1 style="font-size:20px;color:${H};margin:0;font-family:Georgia,'Times New Roman',serif;">SATE Report</h1>` +
       `</div>` +
       `<p style="font-size:12.5px;color:${INK};margin:0 0 4px;line-height:1.9;">${headerLine}</p>` +
       h2(1, 'Transcript') + transcript +
-      h2(2, 'Metrics &amp; Normative Comparison') + metricsTable +
+      h2(2, 'Metrics &amp; Normative Comparison') + metrics +
       h2(3, 'Language Ability Assessment') + assessmentTable +
       h2(4, 'Limitations') + limitations +
       h2(5, 'Summary') + summary +
+      footer +
     `</div>`
   );
 }
@@ -216,41 +289,138 @@ function fullHtmlDoc(body: string, forWord: boolean): string {
     `<body>${body}</body></html>`;
 }
 
-// Persist the typed patient age so it's entered once and remembered. Keyed per
-// recording when we know which one; falls back to a global key otherwise.
-const ageStorageKey = (recordingId?: string) =>
-  recordingId ? `sate_report_age:${recordingId}` : 'sate_report_age';
+// Persist what the clinician types so it is entered once per recording and remembered.
+const storeKey = (field: string, recordingId?: string) =>
+  recordingId ? `sate_report_${field}:${recordingId}` : `sate_report_${field}`;
 
-export const SateReportPopup: React.FC<{ isOpen: boolean; onClose: () => void; recordingId?: string }> = ({
-  isOpen, onClose, recordingId,
+const readStore = (key: string, fallback: string) => {
+  try {
+    const v = localStorage.getItem(key);
+    return v != null && v !== '' ? v : fallback;
+  } catch { return fallback; }
+};
+
+const AGE_RE = /^\d{1,2};\d{1,2}$/;
+
+interface SateReportPopupProps {
+  isOpen: boolean;
+  onClose: () => void;
+  recordingId?: string;
+  transcriptData: Segment[];
+}
+
+export const SateReportPopup: React.FC<SateReportPopupProps> = ({
+  isOpen, onClose, recordingId, transcriptData,
 }) => {
-  const storageKey = ageStorageKey(recordingId);
-  const [age, setAge] = React.useState<string>('6;0');
+  const [age, setAge] = React.useState('');
+  const [task, setTask] = React.useState('Narrative (picture-elicited)');
+  const [targetSpeaker, setTargetSpeaker] = React.useState('');
+  const [report, setReport] = React.useState<LsaReportResponse | null>(null);
+  const [status, setStatus] = React.useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [error, setError] = React.useState('');
+  const [elapsed, setElapsed] = React.useState(0);
 
-  // Load the saved age whenever the report opens for a (different) recording.
+  // Speakers present in the sample, in the order they first appear.
+  const speakers = React.useMemo(() => {
+    const seen: string[] = [];
+    for (const s of transcriptData || []) {
+      const name = s.speaker || 'Unknown';
+      if (!seen.includes(name)) seen.push(name);
+    }
+    return seen;
+  }, [transcriptData]);
+
+  const labels = React.useMemo(() => buildSpeakerLabels(speakers), [speakers]);
+
+  // The SALT text sent for analysis: excluded utterances are left out (the '+' prefix
+  // that marks them in a SALT export is a header line to the parser), pauses are left
+  // out (a timing tag is not part of the analysed notation), and the speaker list line
+  // is omitted because the target speaker is named explicitly by `speaker_code`.
+  const saltText = React.useMemo(() => {
+    const usable = (transcriptData || []).filter((s) => !s.excluded);
+    return segmentsToSalt(usable, false, labels);
+  }, [transcriptData, labels]);
+
+  const transcriptLines = React.useMemo(
+    () => saltText.split('\n').filter((l) => l.trim() !== ''),
+    [saltText],
+  );
+
   React.useEffect(() => {
     if (!isOpen) return;
+    setAge(readStore(storeKey('age', recordingId), ''));
+    setTask(readStore(storeKey('task', recordingId), 'Narrative (picture-elicited)'));
+  }, [isOpen, recordingId]);
+
+  // Default the target speaker to the one SALT calls the child.
+  React.useEffect(() => {
+    if (targetSpeaker && speakers.includes(targetSpeaker)) return;
+    const child = speakers.find((s) => preferredLabel(s).label === 'C') || speakers[0] || '';
+    setTargetSpeaker(child);
+  }, [speakers, targetSpeaker]);
+
+  // A live counter, because the request holds an LLM call for 15-30 s.
+  React.useEffect(() => {
+    if (status !== 'loading') return;
+    const started = Date.now();
+    setElapsed(0);
+    const id = window.setInterval(() => setElapsed(Math.round((Date.now() - started) / 1000)), 1000);
+    return () => window.clearInterval(id);
+  }, [status]);
+
+  const persist = (field: string, value: string) => {
+    try { localStorage.setItem(storeKey(field, recordingId), value); } catch { /* ignore */ }
+  };
+
+  const speakerCode = labels[targetSpeaker] || 'C';
+  const targetUtterances = React.useMemo(
+    () => (transcriptData || []).filter((s) => !s.excluded && (s.speaker || 'Unknown') === targetSpeaker).length,
+    [transcriptData, targetSpeaker],
+  );
+
+  const ageValid = AGE_RE.test(age.trim());
+  const canGenerate = ageValid && task.trim() !== '' && targetUtterances > 0 && status !== 'loading';
+
+  const reportMeta = {
+    // The speaker's role, not a name: nothing identifying is sent to the service.
+    speaker: preferredLabel(targetSpeaker).label === 'C' ? 'Child'
+      : preferredLabel(targetSpeaker).label === 'E' ? 'Examiner' : 'Speaker',
+    speakerCode,
+    age: age.trim(),
+    task: task.trim(),
+    language: 'English',
+    date: new Date().toISOString().slice(0, 10),
+  };
+
+  const generate = async () => {
+    setStatus('loading');
+    setError('');
     try {
-      const saved = localStorage.getItem(storageKey);
-      if (saved != null && saved !== '') setAge(saved);
-    } catch { /* localStorage unavailable — keep the default */ }
-  }, [isOpen, storageKey]);
-
-  const onAgeChange = (v: string) => {
-    setAge(v);
-    try { localStorage.setItem(storageKey, v); } catch { /* ignore */ }
+      const result = await generateLsaReport({
+        sample: {
+          // Deliberately non-identifying: the transcript already goes to a third-party
+          // language model, so no patient or clinician name is attached to it.
+          file_name: `sate_${(recordingId || 'sample').slice(0, 8)}.slt`,
+          age: reportMeta.age,
+          task: reportMeta.task,
+          speaker: reportMeta.speaker,
+          speaker_code: speakerCode,
+          language: reportMeta.language,
+        },
+        transcript: saltText.endsWith('\n') ? saltText : `${saltText}\n`,
+      });
+      setReport(result);
+      setStatus('ready');
+    } catch (e) {
+      setError((e as Error)?.message || 'Report generation failed.');
+      setStatus('error');
+    }
   };
 
-  if (!isOpen) return null;
-
-  // Inject the saved/typed age into the report so the preview AND both exports use it.
-  const data: ReportData = {
-    ...REPORT,
-    header: REPORT.header.map((h) => (h.label === 'Age' ? { ...h, value: age } : h)),
-  };
-  const body = buildReportBody(data);
+  const body = report ? buildReportBody(report, reportMeta, transcriptLines) : '';
 
   const exportPdf = () => {
+    if (!body) return;
     // Print via a hidden iframe (Save as PDF) — preserves the exact layout/colors.
     const iframe = document.createElement('iframe');
     iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
@@ -267,6 +437,7 @@ export const SateReportPopup: React.FC<{ isOpen: boolean; onClose: () => void; r
   };
 
   const exportWord = () => {
+    if (!body) return;
     const blob = new Blob(['﻿', fullHtmlDoc(body, true)], { type: 'application/msword' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -278,30 +449,21 @@ export const SateReportPopup: React.FC<{ isOpen: boolean; onClose: () => void; r
     URL.revokeObjectURL(url);
   };
 
+  if (!isOpen) return null;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-         onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col"
            onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
           <h2 className="text-base font-semibold text-gray-900">SATE Report</h2>
           <div className="flex items-center gap-2">
-            <label className="flex items-center gap-1.5 text-sm text-gray-600 mr-1">
-              <span className="whitespace-nowrap">Patient age</span>
-              <input
-                value={age}
-                onChange={(e) => onAgeChange(e.target.value)}
-                placeholder="Y;M"
-                className="w-16 px-2 py-1 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-teal-500 focus:outline-none"
-                title="Enter once (e.g. 6;0) — it's saved and reused for this report"
-              />
-            </label>
-            <button onClick={exportPdf}
-              className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800 transition-colors">
+            <button onClick={exportPdf} disabled={!report}
+              className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors">
               <FileText className="w-4 h-4" /> Export PDF
             </button>
-            <button onClick={exportWord}
-              className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-700 bg-white border border-blue-300 rounded-lg hover:bg-blue-50 transition-colors">
+            <button onClick={exportWord} disabled={!report}
+              className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-700 bg-white border border-blue-300 rounded-lg hover:bg-blue-50 disabled:text-gray-400 disabled:border-gray-200 disabled:hover:bg-white disabled:cursor-not-allowed transition-colors">
               <FileType className="w-4 h-4" /> Export Word
             </button>
             <button onClick={onClose} className="p-1.5 text-gray-500 hover:text-gray-800 rounded-lg hover:bg-gray-100">
@@ -309,9 +471,93 @@ export const SateReportPopup: React.FC<{ isOpen: boolean; onClose: () => void; r
             </button>
           </div>
         </div>
+
+        {/* Sample information — what the analysis needs and the transcript cannot supply. */}
+        <div className="flex flex-wrap items-end gap-3 px-5 py-3 border-b border-gray-200 bg-gray-50">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-gray-600">Patient age</span>
+            <input
+              value={age}
+              onChange={(e) => { setAge(e.target.value); persist('age', e.target.value); }}
+              placeholder="6;0"
+              className={`w-20 px-2 py-1.5 text-sm border rounded-md focus:ring-2 focus:ring-teal-500 focus:outline-none ${
+                age && !ageValid ? 'border-red-400' : 'border-gray-300'
+              }`}
+              title="Years;months, e.g. 6;0"
+            />
+          </label>
+          <label className="flex flex-col gap-1 flex-1 min-w-[220px]">
+            <span className="text-xs font-medium text-gray-600">Elicitation task</span>
+            <input
+              value={task}
+              onChange={(e) => { setTask(e.target.value); persist('task', e.target.value); }}
+              placeholder="Narrative (picture-elicited)"
+              className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-teal-500 focus:outline-none"
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-gray-600">Target speaker</span>
+            <select
+              value={targetSpeaker}
+              onChange={(e) => setTargetSpeaker(e.target.value)}
+              className="px-2 py-1.5 text-sm border border-gray-300 rounded-md bg-white focus:ring-2 focus:ring-teal-500 focus:outline-none"
+            >
+              {speakers.map((s) => (
+                <option key={s} value={s}>{s} ({labels[s]})</option>
+              ))}
+            </select>
+          </label>
+          <button
+            onClick={generate}
+            disabled={!canGenerate}
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+            title={ageValid ? 'Analyse this transcript' : 'Enter the age as years;months first'}
+          >
+            {status === 'loading'
+              ? <><Loader2 className="w-4 h-4 animate-spin" /> Analysing… {elapsed}s</>
+              : <><Sparkles className="w-4 h-4" /> {report ? 'Regenerate' : 'Generate report'}</>}
+          </button>
+        </div>
+
         <div className="overflow-y-auto p-6 bg-gray-100">
-          <div className="bg-white shadow-sm mx-auto p-8" style={{ maxWidth: 760 }}
-               dangerouslySetInnerHTML={{ __html: body }} />
+          {status === 'error' && (
+            <div className="mx-auto max-w-[760px] mb-4 flex items-start gap-2 p-3 text-sm text-red-800 bg-red-50 border border-red-200 rounded-lg">
+              <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+              <div>
+                <div className="font-medium">Could not generate the report</div>
+                <div className="text-red-700">{error}</div>
+              </div>
+            </div>
+          )}
+
+          {report ? (
+            <div className="bg-white shadow-sm mx-auto p-8" style={{ maxWidth: 760 }}
+                 dangerouslySetInnerHTML={{ __html: body }} />
+          ) : (
+            <div className="bg-white shadow-sm mx-auto p-8 text-sm text-gray-600" style={{ maxWidth: 760 }}>
+              {targetUtterances === 0 ? (
+                <p>This recording has no utterances for the selected speaker, so there is nothing to analyse.</p>
+              ) : (
+                <>
+                  <p className="mb-3">
+                    The report is generated from this recording: {targetUtterances} utterance
+                    {targetUtterances === 1 ? '' : 's'} from <b>{targetSpeaker}</b> are converted to SALT
+                    and analysed. Fewer than 50 utterances is a screening-level sample and is flagged in
+                    the report's Limitations.
+                  </p>
+                  <p className="mb-3 text-gray-500">
+                    Enter the patient's age and the elicitation task, then generate. It takes about
+                    15-30 seconds. The transcript is sent to the SATE LSA service for analysis; no
+                    patient or clinician name is attached to it.
+                  </p>
+                  <pre className="mt-4 p-3 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-700 whitespace-pre-wrap max-h-64 overflow-y-auto font-mono">
+                    {transcriptLines.slice(0, 12).join('\n')}
+                    {transcriptLines.length > 12 ? `\n… ${transcriptLines.length - 12} more lines` : ''}
+                  </pre>
+                </>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

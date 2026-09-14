@@ -148,6 +148,7 @@ export const ActionButtonsPanel: React.FC<ActionButtonsPanelProps> = ({
         isOpen={showSateReportPopup}
         onClose={() => setShowSateReportPopup(false)}
         recordingId={recordingId}
+        transcriptData={transcriptData}
       />
     </>
   );
