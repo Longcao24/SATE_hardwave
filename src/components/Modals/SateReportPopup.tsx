@@ -4,7 +4,11 @@ import { type Segment } from '@/services/dataService';
 import { segmentsToSalt } from '@/services/saltService';
 import {
   generateLsaReport,
-  type LsaReportResponse,
+  loadStoredLsaReport,
+  saveStoredLsaReport,
+  transcriptFingerprint,
+  LsaReportNotStoredError,
+  type StoredLsaReport,
   type LsaMetricRow,
   type LsaDerivedCounts,
 } from '@/services/lsaReportService';
@@ -16,6 +20,13 @@ import {
 // service, which parses the counts deterministically and runs one LLM call for the
 // domain observations, limitations and summary. Everything rendered below comes from
 // that response — there is no example/placeholder content left in this file.
+//
+// A generated report is saved on the recording, so reopening it shows the report that
+// was already generated rather than spending another ~20 s and another LLM call on the
+// same transcript. What is stored is exactly what is rendered — the sample information,
+// the SALT lines that were analysed and the service's response — so a saved report and
+// a fresh one are the same document. Editing the transcript afterwards does not silently
+// invalidate it: the stored fingerprint no longer matches and the report is marked stale.
 //
 // The report body is built as one inline-styled HTML string so it renders identically
 // in the on-screen preview, the print / PDF output, and the Word (.doc) export.
@@ -189,11 +200,17 @@ function countsTableHtml(c: LsaDerivedCounts): string {
   );
 }
 
-function buildReportBody(
-  r: LsaReportResponse,
-  meta: { speaker: string; speakerCode: string; age: string; task: string; language: string; date: string },
-  transcriptLines: string[],
-): string {
+function buildReportBody(stored: StoredLsaReport): string {
+  const r = stored.response;
+  const meta = {
+    speaker: stored.sample.speaker,
+    speakerCode: stored.sample.speaker_code,
+    age: stored.sample.age,
+    task: stored.sample.task,
+    language: stored.sample.language,
+    date: stored.generated_at.slice(0, 10),
+  };
+  const transcriptLines = stored.transcript_lines;
   const c = r.derived_counts || {};
   const header = [
     { label: 'Speaker', value: `${meta.speaker} (${meta.speakerCode})` },
@@ -315,9 +332,11 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
   const [age, setAge] = React.useState('');
   const [task, setTask] = React.useState('Narrative (picture-elicited)');
   const [targetSpeaker, setTargetSpeaker] = React.useState('');
-  const [report, setReport] = React.useState<LsaReportResponse | null>(null);
+  const [report, setReport] = React.useState<StoredLsaReport | null>(null);
   const [status, setStatus] = React.useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [error, setError] = React.useState('');
+  const [saveWarning, setSaveWarning] = React.useState('');
+  const [loadingSaved, setLoadingSaved] = React.useState(false);
   const [elapsed, setElapsed] = React.useState(0);
 
   // Speakers present in the sample, in the order they first appear.
@@ -346,10 +365,33 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
     [saltText],
   );
 
+  // Opening the report shows the one already generated for this recording. The sample
+  // information comes back from the saved report rather than from this browser's
+  // localStorage, so the age and task shown are the ones the report was actually built
+  // with — on any machine, not just the one that generated it.
   React.useEffect(() => {
     if (!isOpen) return;
+    let cancelled = false;
     setAge(readStore(storeKey('age', recordingId), ''));
     setTask(readStore(storeKey('task', recordingId), 'Narrative (picture-elicited)'));
+    setReport(null);
+    setStatus('idle');
+    setError('');
+    setSaveWarning('');
+    if (!recordingId) return;
+
+    setLoadingSaved(true);
+    loadStoredLsaReport(recordingId)
+      .then((saved) => {
+        if (cancelled || !saved) return;
+        setReport(saved);
+        setStatus('ready');
+        setAge(saved.sample.age);
+        setTask(saved.sample.task);
+      })
+      .finally(() => { if (!cancelled) setLoadingSaved(false); });
+
+    return () => { cancelled = true; };
   }, [isOpen, recordingId]);
 
   // Default the target speaker to the one SALT calls the child.
@@ -392,9 +434,14 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
     date: new Date().toISOString().slice(0, 10),
   };
 
+  // A report generated from a transcript that has since been edited is not wrong, but it
+  // no longer describes what is on screen — so say so rather than quietly showing it.
+  const isStale = report != null && report.transcript_hash !== transcriptFingerprint(saltText);
+
   const generate = async () => {
     setStatus('loading');
     setError('');
+    setSaveWarning('');
     try {
       const result = await generateLsaReport({
         sample: {
@@ -409,15 +456,45 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
         },
         transcript: saltText.endsWith('\n') ? saltText : `${saltText}\n`,
       });
-      setReport(result);
+
+      // Store what is rendered, not the whole response: `latex` is ~19 KB the app never
+      // reads, and keeping the rendered inputs together means a saved report and a fresh
+      // one are the same document.
+      const { latex: _latex, pdf_base64: _pdf, ...response } = result;
+      const stored: StoredLsaReport = {
+        generated_at: new Date().toISOString(),
+        sample: {
+          age: reportMeta.age,
+          task: reportMeta.task,
+          speaker: reportMeta.speaker,
+          speaker_code: speakerCode,
+          language: reportMeta.language,
+        },
+        transcript_lines: transcriptLines,
+        transcript_hash: transcriptFingerprint(saltText),
+        response,
+      };
+      setReport(stored);
       setStatus('ready');
+
+      // The report exists either way; a failed save costs a regeneration next time, so it
+      // is a warning on a finished report, never an error that discards it.
+      if (recordingId) {
+        try {
+          await saveStoredLsaReport(recordingId, stored);
+        } catch (e) {
+          setSaveWarning(e instanceof LsaReportNotStoredError
+            ? `${e.message} The report is shown below but will have to be generated again next time.`
+            : 'The report could not be saved to this recording and will have to be generated again next time.');
+        }
+      }
     } catch (e) {
       setError((e as Error)?.message || 'Report generation failed.');
       setStatus('error');
     }
   };
 
-  const body = report ? buildReportBody(report, reportMeta, transcriptLines) : '';
+  const body = report ? buildReportBody(report) : '';
 
   const exportPdf = () => {
     if (!body) return;
@@ -456,7 +533,14 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col"
            onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
-          <h2 className="text-base font-semibold text-gray-900">SATE Report</h2>
+          <div className="flex items-baseline gap-2 min-w-0">
+            <h2 className="text-base font-semibold text-gray-900">SATE Report</h2>
+            {report && (
+              <span className="text-xs text-gray-500 truncate" title={report.generated_at}>
+                {saveWarning ? 'generated' : 'saved'} {new Date(report.generated_at).toLocaleString()}
+              </span>
+            )}
+          </div>
           <div className="flex items-center gap-2">
             <button onClick={exportPdf} disabled={!report}
               className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors">
@@ -520,6 +604,28 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
         </div>
 
         <div className="overflow-y-auto p-6 bg-gray-100">
+          {isStale && (
+            <div className="mx-auto max-w-[760px] mb-4 flex items-start gap-2 p-3 text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-lg">
+              <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+              <div>
+                <div className="font-medium">The transcript changed after this report was generated</div>
+                <div className="text-amber-800">
+                  It still shows the transcript it was built from. Regenerate to analyse the current one.
+                </div>
+              </div>
+            </div>
+          )}
+
+          {saveWarning && (
+            <div className="mx-auto max-w-[760px] mb-4 flex items-start gap-2 p-3 text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-lg">
+              <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+              <div>
+                <div className="font-medium">Not saved to this recording</div>
+                <div className="text-amber-800">{saveWarning}</div>
+              </div>
+            </div>
+          )}
+
           {status === 'error' && (
             <div className="mx-auto max-w-[760px] mb-4 flex items-start gap-2 p-3 text-sm text-red-800 bg-red-50 border border-red-200 rounded-lg">
               <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
@@ -535,7 +641,11 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
                  dangerouslySetInnerHTML={{ __html: body }} />
           ) : (
             <div className="bg-white shadow-sm mx-auto p-8 text-sm text-gray-600" style={{ maxWidth: 760 }}>
-              {targetUtterances === 0 ? (
+              {loadingSaved ? (
+                <p className="flex items-center gap-2 text-gray-500">
+                  <Loader2 className="w-4 h-4 animate-spin" /> Looking for a saved report…
+                </p>
+              ) : targetUtterances === 0 ? (
                 <p>This recording has no utterances for the selected speaker, so there is nothing to analyse.</p>
               ) : (
                 <>
@@ -547,7 +657,8 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
                   </p>
                   <p className="mb-3 text-gray-500">
                     Enter the patient's age and the elicitation task, then generate. It takes about
-                    15-30 seconds. The transcript is sent to the SATE LSA service for analysis; no
+                    15-30 seconds, once: the report is saved on this recording and opens straight
+                    away next time. The transcript is sent to the SATE LSA service for analysis; no
                     patient or clinician name is attached to it.
                   </p>
                   <pre className="mt-4 p-3 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-700 whitespace-pre-wrap max-h-64 overflow-y-auto font-mono">

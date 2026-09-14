@@ -129,3 +129,90 @@ export async function generateLsaReport(req: LsaReportRequest): Promise<LsaRepor
   if (!payload.analysis) throw new Error('Report generation returned an unexpected response.');
   return payload;
 }
+
+// --- persistence -----------------------------------------------------------
+// A generated report is kept on the recording it describes, so reopening it costs
+// nothing: the same transcript would otherwise spend another ~20 s and another LLM
+// call producing the same document. One report per recording — regenerating replaces it.
+
+/** What is stored in `recordings.lsa_report`. */
+export interface StoredLsaReport {
+  generated_at: string;
+  sample: {
+    age: string;
+    task: string;
+    speaker: string;
+    speaker_code: string;
+    language: string;
+  };
+  /** The SALT lines that were analysed, exactly as sent. */
+  transcript_lines: string[];
+  /** Fingerprint of those lines: lets the UI say a report is stale after an edit. */
+  transcript_hash: string;
+  /** The service's response minus `latex` — the app renders its own HTML. */
+  response: Omit<LsaReportResponse, 'latex' | 'pdf_base64'>;
+}
+
+/** Stable, order-sensitive fingerprint of the analysed transcript (FNV-1a, 32-bit). */
+export function transcriptFingerprint(text: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
+}
+
+/** Postgres/PostgREST for "that column does not exist" — the migration has not been run. */
+const isMissingColumn = (e: { code?: string; message?: string } | null) =>
+  e?.code === '42703' || e?.code === 'PGRST204' || /lsa_report/.test(e?.message || '');
+
+export class LsaReportNotStoredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'LsaReportNotStoredError';
+  }
+}
+
+export async function loadStoredLsaReport(recordingId: string): Promise<StoredLsaReport | null> {
+  const { data, error } = await supabase
+    .from('recordings')
+    .select('lsa_report')
+    .eq('id', recordingId)
+    .single();
+
+  if (error) {
+    // A recording without the column (migration pending) or without a row is simply a
+    // recording with no saved report — never a reason to block generating a new one.
+    if (isMissingColumn(error)) return null;
+    console.warn('Could not load the saved SATE report:', error.message);
+    return null;
+  }
+  const stored = (data as { lsa_report?: StoredLsaReport | null } | null)?.lsa_report;
+  return stored && stored.response ? stored : null;
+}
+
+export async function saveStoredLsaReport(recordingId: string, report: StoredLsaReport): Promise<void> {
+  const { error } = await supabase
+    .from('recordings')
+    .update({ lsa_report: report })
+    .eq('id', recordingId);
+
+  if (error) {
+    if (isMissingColumn(error)) {
+      throw new LsaReportNotStoredError(
+        'The recordings table has no lsa_report column yet, so this report was not saved. '
+        + 'Run the 20260914_recordings_lsa_report migration.',
+      );
+    }
+    throw new LsaReportNotStoredError(error.message);
+  }
+}
+
+export async function clearStoredLsaReport(recordingId: string): Promise<void> {
+  const { error } = await supabase
+    .from('recordings')
+    .update({ lsa_report: null })
+    .eq('id', recordingId);
+  if (error && !isMissingColumn(error)) throw new LsaReportNotStoredError(error.message);
+}
