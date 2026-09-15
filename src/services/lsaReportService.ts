@@ -135,6 +135,34 @@ export async function generateLsaReport(req: LsaReportRequest): Promise<LsaRepor
 // nothing: the same transcript would otherwise spend another ~20 s and another LLM
 // call producing the same document. One report per recording — regenerating replaces it.
 
+/** Where the reference values in a normative comparison came from. */
+export interface LsaNormsContext {
+  source: 'CHILDES';
+  language: string;
+  task: string;
+  clinical: string;
+  n_samples: number;
+  n_corpora: number;
+  age_window_months: [number, number] | null;
+}
+
+/**
+ * The clinician's corrections to the AI-drafted prose, kept SEPARATELY from the
+ * service's response rather than written over it. The report footer says the
+ * observations were drafted by a language model and must be reviewed by an SLP, so
+ * which sentences are the model's and which are the reviewer's has to stay answerable:
+ * an edit that overwrote `response` would erase exactly that distinction, and would also
+ * make "revert to the AI text" impossible. Only the fields a reviewer can legitimately
+ * change are here — never a count, never a z-score, which are computed, not drafted.
+ */
+export interface LsaReportEdits {
+  /** Keyed by the domain's index in `response.analysis.domains`. */
+  domains?: Record<string, { observation?: string; status?: string }>;
+  /** Present = replaces the whole rendered limitations list (which merges three sources). */
+  limitations?: string[];
+  summary?: string;
+}
+
 /** What is stored in `recordings.lsa_report`. */
 export interface StoredLsaReport {
   generated_at: string;
@@ -149,8 +177,78 @@ export interface StoredLsaReport {
   transcript_lines: string[];
   /** Fingerprint of those lines: lets the UI say a report is stale after an edit. */
   transcript_hash: string;
+  /** The metrics sent with the request, if any — what produced `response.metrics_table`. */
+  metrics?: Record<string, LsaMetricInput>;
+  /** The reference group those metrics were compared against. */
+  norms?: LsaNormsContext | null;
+  /** The reviewing clinician's corrections, applied over `response` when rendering. */
+  edits?: LsaReportEdits;
+  edited_at?: string | null;
   /** The service's response minus `latex` — the app renders its own HTML. */
   response: Omit<LsaReportResponse, 'latex' | 'pdf_base64'>;
+}
+
+// --- edits ------------------------------------------------------------------
+
+/**
+ * The limitations list as the report renders it: the service keeps limitations,
+ * processing warnings and doubtful-reference notes in three arrays, and the report shows
+ * them as one list. The editor and the renderer MUST derive it the same way, or saving
+ * an untouched report would record the merge itself as an edit.
+ */
+export function baseLimitations(r: StoredLsaReport['response']): string[] {
+  return [
+    ...(r.analysis?.limitations || []),
+    ...(r.warnings || []),
+    ...(r.analysis?.reference_concerns || []),
+  ];
+}
+
+export interface MergedLsaReport {
+  domains: LsaDomain[];
+  limitations: string[];
+  summary: string;
+  /** Which fields the reviewer changed — drives the "edited" marks and the footer. */
+  editedDomains: Set<number>;
+  limitationsEdited: boolean;
+  summaryEdited: boolean;
+  editedCount: number;
+}
+
+/** The report as it should be READ: the service's response with the reviewer's text on top. */
+export function mergeEdits(stored: StoredLsaReport): MergedLsaReport {
+  const r = stored.response;
+  const e = stored.edits || {};
+  const editedDomains = new Set<number>();
+
+  const domains = (r.analysis?.domains || []).map((d, i) => {
+    const patch = e.domains?.[String(i)];
+    if (!patch) return d;
+    const observation = patch.observation != null && patch.observation !== d.observation
+      ? patch.observation : d.observation;
+    const status = patch.status != null && patch.status !== d.status ? patch.status : d.status;
+    if (observation !== d.observation || status !== d.status) editedDomains.add(i);
+    return { ...d, observation, status };
+  });
+
+  const base = baseLimitations(r);
+  const limitationsEdited = e.limitations != null
+    && (e.limitations.length !== base.length || e.limitations.some((l, i) => l !== base[i]));
+  const limitations = limitationsEdited ? e.limitations! : base;
+
+  const baseSummary = r.analysis?.summary || '';
+  const summaryEdited = e.summary != null && e.summary !== baseSummary;
+  const summary = summaryEdited ? e.summary! : baseSummary;
+
+  return {
+    domains,
+    limitations,
+    summary,
+    editedDomains,
+    limitationsEdited,
+    summaryEdited,
+    editedCount: editedDomains.size + (limitationsEdited ? 1 : 0) + (summaryEdited ? 1 : 0),
+  };
 }
 
 /** Stable, order-sensitive fingerprint of the analysed transcript (FNV-1a, 32-bit). */

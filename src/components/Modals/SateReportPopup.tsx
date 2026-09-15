@@ -1,5 +1,8 @@
 import React from 'react';
-import { X, FileText, FileType, Sparkles, Loader2, AlertTriangle } from 'lucide-react';
+import {
+  X, FileText, FileType, Sparkles, Loader2, AlertTriangle,
+  Pencil, Undo2, Plus, Trash2, Check,
+} from 'lucide-react';
 import { type Segment } from '@/services/dataService';
 import { segmentsToSalt } from '@/services/saltService';
 import {
@@ -7,11 +10,17 @@ import {
   loadStoredLsaReport,
   saveStoredLsaReport,
   transcriptFingerprint,
+  baseLimitations,
+  mergeEdits,
   LsaReportNotStoredError,
   type StoredLsaReport,
   type LsaMetricRow,
+  type LsaMetricInput,
   type LsaDerivedCounts,
+  type LsaNormsContext,
+  type LsaReportEdits,
 } from '@/services/lsaReportService';
+import { buildNormedMetrics, NoNormsError } from '@/services/lsaMetricsService';
 
 // ---------------------------------------------------------------------------
 // SATE Report — a single-sample clinical report for THIS recording.
@@ -28,9 +37,23 @@ import {
 // a fresh one are the same document. Editing the transcript afterwards does not silently
 // invalidate it: the stored fingerprint no longer matches and the report is marked stale.
 //
+// Ticking "Compare to CHILDES norms" sends this sample's own metrics with TD reference
+// values, which is what makes the service return z-scores; without it the report has the
+// transcript counts and no normative comparison.
+//
+// The prose the model drafted can be corrected before the report is used — the footer
+// says an SLP must review it, so the reviewer needs somewhere to put the review. Edits
+// are kept beside the response, never over it, so every field can still be reverted to
+// what the model actually wrote.
+//
 // The report body is built as one inline-styled HTML string so it renders identically
 // in the on-screen preview, the print / PDF output, and the Word (.doc) export.
 // ---------------------------------------------------------------------------
+
+/** The verdicts a reviewer may choose from — exactly the set the service uses. */
+const DOMAIN_STATUSES = [
+  'STRENGTH', 'AGE-APPROPRIATE', 'MONITOR', 'CONCERN', 'INSUFFICIENT DATA',
+] as const;
 
 const esc = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -160,8 +183,10 @@ function metricsTableHtml(rows: LsaMetricRow[]): string {
   );
 }
 
-// Section 2 with no reference values: the counts the service parsed from the transcript.
-function countsTableHtml(c: LsaDerivedCounts): string {
+// The counts the service parsed from the transcript. Shown on its own when no reference
+// values were sent, and under the metrics table when they were — the counts are the
+// transcript's own arithmetic and stay worth printing either way.
+function countsTableHtml(c: LsaDerivedCounts, standalone: boolean): string {
   const errorCodes = Object.entries(c.error_code_counts || {})
     .map(([code, n]) => `${code} ×${n}`).join(', ');
   const rows: Array<[string, string, string]> = [
@@ -194,9 +219,31 @@ function countsTableHtml(c: LsaDerivedCounts): string {
     `<th style="padding:6px 10px;border-bottom:2px solid ${HAIR};">Basis</th>` +
     `</tr></thead><tbody>${body}</tbody></table>` +
     `<p style="font-size:11px;color:${MUT};font-style:italic;margin:8px 0 0;line-height:1.5;">` +
-    `All values are counted from the transcript, not estimated by the language model. No ` +
-    `typically-developing reference values were supplied for this sample, so no z-scores or ` +
-    `normative statuses are shown; the domain judgments below come from the transcript itself.</p>`
+    (standalone
+      ? `All values are counted from the transcript, not estimated by the language model. No `
+        + `typically-developing reference values were supplied for this sample, so no z-scores or `
+        + `normative statuses are shown; the domain judgments below come from the transcript itself.`
+      : `Counted from the transcript by the report service, not estimated by the language model.`) +
+    `</p>`
+  );
+}
+
+const h3 = (t: string) =>
+  `<h3 style="font-size:12.5px;color:${INK};margin:20px 0 6px;font-weight:700;` +
+  `font-family:Georgia,'Times New Roman',serif;">${t}</h3>`;
+
+// Which reference group the z-scores were computed against. A z-score with no stated
+// reference group is not interpretable, so this prints wherever the bars print.
+function normsNoteHtml(n?: LsaNormsContext | null): string {
+  if (!n) return '';
+  const ageWindow = n.age_window_months
+    ? `ages ${n.age_window_months[0]}\u2013${n.age_window_months[1]} months`
+    : 'the requested age window';
+  return (
+    `<p style="font-size:11px;color:${MUT};font-style:italic;margin:8px 0 0;line-height:1.5;">` +
+    `Reference values: ${esc(n.source)} ${esc(n.clinical)} ${esc(n.task)} samples ` +
+    `(${esc(n.language)}), ${esc(ageWindow)} \u2014 n = ${n.n_samples} samples from ` +
+    `${n.n_corpora} corpora. Metrics with no published reference for this age are marked NO REF.</p>`
   );
 }
 
@@ -237,11 +284,15 @@ function buildReportBody(stored: StoredLsaReport): string {
     `[EW:x] error code (target x) · ( ) maze (excluded from counts) · X unintelligible. ` +
     `Line numbers match the utterance references in the observations below.</p>`;
 
-  const metrics = (r.metrics_table && r.metrics_table.length > 0)
-    ? metricsTableHtml(r.metrics_table)
-    : countsTableHtml(c);
+  const merged = mergeEdits(stored);
 
-  const assessmentRows = (r.analysis.domains || []).map((d) => `
+  const hasMetrics = (r.metrics_table && r.metrics_table.length > 0);
+  const metrics = hasMetrics
+    ? metricsTableHtml(r.metrics_table) + normsNoteHtml(stored.norms)
+      + h3('Transcript counts') + countsTableHtml(c, false)
+    : countsTableHtml(c, true);
+
+  const assessmentRows = merged.domains.map((d) => `
     <tr>
       <td style="padding:9px 10px;border-bottom:1px solid ${HAIR};font-weight:700;vertical-align:top;width:18%;">${esc(d.domain)}</td>
       <td style="padding:9px 10px;border-bottom:1px solid ${HAIR};vertical-align:top;line-height:1.5;">${escRich(d.observation)}</td>
@@ -257,26 +308,30 @@ function buildReportBody(stored: StoredLsaReport): string {
     `<th style="padding:6px 10px;border-bottom:2px solid ${HAIR};">Status</th>` +
     `</tr></thead><tbody>${assessmentRows}</tbody></table>`;
 
-  const limitationItems = [
-    ...(r.analysis.limitations || []),
-    ...(r.warnings || []),
-    ...(r.analysis.reference_concerns || []),
-  ];
+  const limitationItems = merged.limitations;
   const limitations = limitationItems.length
     ? `<ul style="margin:4px 0 0;padding-left:20px;font-size:12.5px;color:${INK};line-height:1.6;">` +
       limitationItems.map((l) => `<li style="margin:0 0 5px;">${escRich(l)}</li>`).join('') + `</ul>`
     : `<p style="font-size:12.5px;color:${MUT};margin:4px 0 0;">None reported.</p>`;
 
   const summary =
-    `<p style="font-size:12.5px;color:${INK};line-height:1.6;margin:4px 0 0;">${escRich(r.analysis.summary || '')}</p>`;
+    `<p style="font-size:12.5px;color:${INK};line-height:1.6;margin:4px 0 0;">${escRich(merged.summary)}</p>`;
 
   const model = [r.llm?.provider, r.llm?.model].filter(Boolean).join(' / ');
+  // A reviewed report and an untouched one must not look the same: the footer's promise
+  // is that the prose is the model's until a clinician says otherwise, so a report that
+  // carries the clinician's own words says so, and says how many sections it applies to.
+  const reviewed = merged.editedCount > 0
+    ? ` ${merged.editedCount} section${merged.editedCount === 1 ? '' : 's'} of this report `
+      + `${merged.editedCount === 1 ? 'was' : 'were'} edited by the reviewing clinician`
+      + `${stored.edited_at ? ` on ${esc(stored.edited_at.slice(0, 10))}` : ''}.`
+    : '';
   const footer =
     `<p style="font-size:10.5px;color:${MUT};line-height:1.5;margin:26px 0 0;padding-top:8px;` +
     `border-top:1px solid ${HAIR};">Generated by SATE from this recording's transcript (SALT). ` +
     `The counts and any z-scores are computed from the transcript; the observations, limitations ` +
     `and summary were drafted with AI assistance${model ? ` (${esc(model)})` : ''} and must be reviewed ` +
-    `by a licensed speech-language pathologist before clinical use.</p>`;
+    `by a licensed speech-language pathologist before clinical use.${reviewed}</p>`;
 
   return (
     `<div style="font-family:Georgia,'Times New Roman',serif;color:${INK};max-width:720px;margin:0 auto;">` +
@@ -317,7 +372,214 @@ const readStore = (key: string, fallback: string) => {
   } catch { return fallback; }
 };
 
-const AGE_RE = /^\d{1,2};\d{1,2}$/;
+// The service wants one SALT-style "years;months" string, which is notation, not
+// something to make a clinician type. It is split into two plain number boxes on screen
+// and rejoined for the request; this reads the string back apart when a saved report (or
+// this browser's last entry) is restored.
+const parseAge = (age: string): { years: string; months: string } => {
+  const m = /^\s*(\d{1,2})\s*;\s*(\d{1,2})\s*$/.exec(age || '');
+  return m ? { years: m[1], months: m[2] } : { years: '', months: '' };
+};
+
+// --- review / edit ---------------------------------------------------------
+
+interface ReportDraft {
+  domains: Array<{ observation: string; status: string }>;
+  limitations: string[];
+  summary: string;
+}
+
+/** The report as it currently reads (model text plus any saved edits) — what the
+ *  reviewer starts from when they open the editor. */
+const draftFromReport = (stored: StoredLsaReport): ReportDraft => {
+  const merged = mergeEdits(stored);
+  return {
+    domains: merged.domains.map((d) => ({ observation: d.observation || '', status: d.status || '' })),
+    limitations: [...merged.limitations],
+    summary: merged.summary,
+  };
+};
+
+/** The model's own text, ignoring every edit — what "revert" goes back to. */
+const draftFromModel = (stored: StoredLsaReport): ReportDraft => {
+  const r = stored.response;
+  return {
+    domains: (r.analysis?.domains || []).map((d) => ({ observation: d.observation || '', status: d.status || '' })),
+    limitations: baseLimitations(r),
+    summary: r.analysis?.summary || '',
+  };
+};
+
+/**
+ * Only what actually differs from the model's text is stored. A draft that was opened and
+ * closed untouched must produce NO edits at all — otherwise every report would be marked
+ * "edited by the reviewing clinician" for having been looked at, and the footer's claim
+ * would stop meaning anything.
+ */
+function draftToEdits(stored: StoredLsaReport, draft: ReportDraft): LsaReportEdits | undefined {
+  const r = stored.response;
+  const edits: LsaReportEdits = {};
+
+  const domains: Record<string, { observation?: string; status?: string }> = {};
+  (r.analysis?.domains || []).forEach((d, i) => {
+    const next = draft.domains[i];
+    if (!next) return;
+    const patch: { observation?: string; status?: string } = {};
+    if (next.observation.trim() !== (d.observation || '').trim()) patch.observation = next.observation.trim();
+    if (next.status !== d.status) patch.status = next.status;
+    if (Object.keys(patch).length) domains[String(i)] = patch;
+  });
+  if (Object.keys(domains).length) edits.domains = domains;
+
+  const base = baseLimitations(r);
+  const limitations = draft.limitations.map((l) => l.trim()).filter((l) => l !== '');
+  if (limitations.length !== base.length || limitations.some((l, i) => l !== base[i])) {
+    edits.limitations = limitations;
+  }
+
+  if (draft.summary.trim() !== (r.analysis?.summary || '').trim()) edits.summary = draft.summary.trim();
+
+  return Object.keys(edits).length ? edits : undefined;
+}
+
+const EDIT_FIELD = 'w-full px-2.5 py-2 text-sm border border-gray-300 rounded-md '
+  + 'focus:ring-2 focus:ring-teal-500 focus:border-transparent focus:outline-none';
+
+const ReportEditor: React.FC<{
+  stored: StoredLsaReport;
+  draft: ReportDraft;
+  onChange: (next: ReportDraft) => void;
+}> = ({ stored, draft, onChange }) => {
+  const model = draftFromModel(stored);
+  const set = (patch: Partial<ReportDraft>) => onChange({ ...draft, ...patch });
+
+  const revertBtn = (onClick: () => void, changed: boolean) => changed ? (
+    <button
+      onClick={onClick}
+      className="inline-flex items-center gap-1 text-[11px] font-medium text-gray-500 hover:text-teal-700"
+      title="Restore the text the language model wrote"
+    >
+      <Undo2 className="w-3 h-3" /> Revert to AI text
+    </button>
+  ) : null;
+
+  return (
+    <div className="bg-white shadow-sm mx-auto p-6 space-y-6" style={{ maxWidth: 760 }}>
+      <p className="text-xs text-gray-500 leading-relaxed">
+        Only the drafted prose is editable. The transcript, the counts and the z-scores are
+        computed from this recording and are not opinions to correct; regenerating the report
+        replaces the drafted text and discards what you write here.
+      </p>
+
+      <section>
+        <h3 className="text-sm font-semibold text-gray-900 mb-2">Language Ability Assessment</h3>
+        <div className="space-y-3">
+          {draft.domains.map((d, i) => {
+            const orig = model.domains[i] || { observation: '', status: '' };
+            const changed = d.observation.trim() !== orig.observation.trim() || d.status !== orig.status;
+            return (
+              <div key={i} className={`p-3 rounded-lg border ${changed ? 'border-teal-300 bg-teal-50/40' : 'border-gray-200'}`}>
+                <div className="flex items-center justify-between gap-3 mb-2">
+                  <span className="text-xs font-semibold text-gray-800">
+                    {stored.response.analysis?.domains?.[i]?.domain || `Domain ${i + 1}`}
+                  </span>
+                  <div className="flex items-center gap-3">
+                    {revertBtn(() => {
+                      const domains = [...draft.domains];
+                      domains[i] = { ...orig };
+                      set({ domains });
+                    }, changed)}
+                    <select
+                      value={d.status}
+                      onChange={(e) => {
+                        const domains = [...draft.domains];
+                        domains[i] = { ...d, status: e.target.value };
+                        set({ domains });
+                      }}
+                      className="px-2 py-1 text-xs border border-gray-300 rounded-md bg-white focus:ring-2 focus:ring-teal-500 focus:outline-none"
+                    >
+                      {[...DOMAIN_STATUSES, ...(DOMAIN_STATUSES.includes(d.status as typeof DOMAIN_STATUSES[number]) ? [] : [d.status])]
+                        .filter(Boolean)
+                        .map((v) => <option key={v} value={v}>{v}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <textarea
+                  value={d.observation}
+                  rows={3}
+                  onChange={(e) => {
+                    const domains = [...draft.domains];
+                    domains[i] = { ...d, observation: e.target.value };
+                    set({ domains });
+                  }}
+                  className={EDIT_FIELD}
+                />
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      <section>
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-sm font-semibold text-gray-900">Limitations</h3>
+          {revertBtn(
+            () => set({ limitations: [...model.limitations] }),
+            draft.limitations.length !== model.limitations.length
+              || draft.limitations.some((l, i) => l.trim() !== (model.limitations[i] || '').trim()),
+          )}
+        </div>
+        <div className="space-y-2">
+          {draft.limitations.map((l, i) => (
+            <div key={i} className="flex items-start gap-2">
+              <textarea
+                value={l}
+                rows={2}
+                onChange={(e) => {
+                  const limitations = [...draft.limitations];
+                  limitations[i] = e.target.value;
+                  set({ limitations });
+                }}
+                className={EDIT_FIELD}
+              />
+              <button
+                onClick={() => set({ limitations: draft.limitations.filter((_, j) => j !== i) })}
+                className="mt-1 p-1.5 text-gray-400 hover:text-red-600 rounded-md hover:bg-red-50"
+                title="Remove this limitation"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
+          ))}
+          {draft.limitations.length === 0 && (
+            <p className="text-xs text-gray-500 italic">
+              No limitations — the report will say "None reported."
+            </p>
+          )}
+          <button
+            onClick={() => set({ limitations: [...draft.limitations, ''] })}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-teal-700 border border-teal-200 rounded-md hover:bg-teal-50"
+          >
+            <Plus className="w-3.5 h-3.5" /> Add a limitation
+          </button>
+        </div>
+      </section>
+
+      <section>
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-sm font-semibold text-gray-900">Summary</h3>
+          {revertBtn(() => set({ summary: model.summary }), draft.summary.trim() !== model.summary.trim())}
+        </div>
+        <textarea
+          value={draft.summary}
+          rows={6}
+          onChange={(e) => set({ summary: e.target.value })}
+          className={EDIT_FIELD}
+        />
+      </section>
+    </div>
+  );
+};
 
 interface SateReportPopupProps {
   isOpen: boolean;
@@ -329,7 +591,8 @@ interface SateReportPopupProps {
 export const SateReportPopup: React.FC<SateReportPopupProps> = ({
   isOpen, onClose, recordingId, transcriptData,
 }) => {
-  const [age, setAge] = React.useState('');
+  const [ageYears, setAgeYears] = React.useState('');
+  const [ageMonths, setAgeMonths] = React.useState('');
   const [task, setTask] = React.useState('Narrative (picture-elicited)');
   const [targetSpeaker, setTargetSpeaker] = React.useState('');
   const [report, setReport] = React.useState<StoredLsaReport | null>(null);
@@ -338,6 +601,13 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
   const [saveWarning, setSaveWarning] = React.useState('');
   const [loadingSaved, setLoadingSaved] = React.useState(false);
   const [elapsed, setElapsed] = React.useState(0);
+  const [useNorms, setUseNorms] = React.useState(false);
+  const [normRange, setNormRange] = React.useState('6');
+  const [phase, setPhase] = React.useState<'norms' | 'report'>('report');
+  const [editing, setEditing] = React.useState(false);
+  const [draft, setDraft] = React.useState<ReportDraft | null>(null);
+  const [savingEdits, setSavingEdits] = React.useState(false);
+  const [confirmRegen, setConfirmRegen] = React.useState(false);
 
   // Speakers present in the sample, in the order they first appear.
   const speakers = React.useMemo(() => {
@@ -372,12 +642,19 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
   React.useEffect(() => {
     if (!isOpen) return;
     let cancelled = false;
-    setAge(readStore(storeKey('age', recordingId), ''));
+    const lastAge = parseAge(readStore(storeKey('age', recordingId), ''));
+    setAgeYears(lastAge.years);
+    setAgeMonths(lastAge.months);
     setTask(readStore(storeKey('task', recordingId), 'Narrative (picture-elicited)'));
+    setUseNorms(readStore(storeKey('norms', recordingId), '') === '1');
+    setNormRange(readStore(storeKey('normRange', recordingId), '6'));
     setReport(null);
     setStatus('idle');
     setError('');
     setSaveWarning('');
+    setEditing(false);
+    setDraft(null);
+    setConfirmRegen(false);
     if (!recordingId) return;
 
     setLoadingSaved(true);
@@ -386,8 +663,14 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
         if (cancelled || !saved) return;
         setReport(saved);
         setStatus('ready');
-        setAge(saved.sample.age);
+        const savedAge = parseAge(saved.sample.age);
+        setAgeYears(savedAge.years);
+        setAgeMonths(savedAge.months);
         setTask(saved.sample.task);
+        // The checkbox shows what this report was actually built with, not what this
+        // browser last ticked — otherwise it would offer to "regenerate with norms" a
+        // report that already has them, or hide that a saved one has none.
+        setUseNorms(!!saved.norms);
       })
       .finally(() => { if (!cancelled) setLoadingSaved(false); });
 
@@ -414,13 +697,64 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
     try { localStorage.setItem(storeKey(field, recordingId), value); } catch { /* ignore */ }
   };
 
+  // Stored in the service's own "years;months" form, so the last age typed here and the
+  // age read back off a saved report restore through the same parse.
+  const persistAge = (years: string, months: string) =>
+    persist('age', years.trim() ? `${years.trim()};${months.trim() || '0'}` : '');
+
+  // --- review ---------------------------------------------------------------
+
+  const startEditing = () => {
+    if (!report) return;
+    setDraft(draftFromReport(report));
+    setEditing(true);
+  };
+
+  const cancelEditing = () => {
+    setEditing(false);
+    setDraft(null);
+  };
+
+  const saveEdits = async () => {
+    if (!report || !draft) return;
+    const edits = draftToEdits(report, draft);
+    const next: StoredLsaReport = {
+      ...report,
+      edits,
+      edited_at: edits ? new Date().toISOString() : null,
+    };
+    setSavingEdits(true);
+    setSaveWarning('');
+    try {
+      if (recordingId) await saveStoredLsaReport(recordingId, next);
+    } catch (e) {
+      // Same rule as a freshly generated report: the text the clinician wrote is not
+      // thrown away because the write failed, it is shown with a warning that it is
+      // only in this browser.
+      setSaveWarning(e instanceof LsaReportNotStoredError
+        ? `${e.message} Your edits are shown below but were not saved.`
+        : 'Your edits could not be saved to this recording and exist only in this browser.');
+    } finally {
+      setSavingEdits(false);
+      setReport(next);
+      setEditing(false);
+      setDraft(null);
+    }
+  };
+
   const speakerCode = labels[targetSpeaker] || 'C';
   const targetUtterances = React.useMemo(
     () => (transcriptData || []).filter((s) => !s.excluded && (s.speaker || 'Unknown') === targetSpeaker).length,
     [transcriptData, targetSpeaker],
   );
 
-  const ageValid = AGE_RE.test(age.trim());
+  // Months may be left blank: an age is usually said as "6 years", and the alternative
+  // is refusing to generate over a field whose only sensible value is 0.
+  const yearsValid = /^\d{1,2}$/.test(ageYears.trim());
+  const monthsValid = ageMonths.trim() === ''
+    || (/^\d{1,2}$/.test(ageMonths.trim()) && Number(ageMonths) <= 11);
+  const ageValid = yearsValid && monthsValid;
+  const age = yearsValid ? `${Number(ageYears)};${Number(ageMonths || 0)}` : '';
   const canGenerate = ageValid && task.trim() !== '' && targetUtterances > 0 && status !== 'loading';
 
   const reportMeta = {
@@ -428,7 +762,7 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
     speaker: preferredLabel(targetSpeaker).label === 'C' ? 'Child'
       : preferredLabel(targetSpeaker).label === 'E' ? 'Examiner' : 'Speaker',
     speakerCode,
-    age: age.trim(),
+    age,
     task: task.trim(),
     language: 'English',
     date: new Date().toISOString().slice(0, 10),
@@ -442,6 +776,37 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
     setStatus('loading');
     setError('');
     setSaveWarning('');
+    setConfirmRegen(false);
+    setEditing(false);
+
+    // The reference values are fetched BEFORE the report, so a norms failure costs
+    // nothing: the ~20 s LLM call has not been spent yet, and the clinician gets the real
+    // reason rather than a report that quietly lacks the comparison they asked for.
+    let metrics: Record<string, LsaMetricInput> | undefined;
+    let norms: LsaNormsContext | null = null;
+    if (useNorms) {
+      setPhase('norms');
+      try {
+        const bundle = await buildNormedMetrics({
+          segments: transcriptData || [],
+          targetSpeaker,
+          ageYears: Number(ageYears),
+          ageMonths: Number(ageMonths || 0),
+          rangeMonths: normRange.trim() === '' ? undefined : Number(normRange),
+        });
+        metrics = bundle.metrics;
+        norms = bundle.norms;
+      } catch (e) {
+        setError(e instanceof NoNormsError
+          ? e.message
+          : `Could not fetch the CHILDES reference values: ${(e as Error)?.message || e}`);
+        setStatus('error');
+        setPhase('report');
+        return;
+      }
+    }
+    setPhase('report');
+
     try {
       const result = await generateLsaReport({
         sample: {
@@ -455,6 +820,7 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
           language: reportMeta.language,
         },
         transcript: saltText.endsWith('\n') ? saltText : `${saltText}\n`,
+        ...(metrics ? { metrics } : {}),
       });
 
       // Store what is rendered, not the whole response: `latex` is ~19 KB the app never
@@ -472,6 +838,10 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
         },
         transcript_lines: transcriptLines,
         transcript_hash: transcriptFingerprint(saltText),
+        metrics,
+        norms,
+        edits: undefined,
+        edited_at: null,
         response,
       };
       setReport(stored);
@@ -538,15 +908,36 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
             {report && (
               <span className="text-xs text-gray-500 truncate" title={report.generated_at}>
                 {saveWarning ? 'generated' : 'saved'} {new Date(report.generated_at).toLocaleString()}
+                {report.edited_at && ` · edited ${new Date(report.edited_at).toLocaleDateString()}`}
               </span>
             )}
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={exportPdf} disabled={!report}
+            {editing ? (
+              <>
+                <button onClick={saveEdits} disabled={savingEdits}
+                  className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800 disabled:bg-gray-300 transition-colors">
+                  {savingEdits
+                    ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving…</>
+                    : <><Check className="w-4 h-4" /> Save changes</>}
+                </button>
+                <button onClick={cancelEditing} disabled={savingEdits}
+                  className="px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <button onClick={startEditing} disabled={!report}
+                className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:text-gray-400 disabled:border-gray-200 disabled:cursor-not-allowed transition-colors"
+                title="Correct the drafted observations, limitations and summary">
+                <Pencil className="w-4 h-4" /> Edit
+              </button>
+            )}
+            <button onClick={exportPdf} disabled={!report || editing}
               className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors">
               <FileText className="w-4 h-4" /> Export PDF
             </button>
-            <button onClick={exportWord} disabled={!report}
+            <button onClick={exportWord} disabled={!report || editing}
               className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-700 bg-white border border-blue-300 rounded-lg hover:bg-blue-50 disabled:text-gray-400 disabled:border-gray-200 disabled:hover:bg-white disabled:cursor-not-allowed transition-colors">
               <FileType className="w-4 h-4" /> Export Word
             </button>
@@ -558,18 +949,43 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
 
         {/* Sample information — what the analysis needs and the transcript cannot supply. */}
         <div className="flex flex-wrap items-end gap-3 px-5 py-3 border-b border-gray-200 bg-gray-50">
-          <label className="flex flex-col gap-1">
+          <div className="flex flex-col gap-1">
             <span className="text-xs font-medium text-gray-600">Patient age</span>
-            <input
-              value={age}
-              onChange={(e) => { setAge(e.target.value); persist('age', e.target.value); }}
-              placeholder="6;0"
-              className={`w-20 px-2 py-1.5 text-sm border rounded-md focus:ring-2 focus:ring-teal-500 focus:outline-none ${
-                age && !ageValid ? 'border-red-400' : 'border-gray-300'
-              }`}
-              title="Years;months, e.g. 6;0"
-            />
-          </label>
+            <div className="flex items-center gap-1.5">
+              <input
+                value={ageYears}
+                onChange={(e) => {
+                  const v = e.target.value.replace(/\D/g, '').slice(0, 2);
+                  setAgeYears(v);
+                  persistAge(v, ageMonths);
+                }}
+                inputMode="numeric"
+                placeholder="6"
+                aria-label="Age in years"
+                className={`w-14 px-2 py-1.5 text-sm text-right border rounded-md focus:ring-2 focus:ring-teal-500 focus:outline-none ${
+                  ageYears && !yearsValid ? 'border-red-400' : 'border-gray-300'
+                }`}
+                title="Years"
+              />
+              <span className="text-xs text-gray-500">yr</span>
+              <input
+                value={ageMonths}
+                onChange={(e) => {
+                  const v = e.target.value.replace(/\D/g, '').slice(0, 2);
+                  setAgeMonths(v);
+                  persistAge(ageYears, v);
+                }}
+                inputMode="numeric"
+                placeholder="0"
+                aria-label="Age in months"
+                className={`w-14 px-2 py-1.5 text-sm text-right border rounded-md focus:ring-2 focus:ring-teal-500 focus:outline-none ${
+                  ageMonths && !monthsValid ? 'border-red-400' : 'border-gray-300'
+                }`}
+                title="Months past the birthday, 0-11"
+              />
+              <span className="text-xs text-gray-500">mo</span>
+            </div>
+          </div>
           <label className="flex flex-col gap-1 flex-1 min-w-[220px]">
             <span className="text-xs font-medium text-gray-600">Elicitation task</span>
             <input
@@ -591,19 +1007,82 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
               ))}
             </select>
           </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-gray-600">Normative comparison</span>
+            <div className="flex items-center gap-2 h-[34px]">
+              <input
+                type="checkbox"
+                checked={useNorms}
+                onChange={(e) => {
+                  setUseNorms(e.target.checked);
+                  persist('norms', e.target.checked ? '1' : '0');
+                }}
+                className="w-4 h-4 text-teal-700 border-gray-300 rounded focus:ring-teal-500"
+              />
+              <span className="text-sm text-gray-700">z-scores vs CHILDES TD</span>
+              {useNorms && (
+                <>
+                  <span className="text-xs text-gray-500">±</span>
+                  <input
+                    value={normRange}
+                    onChange={(e) => {
+                      const v = e.target.value.replace(/\D/g, '').slice(0, 2);
+                      setNormRange(v);
+                      persist('normRange', v);
+                    }}
+                    inputMode="numeric"
+                    aria-label="Reference age window, in months"
+                    className="w-12 px-2 py-1.5 text-sm text-right border border-gray-300 rounded-md focus:ring-2 focus:ring-teal-500 focus:outline-none"
+                    title="Width of the reference age window, in months either side of the patient's age"
+                  />
+                  <span className="text-xs text-gray-500">mo</span>
+                </>
+              )}
+            </div>
+          </label>
           <button
-            onClick={generate}
-            disabled={!canGenerate}
+            onClick={() => {
+              // Regenerating replaces the drafted text, so it silently throws away a
+              // clinician's review. Ask once, rather than letting one click undo it.
+              if (report?.edits && !confirmRegen) { setConfirmRegen(true); return; }
+              generate();
+            }}
+            disabled={!canGenerate || editing}
             className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
-            title={ageValid ? 'Analyse this transcript' : 'Enter the age as years;months first'}
+            title={ageValid ? 'Analyse this transcript' : "Enter the patient's age in years first"}
           >
             {status === 'loading'
-              ? <><Loader2 className="w-4 h-4 animate-spin" /> Analysing… {elapsed}s</>
+              ? (phase === 'norms'
+                ? <><Loader2 className="w-4 h-4 animate-spin" /> Fetching norms…</>
+                : <><Loader2 className="w-4 h-4 animate-spin" /> Analysing… {elapsed}s</>)
               : <><Sparkles className="w-4 h-4" /> {report ? 'Regenerate' : 'Generate report'}</>}
           </button>
         </div>
 
         <div className="overflow-y-auto p-6 bg-gray-100">
+          {confirmRegen && (
+            <div className="mx-auto max-w-[760px] mb-4 flex items-start gap-2 p-3 text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-lg">
+              <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+              <div className="flex-1">
+                <div className="font-medium">Regenerating discards your edits</div>
+                <div className="text-amber-800 mb-2">
+                  The observations, limitations and summary you edited will be replaced by a
+                  freshly drafted set.
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={generate}
+                    className="px-3 py-1.5 text-xs font-medium text-white bg-amber-700 rounded-md hover:bg-amber-800">
+                    Regenerate anyway
+                  </button>
+                  <button onClick={() => setConfirmRegen(false)}
+                    className="px-3 py-1.5 text-xs font-medium text-amber-900 bg-white border border-amber-300 rounded-md hover:bg-amber-100">
+                    Keep my edits
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {isStale && (
             <div className="mx-auto max-w-[760px] mb-4 flex items-start gap-2 p-3 text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-lg">
               <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
@@ -636,7 +1115,9 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
             </div>
           )}
 
-          {report ? (
+          {report && editing && draft ? (
+            <ReportEditor stored={report} draft={draft} onChange={setDraft} />
+          ) : report ? (
             <div className="bg-white shadow-sm mx-auto p-8" style={{ maxWidth: 760 }}
                  dangerouslySetInnerHTML={{ __html: body }} />
           ) : (
@@ -658,8 +1139,15 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
                   <p className="mb-3 text-gray-500">
                     Enter the patient's age and the elicitation task, then generate. It takes about
                     15-30 seconds, once: the report is saved on this recording and opens straight
-                    away next time. The transcript is sent to the SATE LSA service for analysis; no
-                    patient or clinician name is attached to it.
+                    away next time, and the drafted observations can be corrected with <b>Edit</b>
+                    {' '}before you use it. The transcript is sent to the SATE LSA service for
+                    analysis; no patient or clinician name is attached to it.
+                  </p>
+                  <p className="mb-3 text-gray-500">
+                    Tick <b>z-scores vs CHILDES TD</b> to send this sample's MLU, TNW and NDW with
+                    age-matched reference values, so the report's metrics table shows z-scores
+                    instead of counts alone. CHILDES publishes references for MLU only; the other
+                    metrics appear as NO REF.
                   </p>
                   <pre className="mt-4 p-3 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-700 whitespace-pre-wrap max-h-64 overflow-y-auto font-mono">
                     {transcriptLines.slice(0, 12).join('\n')}
