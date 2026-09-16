@@ -223,7 +223,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const signOut = async () => {
-    const { error } = await supabase.auth.signOut();
+    // 🛑 `scope: 'local'` is load-bearing. supabase-js defaults signOut() to
+    // scope 'global', which revokes EVERY refresh token this user has, on every
+    // device — so logging out of this browser silently signed the user out of
+    // the SATE apps on their phone too. From the phone it looked like a random
+    // "logged out after a while": its stored refresh token simply stopped
+    // existing, and the next refresh came back `refresh_token_not_found`.
+    // Logging out here means logging out of THIS browser. The one place a
+    // global revoke is right is a password change (ResetPasswordPage), which
+    // should end other sessions, and that one is deliberately left as-is.
+    const { error } = await supabase.auth.signOut({ scope: 'local' });
     if (error) throw error;
     // The transcript conflict-detection baselines are per-editor-session and must not outlive
     // the account: the next user to open the same recording has to capture their own, or their
