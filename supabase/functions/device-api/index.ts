@@ -1,4 +1,4 @@
-// SATE Device API — Supabase Edge Function              [v24]
+// SATE Device API — Supabase Edge Function              [v25]
 // Replaces the mock-server's Express endpoints with a single Edge Function
 // that does internal path routing. Authenticated via Supabase JWT (users) or a
 // device key (the recorder).
@@ -25,6 +25,17 @@
 //      queued record command's patient payload and let a caller consume another recorder's
 //      commands (swallowing a queued stop/record). POST /devices/register refuses a serial that
 //      is already claimed by a different account.
+// v25: EXTERNAL DEVICES (Plaud / Pendant / SATE L816) now appear in Connected Recorders.
+//      They have no Wi-Fi and no device key, so they can never register themselves the way a
+//      recorder does — their recordings used to arrive as sessions with no device behind them
+//      and the fleet list simply never showed the hardware. Now: POST /devices/external lets
+//      the phone register one at pairing time, GET /devices BACKFILLS a row for any external
+//      serial that has uploaded but was never registered, and DELETE /devices/:id writes an
+//      opt-out so a removed derived row does not reappear on the next 2 s poll.
+//      🛑 The stale-offline sweep in listDevices SKIPS external rows: they are reachable over
+//      Bluetooth from the phone, never over Wi-Fi, so sweeping them would peg every one of them
+//      to "Offline" forever. `kind` is what the web keys its passive layout off — an external
+//      row must NEVER be offered OTA or a remote command.
 // v23: DELETE /sessions/:id checks EVERY removal's error instead of swallowing it, keeps the
 //      session row on a partial failure so the delete stays retryable, and records what was
 //      actually removed — the audit row used to assert a deletion that may not have happened.
@@ -187,6 +198,13 @@ serve(async (req) => {
     if (subPath === '/devices' && method === 'GET') {
       return await listDevices(supabase, user.id);
     }
+    // [v25] Register a device the phone paired over Bluetooth. Distinct from
+    // /devices/register, which is the RECORDER's own self-registration with a
+    // claim token and a device key; this caller is the signed-in user and the
+    // device it is vouching for has neither.
+    if (subPath === '/devices/external' && method === 'POST') {
+      return await registerExternalDevice(supabase, user.id, req);
+    }
     if (subPath === '/devices/claim-token' && method === 'POST') {
       return await createClaimToken(supabase, user);
     }
@@ -299,15 +317,128 @@ serve(async (req) => {
 
 // ============================================================================
 
+/**
+ * Which device family a serial belongs to, from the serial alone.
+ *
+ * The mobile app builds these prefixes (`l816-<MAC>`, `pendant-<id>`, `plaud`),
+ * and `recordingName.ts` in the web app splits on exactly the same three when it
+ * labels a take. Keep the three lists in step — a family that is known here and
+ * unknown there shows up as a device whose recordings are named as if they came
+ * from a recorder.
+ */
+function externalKind(serial: string): 'plaud' | 'pendant' | 'l816' | null {
+  const s = (serial || '').toLowerCase();
+  if (s.startsWith('pendant')) return 'pendant';
+  if (s.startsWith('plaud')) return 'plaud';
+  if (s.startsWith('l816')) return 'l816';
+  return null;
+}
+
+const EXTERNAL_LABEL: Record<string, string> = {
+  plaud: 'Plaud',
+  pendant: 'SATE Pendant',
+  l816: 'SATE L816',
+};
+
 async function listDevices(supabase: any, userId: string) {
+  // Mark a RECORDER offline when its heartbeat goes quiet.
+  //
+  // [v25] `kind is null` restricts this to real recorders. An external device is
+  // reachable over Bluetooth from the phone and NEVER over Wi-Fi, so it has no
+  // heartbeat to go stale — sweeping it would peg every Plaud, Pendant and L816
+  // to "Offline" permanently, which reads as broken hardware rather than as
+  // "this one works differently".
   const cutoff = new Date(Date.now() - 45000).toISOString();
   await supabase.from('sate_devices')
     .update({ online: false, state: 'idle' })
-    .eq('user_id', userId).lt('last_seen', cutoff).eq('online', true);
+    .eq('user_id', userId).lt('last_seen', cutoff).eq('online', true)
+    .is('kind', null);
   const { data, error } = await supabase.from('sate_devices')
     .select('*').eq('user_id', userId).order('created_at', { ascending: true });
   if (error) throw new Error(error.message);
-  return json(data || []);
+  const rows = (data || []).map((d: any) => ({ ...d, kind: d.kind || 'sate' }));
+
+  // Backfill: an external device that uploaded before /devices/external existed
+  // (or was paired on another phone) has recordings but no row. Derive one from
+  // its sessions so the hardware is visible, unless the user removed it.
+  const [{ data: sessions }, { data: optouts }] = await Promise.all([
+    supabase.from('sate_device_sessions')
+      .select('device_serial, created_at').eq('user_id', userId),
+    supabase.from('sate_external_device_optouts')
+      .select('serial').eq('user_id', userId),
+  ]);
+  const hidden = new Set((optouts || []).map((o: any) => o.serial));
+  const known = new Set(rows.map((d: any) => d.serial));
+  const derived = new Map<string, any>();
+  for (const s of sessions || []) {
+    const serial = s.device_serial;
+    const kind = externalKind(serial);
+    if (!kind || known.has(serial) || hidden.has(serial)) continue;
+    const seen = derived.get(serial);
+    // `last_seen` is the newest upload — the only evidence we have of when this
+    // device was last used, since it never sends a heartbeat.
+    if (!seen || s.created_at > seen.last_seen) {
+      derived.set(serial, {
+        id: `ext:${serial}`,
+        user_id: userId,
+        name: EXTERNAL_LABEL[kind],
+        serial,
+        fw: EXTERNAL_LABEL[kind],
+        kind,
+        online: false,
+        last_seen: s.created_at,
+        pending_sessions: 0,
+        state: 'idle',
+        created_at: seen?.created_at ?? s.created_at,
+      });
+    }
+  }
+  return json([...rows, ...derived.values()]);
+}
+
+/**
+ * Register a device the PHONE paired over Bluetooth (Plaud / Pendant / L816).
+ *
+ * Upsert, keyed on (user, serial): pairing the same unit twice must not create a
+ * second row, and re-pairing one you previously removed is an intention — so it
+ * clears the opt-out that was hiding it.
+ */
+async function registerExternalDevice(supabase: any, userId: string, req: Request) {
+  const { serial, name } = await req.json();
+  if (!serial) return err('serial is required');
+  const kind = externalKind(serial);
+  // Refuse a serial that is not recognisably external. This route writes into
+  // the same table the recorder fleet lives in, and a row claiming to be a SATE
+  // recorder while having no device key would be offered OTA it can never apply.
+  if (!kind) return err('Not an external device serial', 400);
+
+  const { data: existing } = await supabase.from('sate_devices')
+    .select('id').eq('user_id', userId).eq('serial', serial).maybeSingle();
+
+  const row = {
+    user_id: userId,
+    name: (name || '').trim() || EXTERNAL_LABEL[kind],
+    serial,
+    fw: EXTERNAL_LABEL[kind],
+    kind,
+    online: false,
+    state: 'idle',
+    last_seen: new Date().toISOString(),
+  };
+  if (existing) {
+    const { error } = await supabase.from('sate_devices')
+      .update({ last_seen: row.last_seen, kind })
+      .eq('id', existing.id);
+    if (error) throw new Error(error.message);
+  } else {
+    const { error } = await supabase.from('sate_devices')
+      .insert({ id: crypto.randomUUID(), ...row });
+    if (error) throw new Error(error.message);
+  }
+  // Pairing it again un-hides it.
+  await supabase.from('sate_external_device_optouts')
+    .delete().eq('user_id', userId).eq('serial', serial);
+  return json({ ok: true, kind });
 }
 
 async function createClaimToken(supabase: any, user: any) {
@@ -494,10 +625,42 @@ async function uploadProgress(supabase: any, userId: string, serial: string) {
   return json({ uploading: uploads.length > 0, uploads });
 }
 
+/**
+ * Remove a device from Connected Recorders. RECORDINGS ARE KEPT — this deletes
+ * the hardware row only; the sessions and the `recordings` they produced stay.
+ *
+ * [v25] For an EXTERNAL device the row is not the whole story: listDevices
+ * re-derives one from the device's sessions, so a plain delete would be undone
+ * on the next poll two seconds later and the button would look broken. Record an
+ * opt-out that outlives the row (same shape as `note_optouts`). A derived device
+ * has no row at all — its id is `ext:<serial>` — so the opt-out IS the delete.
+ */
 async function removeDevice(supabase: any, userId: string, deviceId: string) {
-  const { error } = await supabase.from('sate_devices')
-    .delete().eq('id', deviceId).eq('user_id', userId);
-  if (error) throw new Error(error.message);
+  let serial: string | null = null;
+  let external = false;
+
+  if (deviceId.startsWith('ext:')) {
+    serial = deviceId.slice(4);
+    external = true;
+  } else {
+    const { data: dev } = await supabase.from('sate_devices')
+      .select('serial, kind').eq('id', deviceId).eq('user_id', userId).maybeSingle();
+    if (dev) {
+      serial = dev.serial;
+      external = !!dev.kind && dev.kind !== 'sate';
+    }
+    const { error } = await supabase.from('sate_devices')
+      .delete().eq('id', deviceId).eq('user_id', userId);
+    if (error) throw new Error(error.message);
+  }
+
+  if (external && serial) {
+    const { error } = await supabase.from('sate_external_device_optouts')
+      .upsert({ user_id: userId, serial }, { onConflict: 'user_id,serial' });
+    // A failed opt-out means the row comes back on the next poll. Surface it
+    // rather than reporting a delete that will visibly undo itself.
+    if (error) throw new Error(error.message);
+  }
   return noContent();
 }
 
