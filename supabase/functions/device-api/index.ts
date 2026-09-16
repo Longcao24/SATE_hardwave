@@ -862,7 +862,10 @@ async function ownerEmailMap(supabase: any): Promise<Record<string, string>> {
 // most recent error rows, and devices that have gone offline. Read-only, service role.
 async function healthAlerts(supabase: any) {
   const now = Date.now();
-  const STUCK_MS = 45 * 60 * 1000;
+  // Must match cf-processor's STUCK_MINUTES (90). This one drives the operator's EMAIL
+  // alerts, so a smaller number here means being paged about jobs that are simply still
+  // running — and an alert that cries wolf is one nobody reads when it is real.
+  const STUCK_MS = 90 * 60 * 1000;
   const { count: errorCount } = await supabase.from('sate_device_sessions')
     .select('id', { count: 'exact', head: true }).eq('status', 'error');
   const stuckCutoff = new Date(now - STUCK_MS).toISOString();
@@ -899,7 +902,9 @@ async function healthAlerts(supabase: any) {
 
 async function adminStatus(supabase: any) {
   const now = Date.now();
-  const STUCK_MS = 45 * 60 * 1000;               // matches cf-processor STUCK_MINUTES
+  // Must match cf-processor's STUCK_MINUTES (90). If this is the SMALLER of the two, the
+  // admin page calls a job stuck while the container is still legitimately working on it.
+  const STUCK_MS = 90 * 60 * 1000;
 
   // Pipeline: head counts per status (cheap; no rows returned).
   const pipeline: Record<string, number> = {};
