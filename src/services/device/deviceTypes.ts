@@ -26,10 +26,17 @@ export interface ManagedDevice {
   serial: string;
   fw: string;
   /** Device family. 'sate' = ESP32-S3 recorder (default); 'plaud' = a paired
-   *  Plaud NotePin/NotePro; 'pendant' = a SATE Pendant. The last two are
-   *  synthesized from their uploaded sessions (no sate_devices row, so they
-   *  can't be commanded/OTA'd from the web). */
-  kind?: 'sate' | 'plaud' | 'pendant';
+   *  Plaud NotePin/NotePro; 'pendant' = a SATE Pendant; 'l816' = a SATE L816
+   *  handheld. Everything except 'sate' is an EXTERNAL device with no
+   *  `sate_devices` row, so it can't be commanded or OTA'd from the web.
+   *
+   *  Populated by device-api >=v25: the phone registers an external device when
+   *  it pairs (`POST /devices/external`), and `GET /devices` backfills a row for
+   *  any external serial that has uploaded sessions but was never registered.
+   *  An external row is NEVER offered OTA or a remote command — it has no device
+   *  key and no network of its own. Kept in step with the mobile `ManagedDevice`
+   *  (src/protocol.ts) so the two unions cannot drift. */
+  kind?: 'sate' | 'plaud' | 'pendant' | 'l816';
   /** true = device is reachable over Wi-Fi right now */
   online: boolean;
   ip?: string;

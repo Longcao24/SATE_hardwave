@@ -98,36 +98,54 @@ interface DeviceContextValue {
 
 const DeviceContext = createContext<DeviceContextValue | null>(null);
 
-// Plaud recorders and SATE Pendants have no sate_devices row (they upload through
-// the user-authed /sessions path), so listDevices() never returns them. Instead
-// we synthesize one virtual, passive device per distinct `plaud-<sn>` /
-// `pendant-<id>` serial from the sessions they've synced (can't be commanded/
-// OTA'd — driven from the device / the Companion app). Matches "connect it → it
-// shows on /devices with its recordings".
+// EXTERNAL device families — Plaud, the SATE Pendant and the SATE L816 — have no
+// `sate_devices` row (they have no Wi-Fi and no device key, and upload through the
+// user-authed /sessions path), so listDevices() never returns them. Instead we
+// synthesize one virtual, passive device per distinct external serial from the
+// sessions they've synced: they can't be commanded or OTA'd, they're driven from
+// the device itself or from the Companion app. Matches "connect it → it shows on
+// /devices with its recordings".
+//
+// 🛑 ADDING A FAMILY IS TWO EDITS, AND MISSING THE SECOND IS SILENT. A family the
+// phone can pair but that is absent from FAMILIES below uploads recordings that
+// appear in the app perfectly — and its hardware never shows in Connected
+// Recorders, with nothing failing anywhere to say why. That is exactly how the
+// L816 was invisible here while its takes were arriving normally. The serial
+// prefixes must also stay in step with `recordingName.ts`, which splits on the
+// same three when it labels a take.
+const FAMILIES = [
+  { prefix: 'plaud-', kind: 'plaud' as const, label: 'Plaud' },
+  { prefix: 'pendant-', kind: 'pendant' as const, label: 'Pendant' },
+  { prefix: 'l816-', kind: 'l816' as const, label: 'SATE L816' },
+];
+
+function familyFor(serial: string | undefined) {
+  return serial ? FAMILIES.find((f) => serial.startsWith(f.prefix)) : undefined;
+}
+
 function deriveExternalDevices(sessions: UploadedSession[]): ManagedDevice[] {
   const bySerial = new Map<string, UploadedSession[]>();
   for (const s of sessions) {
     const sn = s.device_serial;
-    if (!sn?.startsWith('plaud-') && !sn?.startsWith('pendant-')) continue;
-    const arr = bySerial.get(sn) ?? [];
+    if (!familyFor(sn)) continue;
+    const arr = bySerial.get(sn!) ?? [];
     arr.push(s);
-    bySerial.set(sn, arr);
+    bySerial.set(sn!, arr);
   }
   return [...bySerial.entries()].map(([serial, ss]) => {
     const last = ss.reduce((m, s) => (s.at > m ? s.at : m), ss[0].at);
     const pending = ss.filter((s) => !s.processed).length;
-    const isPlaud = serial.startsWith('plaud-');
-    const kind: ManagedDevice['kind'] = isPlaud ? 'plaud' : 'pendant';
-    const short = serial.replace(/^(plaud|pendant)-/, '');
+    const family = familyFor(serial)!;
+    const short = serial.slice(family.prefix.length);
     return {
-      id: `${kind}:${serial}`,
-      name: `${isPlaud ? 'Plaud' : 'Pendant'} ${short.slice(-4)}`,
+      id: `${family.kind}:${serial}`,
+      name: `${family.label} ${short.slice(-4)}`,
       serial,
-      fw: isPlaud ? 'Plaud' : 'Pendant',
+      fw: family.label,
       online: false,
       last_seen: last,
       pending_sessions: pending,
-      kind,
+      kind: family.kind,
     };
   });
 }
@@ -191,7 +209,17 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
         deviceApiService.listSessions(),
       ]);
       if (!mountedRef.current) return;
-      const merged = [...list, ...deriveExternalDevices(allSessions)];
+      // Dedup by SERIAL, server row wins. A device can legitimately be reported
+      // twice — a real `sate_devices` row AND a row derived from its sessions —
+      // and a plain concat would then show one physical recorder as two cards,
+      // each with half its recordings. Today only external families are derived
+      // and they have no server row, so nothing collides; this is here so that
+      // stops being load-bearing the moment anything registers them server-side.
+      const bySerial = new Map<string, ManagedDevice>();
+      for (const d of [...deriveExternalDevices(allSessions), ...list]) {
+        bySerial.set(d.serial, d);
+      }
+      const merged = [...bySerial.values()];
       setDevices(merged);
       setAllSessions(allSessions);
       setIsConnected(true);

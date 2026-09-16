@@ -210,6 +210,13 @@ export const notesApiService = {
     folder_id?: string;
     /** The flag button's ms offsets, carried over from the clinical session row. */
     flags?: number[];
+    /**
+     * The `recordings` row SATE already produced for this session. Pass it whenever the
+     * session has one: the notes service then REUSES that transcript instead of running ASR
+     * a second time — which is ~96% of what a note costs, and makes the note quote exactly
+     * the same words as the SATE report. Omitting it is safe but expensive.
+     */
+    recording_id?: string;
   }): Promise<{ id: string; idempotent?: boolean }> {
     return req('/api/notes/from-session', { method: 'POST', body: JSON.stringify(p) });
   },

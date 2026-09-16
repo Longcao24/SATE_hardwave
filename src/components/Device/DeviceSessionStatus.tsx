@@ -111,6 +111,10 @@ export function DeviceSessionStatus({ sessions }: DeviceSessionStatusProps) {
           device_serial: next.device_serial,
           session_number: next.session_number,
           flags: Array.isArray(next.flags) ? next.flags : undefined,
+          // SATE has already transcribed this session. Handing the notes service the
+          // recording lets it REUSE that transcript instead of running ASR again — ~96% of
+          // what a note costs — and makes the note quote the same words as the SATE report.
+          recording_id: next.recording_id ?? undefined,
         });
         await loadNotes();
       } catch (err) {
@@ -133,6 +137,8 @@ export function DeviceSessionStatus({ sessions }: DeviceSessionStatusProps) {
         device_serial: s.device_serial,
         session_number: s.session_number,
         folder_id: s.patient_id,
+        // Reuse the transcript SATE already made for this session — see the auto path above.
+        recording_id: s.recording_id ?? undefined,
         // Carry the flag-button marks across. They live on the clinical session row and are
         // the one thing this hardware records that a phone cannot; a note without them loses
         // exactly the moments the user reached out and marked.

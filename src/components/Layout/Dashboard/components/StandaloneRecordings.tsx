@@ -121,6 +121,9 @@ const StandaloneRecordings: React.FC<StandaloneRecordingsProps> = ({
         device_serial: s.device_serial,
         session_number: s.session_number,
         flags: Array.isArray(s.flags) ? s.flags : undefined,
+        // This row IS the clinical recording, so its transcript already exists — reuse it
+        // rather than paying for ASR a second time over the same audio.
+        recording_id: recording.id,
       });
       await loadNotes();
       navigate(`/notes#${res.id}`);

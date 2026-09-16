@@ -12,8 +12,9 @@ interface DeviceCardProps {
 
 export function DeviceCard({ device, onClick }: DeviceCardProps) {
   const state = device.state ?? 'idle';
-  // Plaud + Pendant: passive external devices, synced over BLE via the app.
-  const isPlaud = device.kind === 'plaud' || device.kind === 'pendant';
+  // Plaud / Pendant / L816: passive external devices, synced over BLE via the app.
+  const isPlaud =
+    device.kind === 'plaud' || device.kind === 'pendant' || device.kind === 'l816';
   const isRecording = state === 'recording';
   const isUploading = state === 'uploading';
 

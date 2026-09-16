@@ -9,17 +9,18 @@
 // The rule, in one place:
 //
 //   device_SATE-<serial>_s13.wav   → R-S13     (recorder: takes are numbered 1..99)
-//   device_pendant-<id>_s<stamp>   → P-3:17 PM (pendant/Plaud put a UNIX TIMESTAMP there, not
-//   device_plaud-<id>_s<stamp>     → PL-3:17 PM  a take number — thirteen digits is not a name)
+//   device_pendant-<id>_s<stamp>   → P-3:17 PM (pendant/Plaud/L816 put a UNIX TIMESTAMP there,
+//   device_plaud-<id>_s<stamp>     → PL-3:17 PM  not a take number — thirteen digits is not
+//   device_l816-<mac>_s<stamp>     → L-3:17 PM   a name)
 //   anything else                  → unchanged (a name a person typed is never rewritten)
 //
 // `recordings.recording_name` is auto-filled with the file name, so it is NOT evidence a human
 // named the take. This works on the string alone: a person would never type
 // `device_SATE-443EAC_s13.wav`, so a name that matches the pattern is by definition generated.
 
-const DEVICE_FILE = /^device_(SATE|pendant|plaud)[^_]*_s(\d+)/i;
+const DEVICE_FILE = /^device_(SATE|pendant|plaud|l816)[^_]*_s(\d+)/i;
 
-const PREFIX: Record<string, string> = { sate: 'R', pendant: 'P', plaud: 'PL' };
+const PREFIX: Record<string, string> = { sate: 'R', pendant: 'P', plaud: 'PL', l816: 'L' };
 
 /** Unix seconds rather than a take number. The recorder never gets near this. */
 const isTimestamp = (n: number) => n >= 1_000_000_000;
@@ -44,6 +45,12 @@ export function recordingLabel(name: string | null | undefined): string {
  */
 export function sessionLabel(deviceSerial: string | null | undefined, sessionNumber: number): string {
   const s = (deviceSerial || '').toLowerCase();
-  const source = s.startsWith('pendant') ? 'pendant' : s.startsWith('plaud') ? 'plaud' : 'sate';
+  const source = s.startsWith('pendant')
+    ? 'pendant'
+    : s.startsWith('plaud')
+      ? 'plaud'
+      : s.startsWith('l816')
+        ? 'l816'
+        : 'sate';
   return label(source, sessionNumber);
 }

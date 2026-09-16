@@ -9,6 +9,7 @@ import { RecordSessionModal } from './RecordSessionModal';
 import { DeviceSettingsModal } from './DeviceSettingsModal';
 import { DeviceFrame } from './DeviceFrame';
 import { PlaudDeviceGraphic } from './PlaudDeviceGraphic';
+import { L816DeviceGraphic } from './L816DeviceGraphic';
 import { PendantDeviceGraphic } from './PendantDeviceGraphic';
 import {
   RefreshCw,
@@ -37,9 +38,12 @@ export function DevicePanel() {
     error,
   } = useDeviceContext();
 
-  // Plaud + Pendant are passive external devices (no Wi-Fi commands/OTA).
-  const isPlaud = selectedDevice?.kind === 'plaud' || selectedDevice?.kind === 'pendant';
-  const extLabel = selectedDevice?.kind === 'pendant' ? 'Pendant' : 'Plaud';
+  // Plaud / Pendant / L816 are passive external devices (no Wi-Fi commands/OTA).
+  const kind = selectedDevice?.kind;
+  const isExternal = kind === 'plaud' || kind === 'pendant' || kind === 'l816';
+  const isPlaud = isExternal; // name kept: it drives the existing external layout
+  const extLabel =
+    kind === 'pendant' ? 'Pendant' : kind === 'l816' ? 'SATE L816' : 'Plaud';
 
   const { isOnline, isRecording, isUploading, isBusy, statusLabel, statusColor } = useDeviceStatus();
 
@@ -183,8 +187,14 @@ export function DevicePanel() {
               so there are no remote command/OTA controls here. ---- */}
       {isPlaud ? (
         <div className="device-hero">
-          {selectedDevice?.kind === 'pendant' ? (
+          {/* One drawing per family. The fallback used to be Plaud, so any
+              family without its own graphic silently rendered as a different
+              manufacturer's device — in the one place a user looks to check
+              WHICH recorder they have. */}
+          {kind === 'pendant' ? (
             <PendantDeviceGraphic width={170} />
+          ) : kind === 'l816' ? (
+            <L816DeviceGraphic width={170} recording={isRecording} />
           ) : (
             <PlaudDeviceGraphic width={190} />
           )}
