@@ -45,6 +45,12 @@
 //      a `sate_session_audit` row so a failure stays traceable after a retry clears it.
 // v18: GET /health/alerts?key=… — secret-gated error digest (pipeline errors/stuck,
 //      recent errors, offline devices) for the 5-min status worker's email alerts.
+// v26: POST /sessions/chunk accepts a USER JWT, not only a device key. Hardware
+//      with no `sate_devices` row (L816/L815, pendant, Plaud) uploads through the
+//      phone, and the single-shot POST /sessions carries the whole WAV as base64
+//      in one JSON body — which dies part-way through a long take. Parts are
+//      rooted at `u_<user id>`, never at a caller-supplied serial (that would let
+//      one account write parts under another's prefix).
 // v16: GET /sessions/upload-progress — live bytes of an IN-FLIGHT chunked upload
 //      (sums the _tmp/<patient>/s<n>/<offset>.part objects; read-only, user-authed)
 // v14: async processing state machine. GET /sessions returns `status` + `attempts`
@@ -277,10 +283,27 @@ serve(async (req) => {
     // device that has NO device key of its own — a Plaud recorder (which is
     // never registered in sate_devices), or a BLE-bridged SATE session. Here
     // the caller is the signed-in user, so the session is stored under user.id.
+    // [v26] CHUNKED upload for a signed-in user.
+    //
+    // The single-shot POST /sessions below carries the whole take as base64 in
+    // one JSON body. That is fine for a short recording and fails part-way
+    // through a long one: ~19 MB of PCM for ten minutes, ~26 MB base64'd, against
+    // this function's body and wall-clock limits. The recording transfers off the
+    // hardware perfectly and then cannot be handed over — the audio exists and
+    // there is nothing to be done with it, which is the worst place to fail.
+    //
+    // The chunked path has no such ceiling and the firmware has used it for
+    // 118 MB sessions all along; it was simply device-key-gated, and an L816,
+    // a pendant and a Plaud have no device key. Same handler, same part objects,
+    // same contiguity and idempotency checks — only the identity differs.
+    if (subPath === '/sessions/chunk' && method === 'POST') {
+      return await handleSessionUpload(supabase, req, subPath, {
+        userId: user.id,
+        serial: url.searchParams.get('device_serial') || 'external',
+      });
+    }
     if (subPath === '/sessions' && method === 'POST') {
-      const body = await req.json();
-      const { wav_base64, ...meta } = body;
-      const wavBytes = Uint8Array.from(atob(wav_base64 || ''), (c) => c.charCodeAt(0));
+      const { meta, wav: wavBytes } = await readSessionBody(req);
       return await storeSessionRecord(supabase, user.id, {
         device_serial: meta.device_serial || 'plaud',
         patient_id: meta.patient_id || 'PT',
@@ -990,21 +1013,53 @@ async function handleSessionVerify(supabase: any, req: Request) {
   return json({ stored });
 }
 
-async function handleSessionUpload(supabase: any, req: Request, subPath: string) {
+async function handleSessionUpload(
+  supabase: any,
+  req: Request,
+  subPath: string,
+  // Set when the caller is a SIGNED-IN USER rather than a recorder holding a
+  // device key.
+  //
+  // 🛑 This is what makes /sessions/chunk reachable for hardware that has no
+  // `sate_devices` row and no device key — the L816/L815 handhelds, the pendant,
+  // Plaud. They could only use the single-shot POST /sessions, which carries the
+  // WHOLE take as base64 inside one JSON body: a 10-minute 16 kHz mono recording
+  // is ~19 MB of PCM, ~26 MB once base64'd, and that dies part-way through
+  // against this function's body and wall-clock limits. The take transfers off
+  // the device perfectly and then cannot be handed over — which is the worst
+  // place to fail, because the audio exists and nothing can be done with it.
+  // The chunked path has no such ceiling and is the one the firmware has been
+  // using for 118 MB sessions all along.
+  asUser?: { userId: string; serial: string },
+) {
   const authHeader = req.headers.get('Authorization') ?? '';
-  const deviceId = authHeader.replace('Bearer key-', '');
-  const { data: device } = await supabase.from('sate_devices')
-    .select('user_id, serial').eq('id', deviceId).single();
-  if (!device) return err('Device not found', 404);
+  let userId: string;
+  let defaultSerial: string;
+  // Root of the temp part directory. For a device it is the device row's id; for
+  // a user it is the USER id and never a caller-supplied serial — the part dir is
+  // a storage path, and taking it from the request would let one account write
+  // parts under another account's prefix.
+  let partRoot: string;
+  if (asUser) {
+    userId = asUser.userId;
+    defaultSerial = asUser.serial;
+    partRoot = `u_${asUser.userId}`;
+  } else {
+    const deviceId = authHeader.replace('Bearer key-', '');
+    const { data: device } = await supabase.from('sate_devices')
+      .select('user_id, serial').eq('id', deviceId).single();
+    if (!device) return err('Device not found', 404);
+    userId = device.user_id;
+    defaultSerial = device.serial;
+    partRoot = deviceId;
+  }
 
   const url = new URL(req.url);
 
   if (subPath === '/sessions') {
-    const body = await req.json();
-    const { wav_base64, ...meta } = body;
-    const wavBytes = Uint8Array.from(atob(wav_base64 || ''), (c) => c.charCodeAt(0));
-    return await storeSessionRecord(supabase, device.user_id, {
-      device_serial: meta.device_serial || device.serial,
+    const { meta, wav: wavBytes } = await readSessionBody(req);
+    return await storeSessionRecord(supabase, userId, {
+      device_serial: meta.device_serial || defaultSerial,
       patient_id: meta.patient_id || 'PT',
       session_number: meta.session_number || 0,
       sample_rate: meta.sample_rate || 16000,
@@ -1014,8 +1069,8 @@ async function handleSessionUpload(supabase: any, req: Request, subPath: string)
 
   if (subPath === '/sessions/raw') {
     const wavBytes = new Uint8Array(await req.arrayBuffer());
-    return await storeSessionRecord(supabase, device.user_id, {
-      device_serial: url.searchParams.get('device_serial') || device.serial,
+    return await storeSessionRecord(supabase, userId, {
+      device_serial: url.searchParams.get('device_serial') || defaultSerial,
       patient_id: url.searchParams.get('patient_id') || 'PT',
       session_number: Number(url.searchParams.get('session_number') || 0),
       sample_rate: Number(url.searchParams.get('sample_rate') || 16000),
@@ -1046,10 +1101,10 @@ async function handleSessionUpload(supabase: any, req: Request, subPath: string)
     // and a resume can stitch a WAV out of BOTH patients' audio. Sanitised because
     // this goes into a storage path.
     const patientId = (url.searchParams.get('patient_id') || 'PT').replace(/[^A-Za-z0-9_-]/g, '');
-    const partDir = `${deviceId}/_tmp/${patientId || 'PT'}/s${sessionNumber}`;
+    const partDir = `${partRoot}/_tmp/${patientId || 'PT'}/s${sessionNumber}`;
     // Zero-pad so a plain lexical sort is also numeric order.
     const partPath = `${partDir}/${String(offset).padStart(12, '0')}.part`;
-    const serial = url.searchParams.get('device_serial') || device.serial;
+    const serial = url.searchParams.get('device_serial') || defaultSerial;
 
     // Already stored? Answer before touching the parts.
     //
@@ -1063,7 +1118,7 @@ async function handleSessionUpload(supabase: any, req: Request, subPath: string)
     if (isFinal && declaredTotal > 0) {
       const { data: already } = await supabase.from('sate_device_sessions')
         .select('id, storage_path')
-        .eq('user_id', device.user_id)
+        .eq('user_id', userId)
         .eq('device_serial', serial)
         .eq('session_number', sessionNumber)
         .eq('bytes', declaredTotal)
@@ -1170,7 +1225,7 @@ async function handleSessionUpload(supabase: any, req: Request, subPath: string)
     patchWavHeader(assembled);
     // Same `serial` the idempotency probe above used - if these two ever disagreed,
     // the probe could never match and every timed-out final would duplicate.
-    const res = await storeSessionRecord(supabase, device.user_id, {
+    const res = await storeSessionRecord(supabase, userId, {
       device_serial: serial,
       patient_id: url.searchParams.get('patient_id') || 'PT',
       session_number: sessionNumber,
@@ -1182,11 +1237,127 @@ async function handleSessionUpload(supabase: any, req: Request, subPath: string)
     await supabase.storage.from('device-sessions')
       .remove(parts.map((p: any) => `${partDir}/${p.name}`));
     await supabase.storage.from('device-sessions')
-      .remove([`${deviceId}/_tmp/s${sessionNumber}.wav`]).catch(() => {});
+      .remove([`${partRoot}/_tmp/s${sessionNumber}.wav`]).catch(() => {});
     return res;
   }
 
   return err('Unknown session endpoint', 404);
+}
+
+// ---------------------------------------------------------------------------
+// Reading a `POST /sessions` body without ever holding the take more than once.
+//
+// 🛑 THIS IS WHY LONG RECORDINGS USED TO FAIL WITH HTTP 546 / WORKER_RESOURCE_LIMIT
+// ("Function failed due to not having enough compute resources"). The old three
+// lines looked harmless:
+//
+//     const body = await req.json();
+//     const { wav_base64, ...meta } = body;
+//     const wavBytes = Uint8Array.from(atob(wav_base64 || ''), c => c.charCodeAt(0));
+//
+// but for a ten-minute 16 kHz mono take (~19 MB of PCM, ~26 MB base64'd) they hold
+// FOUR copies at once: the raw request text, the parsed object's copy of the
+// base64 string, the binary string `atob` returns, and finally the byte array.
+// That is upwards of 100 MB for 19 MB of audio, and the function is killed
+// part-way through — which is exactly what the phone saw. The recording had
+// already come off the hardware perfectly, so the audio existed and there was
+// nothing to be done with it.
+//
+// This streams the body instead: metadata is collected as text (it is tiny), and
+// the base64 value is decoded 4 characters at a time straight into ONE
+// pre-sized output buffer. Peak memory is the audio itself, once.
+const B64 = (() => {
+  const tbl = new Int16Array(256).fill(-1);
+  const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  for (let i = 0; i < A.length; i++) tbl[A.charCodeAt(i)] = i;
+  return tbl;
+})();
+
+async function readSessionBody(req: Request): Promise<{ meta: any; wav: Uint8Array }> {
+  if (!req.body) return { meta: {}, wav: new Uint8Array(0) };
+
+  const declared = Number(req.headers.get('content-length') || 0);
+  // 3 bytes per 4 base64 characters, and the value can never be longer than the
+  // whole body — so this is an upper bound, sized once, never grown in the
+  // normal case.
+  let out = new Uint8Array(declared > 0 ? Math.ceil(declared * 0.75) + 16 : 1 << 20);
+  let outLen = 0;
+  const push = (b: number) => {
+    if (outLen === out.length) {
+      const bigger = new Uint8Array(out.length * 2);
+      bigger.set(out);
+      out = bigger;
+    }
+    out[outLen++] = b;
+  };
+
+  let quad = 0;
+  let quadLen = 0;
+  const feed = (code: number) => {
+    const v = B64[code];
+    if (v < 0) return;                       // whitespace, '=' padding, anything else
+    quad = (quad << 6) | v;
+    if (++quadLen === 4) {
+      push((quad >> 16) & 255); push((quad >> 8) & 255); push(quad & 255);
+      quad = 0; quadLen = 0;
+    }
+  };
+  // A base64 string whose length is not a multiple of 4 still carries whole bytes.
+  const flush = () => {
+    if (quadLen === 3) { push((quad >> 10) & 255); push((quad >> 2) & 255); }
+    else if (quadLen === 2) { push((quad >> 4) & 255); }
+    quad = 0; quadLen = 0;
+  };
+
+  const KEY = '"wav_base64"';
+  const dec = new TextDecoder();
+  const reader = req.body.getReader();
+  let envelope = '';
+  let pending = '';
+  let inValue = false;
+
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    let text = pending + dec.decode(value, { stream: true });
+    pending = '';
+    while (text.length) {
+      if (!inValue) {
+        const k = text.indexOf(KEY);
+        if (k < 0) {
+          // Hold back enough to catch the key split across two chunks.
+          const keep = Math.min(text.length, KEY.length + 8);
+          envelope += text.slice(0, text.length - keep);
+          pending = text.slice(text.length - keep);
+          break;
+        }
+        // Skip past the ':' and any whitespace to the value's opening quote.
+        let i = k + KEY.length;
+        while (i < text.length && text[i] !== '"') i++;
+        if (i >= text.length) { pending = text.slice(k); break; }
+        // The envelope keeps the key with an EMPTY value, so it stays valid JSON
+        // and the audio never appears in it.
+        envelope += text.slice(0, k) + '"wav_base64":""';
+        text = text.slice(i + 1);
+        inValue = true;
+      } else {
+        // base64 has no escapes, so the first quote ends the value.
+        const q = text.indexOf('"');
+        const seg = q < 0 ? text : text.slice(0, q);
+        for (let i = 0; i < seg.length; i++) feed(seg.charCodeAt(i));
+        if (q < 0) { text = ''; break; }
+        flush();
+        text = text.slice(q + 1);
+        inValue = false;
+      }
+    }
+  }
+  envelope += pending;
+  if (inValue) flush();
+
+  let meta: any = {};
+  try { meta = JSON.parse(envelope || '{}'); } catch { meta = {}; }
+  return { meta, wav: out.subarray(0, outLen) };
 }
 
 // True only if the object is really in the bucket. Used to tell a genuine
