@@ -6,6 +6,7 @@ import {
   Calendar,
   ArrowRight,
   ChevronDown,
+  ChevronUp,
   Check,
   UserPlus,
   Loader2,
@@ -29,6 +30,9 @@ interface StandaloneRecordingsProps {
 }
 
 type NoteMark = { id: string; status: string; title: string | null };
+
+/** How many rows a page shows, and how many each "Show more" adds. */
+const PAGE_SIZE = 10;
 
 const StandaloneRecordings: React.FC<StandaloneRecordingsProps> = ({
   recordings,
@@ -67,7 +71,16 @@ const StandaloneRecordings: React.FC<StandaloneRecordingsProps> = ({
     return true;
   });
 
-  const visible = filteredStandaloneRecordings.slice(0, 10);
+  // The list used to be hard-cut at 10 with a footer that only *said* how many were hidden —
+  // on an account with 159 standalone recordings the other 149 were unreachable from here.
+  const [shown, setShown] = useState(PAGE_SIZE);
+
+  // Changing the time filter rebuilds the list underneath the button, so the page count goes
+  // back to one page rather than leaving the user part-way down a list they never expanded.
+  useEffect(() => { setShown(PAGE_SIZE); }, [timeFilter]);
+
+  const visible = filteredStandaloneRecordings.slice(0, shown);
+  const remaining = filteredStandaloneRecordings.length - visible.length;
 
   useEffect(() => {
     let cancelled = false;
@@ -266,11 +279,30 @@ const StandaloneRecordings: React.FC<StandaloneRecordingsProps> = ({
             );
           })}
 
-          {filteredStandaloneRecordings.length > 10 && (
+          {filteredStandaloneRecordings.length > PAGE_SIZE && (
             <div className="p-4 text-center border-t border-gray-200">
-              <p className="text-sm text-gray-500">
-                Showing 10 of {filteredStandaloneRecordings.length} standalone recordings
+              <p className="text-sm text-gray-500 mb-2">
+                Showing {visible.length} of {filteredStandaloneRecordings.length} standalone recordings
               </p>
+              {remaining > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => setShown((n) => n + PAGE_SIZE)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 hover:border-gray-400 transition-colors"
+                >
+                  <ChevronDown className="w-4 h-4" />
+                  Show {Math.min(remaining, PAGE_SIZE)} more
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setShown(PAGE_SIZE)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 hover:border-gray-400 transition-colors"
+                >
+                  <ChevronUp className="w-4 h-4" />
+                  Show less
+                </button>
+              )}
             </div>
           )}
         </div>
