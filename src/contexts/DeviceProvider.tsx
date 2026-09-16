@@ -113,10 +113,15 @@ const DeviceContext = createContext<DeviceContextValue | null>(null);
 // L816 was invisible here while its takes were arriving normally. The serial
 // prefixes must also stay in step with `recordingName.ts`, which splits on the
 // same three when it labels a take.
+// L815 and L816 are ONE family with one `kind` — same protocol, same audio, same
+// handling everywhere downstream — and differ only in what they are called. So a
+// new model is a row here, not a new kind: adding a kind would mean auditing
+// every branch that switches on it, to no purpose.
 const FAMILIES = [
   { prefix: 'plaud-', kind: 'plaud' as const, label: 'Plaud' },
   { prefix: 'pendant-', kind: 'pendant' as const, label: 'Pendant' },
   { prefix: 'l816-', kind: 'l816' as const, label: 'SATE L816' },
+  { prefix: 'l815-', kind: 'l816' as const, label: 'SATE L815' },
 ];
 
 function familyFor(serial: string | undefined) {

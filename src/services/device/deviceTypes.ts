@@ -26,7 +26,7 @@ export interface ManagedDevice {
   serial: string;
   fw: string;
   /** Device family. 'sate' = ESP32-S3 recorder (default); 'plaud' = a paired
-   *  Plaud NotePin/NotePro; 'pendant' = a SATE Pendant; 'l816' = a SATE L816
+   *  Plaud NotePin/NotePro; 'pendant' = a SATE Pendant; 'l816' = a SATE L816 or L815
    *  handheld. Everything except 'sate' is an EXTERNAL device with no
    *  `sate_devices` row, so it can't be commanded or OTA'd from the web.
    *

@@ -18,15 +18,26 @@
 // named the take. This works on the string alone: a person would never type
 // `device_SATE-443EAC_s13.wav`, so a name that matches the pattern is by definition generated.
 
-const DEVICE_FILE = /^device_(SATE|pendant|plaud|l816)[^_]*_s(\d+)/i;
+// `l81\d` covers the whole handheld family (L816, L815, …): they share a
+// protocol, a naming scheme and a label. See l816Serial in the mobile app —
+// the serial prefix is the MODEL, so this has to match on the family, not on
+// one model, or a new one's takes silently fall through to the 'sate' branch
+// and get labelled as numbered recorder sessions.
+const DEVICE_FILE = /^device_(SATE|pendant|plaud|l81\d)[^_]*_s(\d+)/i;
 
-const PREFIX: Record<string, string> = { sate: 'R', pendant: 'P', plaud: 'PL', l816: 'L' };
+const PREFIX: Record<string, string> = { sate: 'R', pendant: 'P', plaud: 'PL', l81: 'L' };
 
 /** Unix seconds rather than a take number. The recorder never gets near this. */
 const isTimestamp = (n: number) => n >= 1_000_000_000;
 
 function label(source: string, n: number): string {
-  const p = PREFIX[source.toLowerCase()] ?? 'R';
+  // The handheld family is matched as `l81\d`, so the captured source is a
+  // MODEL (`l816`, `l815`) while PREFIX is keyed by the family. Collapse it
+  // here — looking the model up directly returns undefined and silently falls
+  // back to 'R', which would relabel every L816 take as a numbered recorder
+  // session.
+  const key = source.toLowerCase().replace(/^l81\d$/, 'l81');
+  const p = PREFIX[key] ?? 'R';
   return isTimestamp(n)
     ? `${p}-${new Date(n * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
     : `${p}-S${n}`;
@@ -49,8 +60,8 @@ export function sessionLabel(deviceSerial: string | null | undefined, sessionNum
     ? 'pendant'
     : s.startsWith('plaud')
       ? 'plaud'
-      : s.startsWith('l816')
-        ? 'l816'
+      : s.startsWith('l81')
+        ? 'l81'
         : 'sate';
   return label(source, sessionNumber);
 }
