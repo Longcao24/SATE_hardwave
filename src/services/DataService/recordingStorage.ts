@@ -47,7 +47,10 @@ export const saveRecording = async (
       analysis: analysis,
       file_name: audioFile.name,
       file_size: audioFile.size,
-      duration: 0, // Will be updated when audio loads
+      // The analysis above already knows how long the audio is. This used to be a literal 0
+      // with a comment promising it would be filled in "when audio loads" — nothing ever did,
+      // so every web-uploaded recording reported a length of zero forever.
+      duration: analysis.totalDuration || 0,
       patient_id: patientId && patientId.trim() !== '' ? patientId : null, // Convert empty string to null
       recording_name: metadata?.name || null,
       protocol: metadata?.protocol || null,

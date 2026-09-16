@@ -15,6 +15,10 @@ export interface Recording {
    *  from the web app. Only a recording WITH one can become a meeting note — the notes
    *  service fetches its audio by session, never by recording. */
   source_session_id?: string | null;
+  /** Length of the audio in seconds, written from the AI analysis. NULL until a recording has
+   *  been processed (and for anything stored before the column was filled), so every reader
+   *  must treat "no duration" as unknown rather than as zero — see `formatLength`. */
+  duration?: number | null;
 }
 
 export const useRecordings = () => {
@@ -31,14 +35,43 @@ export const useRecordings = () => {
     queryFn: async () => {
       if (!user?.id) return [];
       
-      const { data, error } = await supabase
+      // `duration` is 0 on every recording UPLOADED from the web app — `recordingStorage` wrote
+      // a literal 0 with a comment promising to fill it in "when audio loads", and nothing ever
+      // did. The real length is already on the row inside `analysis.totalDuration` (the same
+      // value the device path copies into the column), so pull just that one key out of the
+      // jsonb rather than the whole analysis blob, and prefer the column when it is real.
+      const BASE =
+        'id, file_name, created_at, file_path, patient_id, recording_name, protocol, notes, source_session_id, duration';
+
+      let { data, error } = await supabase
         .from('recordings')
-        .select('id, file_name, created_at, file_path, patient_id, recording_name, protocol, notes, source_session_id')
+        .select(`${BASE}, analysis_seconds:analysis->totalDuration`)
         .eq('user_id', user.id)
         .order('created_at', { ascending: false });
 
+      // The jsonb path is a PostgREST feature, and a list of recordings failing to load is a far
+      // worse outcome than a missing length — so fall back to the plain select if it is rejected.
+      if (error) {
+        const plain = await supabase
+          .from('recordings')
+          .select(BASE)
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false });
+        data = plain.data as typeof data;
+        error = plain.error;
+      }
+
       if (error) throw error;
-      return data as Recording[];
+
+      // Collapse the two sources into the one field every consumer reads.
+      return (data ?? []).map((r) => {
+        const row = r as Recording & { analysis_seconds?: number | string | null };
+        const fallback = Number(row.analysis_seconds);
+        return {
+          ...row,
+          duration: row.duration || (Number.isFinite(fallback) ? fallback : null),
+        } as Recording;
+      });
     },
     enabled: !!user?.id,
     // Recorder/pendant sessions become recordings server-side, with no click in

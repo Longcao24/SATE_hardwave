@@ -11,9 +11,11 @@ import {
   UserPlus,
   Loader2,
   StickyNote,
+  Clock,
 } from 'lucide-react';
 import type { TimeFilter } from '../types';
 import { formatDate } from '../utils';
+import { formatLength } from '@/utils/duration';
 import { notesApiService, isWorking } from '@/services/notesApiService';
 import { deviceApiService } from '@/services/device/deviceApiService';
 import type { Patient } from '@/services/patientService';
@@ -166,6 +168,7 @@ const StandaloneRecordings: React.FC<StandaloneRecordingsProps> = ({
             const sessionId = recording.source_session_id || null;
             const note = sessionId ? noteOf[sessionId] : undefined;
             const busy = makingFor === recording.id || (note && isWorking(note.status));
+            const length = formatLength(recording.duration);
 
             return (
               <div
@@ -183,6 +186,16 @@ const StandaloneRecordings: React.FC<StandaloneRecordingsProps> = ({
                         <Calendar className="w-4 h-4" />
                         {formatDate(recording.created_at)}
                       </span>
+
+                      {/* How long the take is. Omitted, not shown as 0:00, when the row has no
+                          duration — a recording that is still processing has none yet, and a
+                          zero would read as "this recording is empty". */}
+                      {length && (
+                        <span className="flex items-center gap-1" title="Length">
+                          <Clock className="w-4 h-4" />
+                          {length}
+                        </span>
+                      )}
 
                       {/* The recording's kind. A dropdown only when this account has Voice Notes;
                           otherwise it stays the plain label it has always been, because a user

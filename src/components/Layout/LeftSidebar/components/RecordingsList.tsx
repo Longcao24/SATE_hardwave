@@ -4,6 +4,7 @@ import { AudioLines, MoreVertical, Edit, UserPlus, UserX, Trash2, Plus } from 'l
 import { type Recording } from '@/hooks/useRecordings';
 import { type Patient } from '@/services/patientService';
 import { recordingLabel } from '@/services/recordingName';
+import { formatLength } from '@/utils/duration';
 
 interface RecordingsListProps {
   recordings: Recording[] | undefined;
@@ -114,6 +115,7 @@ export const RecordingsList: React.FC<RecordingsListProps> = ({
             const rawName = r.recording_name || r.file_name || r.file_path.split('/').pop() || '';
             const recordingDisplayName = recordingLabel(rawName);
             const isOpen = openId === r.id;
+            const length = formatLength(r.duration);
             
             return (
             <li key={r.id} className="group relative">
@@ -138,7 +140,13 @@ export const RecordingsList: React.FC<RecordingsListProps> = ({
                       </span>
                     )}
                   </div>
-                  <span className="text-xs text-gray-500 ml-2 flex-shrink-0">{new Date(r.created_at).toLocaleDateString()}</span>
+                  {/* Date, and under it the length. `formatLength` returns null while a
+                      recording has no duration yet, so the line simply isn't there rather
+                      than claiming 0:00. */}
+                  <span className="text-xs text-gray-500 ml-2 flex-shrink-0 text-right">
+                    <span className="block">{new Date(r.created_at).toLocaleDateString()}</span>
+                    {length && <span className="block text-gray-400">{length}</span>}
+                  </span>
                 </button>
                 
                 <div className="relative">
