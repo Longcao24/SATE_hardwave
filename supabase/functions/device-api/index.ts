@@ -45,6 +45,13 @@
 //      a `sate_session_audit` row so a failure stays traceable after a retry clears it.
 // v18: GET /health/alerts?key=… — secret-gated error digest (pipeline errors/stuck,
 //      recent errors, offline devices) for the 5-min status worker's email alerts.
+// v27: POST /sessions/upload-url + POST /sessions/register — direct-to-Storage.
+//      The ONLY path with no size ceiling: the client PUTs the WAV straight into
+//      Storage with a signed URL and then registers it, so the audio never passes
+//      through this function and the ~62-min limit of every byte-carrying route
+//      (and the gateway's 502 above it) simply does not apply. `storage_path` is
+//      confined to the caller's own `<user id>/` prefix and the byte count comes
+//      from Storage, never from the client.
 // v26: POST /sessions/chunk accepts a USER JWT, not only a device key. Hardware
 //      with no `sate_devices` row (L816/L815, pendant, Plaud) uploads through the
 //      phone, and the single-shot POST /sessions carries the whole WAV as base64
@@ -283,6 +290,83 @@ serve(async (req) => {
     // device that has NO device key of its own — a Plaud recorder (which is
     // never registered in sate_devices), or a BLE-bridged SATE session. Here
     // the caller is the signed-in user, so the session is stored under user.id.
+    // [v27] DIRECT-TO-STORAGE upload. The only path with no size ceiling.
+    //
+    // 🛑 Every other route puts the audio THROUGH this function, so every other
+    // route has a limit: the streaming reader made ~62 min survive where 10 min
+    // used to die, and 90 min is a 502 at the gateway before the function is even
+    // reached. Those limits are not in code any more, so no amount of tuning here
+    // moves them.
+    //
+    // So the bytes stop coming here at all. The client asks for a signed upload
+    // URL, PUTs the WAV straight into Storage — which is built for this and does
+    // resumable uploads — and then registers it. This function only ever handles
+    // metadata, and the take can be any length Storage accepts (a project-wide
+    // setting, not a code limit).
+    if (subPath === '/sessions/upload-url' && method === 'POST') {
+      const body = await req.json().catch(() => ({}));
+      const sessionId = newSessionId();
+      const path = sessionStoragePath(user.id, body.device_serial || 'external', sessionId);
+      const { data, error: sErr } = await supabase.storage.from('device-sessions')
+        .createSignedUploadUrl(path);
+      if (sErr) return err(`could not sign an upload: ${sErr.message}`, 500);
+      // The id is handed out NOW and echoed back on register, so the object lands
+      // at its final path and nothing has to be copied or moved afterwards.
+      return json({ session_id: sessionId, storage_path: path, token: data.token,
+                    signed_url: data.signedUrl });
+    }
+
+    // [v27] Register an object the client uploaded straight to Storage.
+    if (subPath === '/sessions/register' && method === 'POST') {
+      const body = await req.json().catch(() => ({}));
+      const storagePath = String(body.storage_path || '');
+      // 🛑 The caller names the path, so the caller could name ANY path. Confine
+      // it to this account's own prefix: without this, a signed-in user could
+      // register another account's audio as their own session, or point a row at
+      // an arbitrary object. The signed URL above only permits writes here, but
+      // this route must not depend on that having been the way in.
+      if (!storagePath.startsWith(`${user.id}/`) || storagePath.includes('..')) {
+        return err('storage_path is not in this account', 403);
+      }
+      // A row whose object is not really there is the ghost the 413 bug left
+      // behind, and it strands the recording on the device for ever. Confirm the
+      // object AND take the byte count from Storage, never from the client.
+      const bytes = await objectSize(supabase, 'device-sessions', storagePath);
+      if (bytes === null) return err('no object at storage_path — upload it first', 409);
+      if (bytes === 0) return err('uploaded object is empty', 400);
+
+      const meta = {
+        device_serial: String(body.device_serial || 'external'),
+        patient_id: String(body.patient_id || 'PT'),
+        session_number: Number(body.session_number || 0),
+        sample_rate: Number(body.sample_rate || 16000),
+        flags: Array.isArray(body.flags) ? body.flags.filter((n: unknown) => Number.isFinite(n)) : undefined,
+      };
+      // Same idempotency the byte-carrying routes have: a retried register must
+      // not create a second session, and a second AI run.
+      const { data: existing } = await supabase.from('sate_device_sessions')
+        .select('id, storage_path')
+        .eq('user_id', user.id)
+        .eq('device_serial', meta.device_serial)
+        .eq('patient_id', meta.patient_id)
+        .eq('session_number', meta.session_number)
+        .eq('bytes', bytes)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (existing) {
+        const real = existing.storage_path &&
+          await objectExists(supabase, 'device-sessions', existing.storage_path);
+        if (real) return json({ id: existing.id, idempotent: true });
+        await supabase.from('sate_device_sessions').delete().eq('id', existing.id);
+      }
+
+      const sessionId = String(body.session_id || '').match(/^s-[0-9a-f]{8}$/)
+        ? String(body.session_id)
+        : newSessionId();
+      return await insertSessionRow(supabase, user.id, meta, sessionId, storagePath, bytes);
+    }
+
     // [v26] CHUNKED upload for a signed-in user.
     //
     // The single-shot POST /sessions below carries the whole take as base64 in
@@ -1408,7 +1492,7 @@ async function storeSessionRecord(
     await supabase.from('sate_device_sessions').delete().eq('id', existing.id);
   }
 
-  const sessionId = 's-' + crypto.randomUUID().slice(0, 8);
+  const sessionId = newSessionId();
   // [v24] device_serial goes into a storage PATH, and on the user-authed POST /sessions it comes
   // straight from the request body (the phone app uploads for a Plaud/BLE device that has no
   // device key). Unsanitised, a serial like "../../<other-uuid>/x" aims a SERVICE-KEY,
@@ -1416,8 +1500,7 @@ async function storeSessionRecord(
   // stripped for exactly this reason (see partDir) — the serial was the one that got missed.
   // Only the path segment is sanitised: the ROW keeps the raw serial, because /sessions/verify
   // and the dedup probe match on the value the recorder sends.
-  const serialSegment = String(meta.device_serial || '').replace(/[^A-Za-z0-9_-]/g, '') || 'unknown';
-  const storagePath = `${userId}/${serialSegment}/${sessionId}.wav`;
+  const storagePath = sessionStoragePath(userId, meta.device_serial, sessionId);
 
   // THROW - never just log. This used to `console.error` and carry on inserting
   // the row, so a rejected upload still returned 2xx: the recorder marked the
@@ -1435,10 +1518,42 @@ async function storeSessionRecord(
     );
   }
 
+  return await insertSessionRow(supabase, userId, meta, sessionId, storagePath, wavBytes.length);
+}
+
+/** `s-1a2b3c4d`. */
+function newSessionId() {
+  return 's-' + crypto.randomUUID().slice(0, 8);
+}
+
+/**
+ * Where a take's audio lives.
+ *
+ * [v24] `device_serial` goes into a storage PATH, and on the user-authed routes it comes
+ * straight from the request (the phone uploads for hardware that has no device key).
+ * Unsanitised, a serial like "../../<other-uuid>/x" aims a SERVICE-KEY, x-upsert:true write
+ * at another account's prefix. Only the path segment is sanitised: the ROW keeps the raw
+ * serial, because /sessions/verify and the dedup probe match the value the recorder sends.
+ */
+function sessionStoragePath(userId: string, serial: string, sessionId: string) {
+  const segment = String(serial || '').replace(/[^A-Za-z0-9_-]/g, '') || 'unknown';
+  return `${userId}/${segment}/${sessionId}.wav`;
+}
+
+/** The row half of storing a take, shared by every upload route: the bytes are
+ *  already in Storage by the time this runs. */
+async function insertSessionRow(
+  supabase: any,
+  userId: string,
+  meta: { device_serial: string; patient_id: string; session_number: number; sample_rate: number; flags?: number[] },
+  sessionId: string,
+  storagePath: string,
+  bytes: number,
+) {
   const { error: insertError } = await supabase.from('sate_device_sessions').insert({
     id: sessionId, user_id: userId, device_serial: meta.device_serial,
     patient_id: meta.patient_id, session_number: meta.session_number,
-    sample_rate: meta.sample_rate, bytes: wavBytes.length, storage_path: storagePath,
+    sample_rate: meta.sample_rate, bytes, storage_path: storagePath,
     flags: meta.flags && meta.flags.length ? meta.flags : null,
   });
   if (insertError) throw new Error(insertError.message);
@@ -1448,6 +1563,17 @@ async function storeSessionRecord(
   triggerProcessor(sessionId);
 
   return json({ id: sessionId });
+}
+
+/** Size of a stored object, or null if it is not there. */
+async function objectSize(supabase: any, bucket: string, path: string): Promise<number | null> {
+  const cut = path.lastIndexOf('/');
+  const dir = cut >= 0 ? path.slice(0, cut) : '';
+  const name = cut >= 0 ? path.slice(cut + 1) : path;
+  const { data } = await supabase.storage.from(bucket).list(dir, { search: name, limit: 100 });
+  const hit = data?.find((f: any) => f.name === name);
+  const size = Number(hit?.metadata?.size ?? NaN);
+  return Number.isFinite(size) ? size : null;
 }
 
 // v19: the cap was 20, which quietly hid a recorder's older takes — the Devices page is the
