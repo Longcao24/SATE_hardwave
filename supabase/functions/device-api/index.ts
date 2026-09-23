@@ -1,4 +1,4 @@
-// SATE Device API — Supabase Edge Function              [v25]
+// SATE Device API — Supabase Edge Function              [v28]
 // Replaces the mock-server's Express endpoints with a single Edge Function
 // that does internal path routing. Authenticated via Supabase JWT (users) or a
 // device key (the recorder).
@@ -52,6 +52,12 @@
 //      (and the gateway's 502 above it) simply does not apply. `storage_path` is
 //      confined to the caller's own `<user id>/` prefix and the byte count comes
 //      from Storage, never from the client.
+// v28: POST /sessions/upload-url takes `format: 'asc'` — a RAW SATE L816/L815 take, stored as
+//      `<id>.asc` and registered exactly like a WAV. cf-processor decodes it (the vendor codec
+//      now runs there, under qemu), uploads `<id>.wav`, repoints `storage_path` at it and
+//      deletes the `.asc`. This is what lets an iPhone use the L816: the codec is an Android
+//      binary and the phone used to have to run it. `bytes` stays the uploaded (ASC) size so
+//      a retried register still dedups.
 // v26: POST /sessions/chunk accepts a USER JWT, not only a device key. Hardware
 //      with no `sate_devices` row (L816/L815, pendant, Plaud) uploads through the
 //      phone, and the single-shot POST /sessions carries the whole WAV as base64
@@ -306,7 +312,13 @@ serve(async (req) => {
     if (subPath === '/sessions/upload-url' && method === 'POST') {
       const body = await req.json().catch(() => ({}));
       const sessionId = newSessionId();
-      const path = sessionStoragePath(user.id, body.device_serial || 'external', sessionId);
+      // [v28] `format: 'asc'` = a RAW SATE L816/L815 take. The phone no longer has to
+      // decode it (only an Android phone could — the vendor codec is an Android binary);
+      // cf-processor decodes it to a WAV, repoints the row at that WAV, and from then on
+      // it is an ordinary session. The extension is the only signal the processor keys on,
+      // so it is chosen here from a closed set, never taken from the client verbatim.
+      const ext = body.format === 'asc' ? 'asc' : 'wav';
+      const path = sessionStoragePath(user.id, body.device_serial || 'external', sessionId, ext);
       const { data, error: sErr } = await supabase.storage.from('device-sessions')
         .createSignedUploadUrl(path);
       if (sErr) return err(`could not sign an upload: ${sErr.message}`, 500);
@@ -1540,9 +1552,10 @@ function newSessionId() {
  * at another account's prefix. Only the path segment is sanitised: the ROW keeps the raw
  * serial, because /sessions/verify and the dedup probe match the value the recorder sends.
  */
-function sessionStoragePath(userId: string, serial: string, sessionId: string) {
+function sessionStoragePath(userId: string, serial: string, sessionId: string,
+                            ext: 'wav' | 'asc' = 'wav') {
   const segment = String(serial || '').replace(/[^A-Za-z0-9_-]/g, '') || 'unknown';
-  return `${userId}/${segment}/${sessionId}.wav`;
+  return `${userId}/${segment}/${sessionId}.${ext}`;
 }
 
 /** The row half of storing a take, shared by every upload route: the bytes are
