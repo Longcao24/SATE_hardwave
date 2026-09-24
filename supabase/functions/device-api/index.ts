@@ -1,4 +1,4 @@
-// SATE Device API — Supabase Edge Function              [v28]
+// SATE Device API — Supabase Edge Function              [v29]
 // Replaces the mock-server's Express endpoints with a single Edge Function
 // that does internal path routing. Authenticated via Supabase JWT (users) or a
 // device key (the recorder).
@@ -52,6 +52,10 @@
 //      (and the gateway's 502 above it) simply does not apply. `storage_path` is
 //      confined to the caller's own `<user id>/` prefix and the byte count comes
 //      from Storage, never from the client.
+// v29: sessions carry `audio_seconds` (set here for an ASC take, exactly by cf-processor) and
+//      the list returns it. `bytes` is the UPLOADED size, so for raw ASC it is ~7.8x smaller
+//      than the audio and a duration computed from it — which every screen did — was wrong:
+//      a 66-minute take showed as 8m 28s. Readers must prefer audio_seconds.
 // v28: POST /sessions/upload-url takes `format: 'asc'` — a RAW SATE L816/L815 take, stored as
 //      `<id>.asc` and registered exactly like a WAV. cf-processor decodes it (the vendor codec
 //      now runs there, under qemu), uploads `<id>.wav`, repoints `storage_path` at it and
@@ -1573,6 +1577,13 @@ async function insertSessionRow(
     patient_id: meta.patient_id, session_number: meta.session_number,
     sample_rate: meta.sample_rate, bytes, storage_path: storagePath,
     flags: meta.flags && meta.flags.length ? meta.flags : null,
+    // [v29] A RAW ASC take's `bytes` is ~7.8x smaller than the audio it holds, and
+    // every screen used to turn `bytes` into a duration as if it were a WAV — a
+    // 66-minute take read "8m 28s". So its length is stated here, from the frame
+    // count (82 bytes = 20 ms; a SATEASC1 container's few header bytes are noise),
+    // until cf-processor overwrites it with the exact figure. NULL for a WAV, whose
+    // bytes still tell the truth.
+    audio_seconds: storagePath.endsWith('.asc') ? Math.floor(bytes / 82) * 0.02 : null,
   });
   if (insertError) throw new Error(insertError.message);
 
@@ -1615,7 +1626,7 @@ async function listSessions(
     // the beginning but never returned here, so nothing downstream of this endpoint could see
     // them — a meeting note generated from a session silently lost every mark the user had
     // pressed the button for, which is the one thing the hardware does that a phone cannot.
-    .select('id, device_serial, patient_id, session_number, sample_rate, bytes, created_at, processed, processed_at, recording_id, process_error, no_text, status, attempts, flags')
+    .select('id, device_serial, patient_id, session_number, sample_rate, bytes, audio_seconds, created_at, processed, processed_at, recording_id, process_error, no_text, status, attempts, flags')
     .eq('user_id', userId).order('created_at', { ascending: false });
   if (deviceSerial) query = query.eq('device_serial', deviceSerial);
   const { data, error } = await query.limit(limit);

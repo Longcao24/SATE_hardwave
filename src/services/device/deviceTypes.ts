@@ -112,7 +112,12 @@ export interface UploadedSession {
   patient_id: string;
   session_number: number;
   sample_rate?: number;
+  /** The UPLOADED size. For a raw ASC take (L81x) it is ~7.8x smaller than the
+   *  audio — never derive a duration from it; use `audio_seconds`. */
   bytes: number;
+  /** Real audio length (device-api v29). Null for older WAV sessions, whose
+   *  `bytes` still gives the length. */
+  audio_seconds?: number | null;
   /** ISO timestamp the server stored it */
   at: string;
   /** Processing state of the auto AI/recordings bridge. */

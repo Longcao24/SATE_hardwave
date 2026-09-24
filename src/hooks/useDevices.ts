@@ -67,16 +67,27 @@ export function useTotalPendingSessions() {
 }
 
 /**
- * Helper to format WAV byte count into a human-readable duration.
- * Assumes 16-bit mono PCM with 44-byte WAV header.
+ * A session's duration for display.
+ *
+ * Prefer `audioSeconds` (device-api v29). `bytes` is the UPLOADED size: for a WAV
+ * it does give the length (16-bit mono, 44-byte header), but an L81x take is
+ * uploaded as raw ASC-VI, ~7.8x smaller than its audio, and deriving the length
+ * from its bytes showed a 66-minute take as "8m 28s".
  */
-export function formatSessionDuration(bytes: number, sampleRate = 16000): string {
-  const pcm = Math.max(0, bytes - 44);
-  const totalSeconds = Math.round(pcm / (sampleRate * 2));
+export function formatSessionDuration(
+  bytes: number,
+  sampleRate = 16000,
+  audioSeconds?: number | null
+): string {
+  const totalSeconds =
+    typeof audioSeconds === 'number' && Number.isFinite(audioSeconds)
+      ? Math.round(audioSeconds)
+      : Math.round(Math.max(0, bytes - 44) / (sampleRate * 2));
   if (totalSeconds < 60) return `${totalSeconds}s`;
-  const minutes = Math.floor(totalSeconds / 60);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
-  return `${minutes}m ${seconds}s`;
+  return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m ${seconds}s`;
 }
 
 /**

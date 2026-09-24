@@ -9,10 +9,10 @@
 // into view. Reading along was the whole reason to show a transcript next to a player.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronRight, Loader2, Trash2 } from 'lucide-react';
+import { Check, ChevronRight, Copy, Link2, Loader2, RefreshCw, Trash2, X } from 'lucide-react';
 import { NotePlayer } from './NotePlayer';
 import { NoteProgress } from './NoteProgress';
-import { notesApiService, isWorking, type Note, type NoteSummary } from '@/services/notesApiService';
+import { notesApiService, isWorking, type Note, type NoteShare, type NoteSummary } from '@/services/notesApiService';
 import { sessionLabel } from '@/services/recordingName';
 
 const mmss = (s?: number | null) => {
@@ -28,44 +28,62 @@ export function NoteDetail({ note, onDeleted }: { note: Note; onDeleted?: () => 
   const [speed, setSpeed] = useState(1);
   const [tab, setTab] = useState<'summary' | 'transcript'>('summary');
 
-  // Which summary shape to show. A template the note already has appears instantly; one it
-  // does not costs a single cheap model call — never a re-transcription, which is ~96% of the
-  // cost and is already paid. So switching is worth offering, and worth saying is cheap.
+  // Which summary to show is a PAIR: a template (what is extracted) and a model (who wrote it).
+  // A pair the note already has appears instantly; one it does not costs a single model call —
+  // never a re-transcription, which is ~96% of the cost and is already paid. The model menu is
+  // there so a user can compare models on their own recording.
+  const defaultModel = note.models?.find((m) => m.default)?.id ?? '';
   const [tpl, setTpl] = useState(note.summary?.template || 'meeting');
+  const [model, setModel] = useState(note.summary?.model || defaultModel);
   const [alt, setAlt] = useState<NoteSummary | null>(null);
   const [tplBusy, setTplBusy] = useState(false);
   const [tplError, setTplError] = useState<string | null>(null);
-  // Templates generated during this visit. `note.templates` was fetched before they existed,
-  // so without this the picker keeps offering to "generate" one it just generated.
+  // Pairs generated during this visit. `note.templates` / `note.models` were fetched before they
+  // existed, so without this the menus keep offering to "generate" what was just generated.
   const [madeHere, setMadeHere] = useState<Set<string>>(new Set());
-  useEffect(() => { setTpl(note.summary?.template || 'meeting'); setAlt(null); setMadeHere(new Set()); }, [note.id]);
+  const [shareOpen, setShareOpen] = useState(false);
+  useEffect(() => {
+    setTpl(note.summary?.template || 'meeting');
+    setModel(note.summary?.model || defaultModel);
+    setAlt(null); setMadeHere(new Set()); setShareOpen(false);
+  }, [note.id]);
 
-  const chooseTemplate = async (next: string) => {
-    setTpl(next);
+  const load = async (nextTpl: string, nextModel: string, force = false) => {
+    setTpl(nextTpl);
+    setModel(nextModel);
     setTplError(null);
-    if (next === note.summary?.template) { setAlt(null); return; }
+    if (!force && nextTpl === note.summary?.template && nextModel === note.summary?.model) {
+      setAlt(null);
+      return;
+    }
     setTplBusy(true);
     try {
-      let fresh = await notesApiService.get(note.id, next);
-      if (!fresh.summary) {
-        await notesApiService.summarizeAs(note.id, next);
-        // The generation runs in a Workflow, so poll rather than assume. ~10 s in practice.
-        for (let i = 0; i < 15 && !fresh.summary; i++) {
-          await new Promise((r) => setTimeout(r, 3000));
-          fresh = await notesApiService.get(note.id, next);
+      let fresh = await notesApiService.get(note.id, nextTpl, nextModel);
+      const before = force ? JSON.stringify(fresh.summary?.json ?? null) : null;
+      if (!fresh.summary || force) {
+        await notesApiService.summarizeAs(note.id, nextTpl, nextModel, force);
+        // The generation runs in a Workflow, so poll rather than assume. A long meeting on the
+        // largest model can take a few minutes; give it six before saying so.
+        const changed = () => fresh.summary && (!force || JSON.stringify(fresh.summary.json) !== before);
+        for (let i = 0; i < 72 && !changed(); i++) {
+          await new Promise((r) => setTimeout(r, 5000));
+          fresh = await notesApiService.get(note.id, nextTpl, nextModel);
         }
+        if (!changed()) throw new Error('still generating — try again in a moment');
       }
-      if (!fresh.summary) throw new Error('still generating — try again in a moment');
-      setAlt(fresh.summary.json);
-      setMadeHere((cur) => new Set(cur).add(next));
+      setAlt(fresh.summary!.json);
+      setMadeHere((cur) => new Set(cur).add(`${nextTpl}|${nextModel}`));
     } catch (e) {
       setTplError((e as Error).message);
       setTpl(note.summary?.template || 'meeting');
+      setModel(note.summary?.model || defaultModel);
       setAlt(null);
     } finally {
       setTplBusy(false);
     }
   };
+  const isReadyModel = (id: string) =>
+    madeHere.has(`${tpl}|${id}`) || (tpl === note.summary?.template && note.models?.find((m) => m.id === id)?.ready);
 
   const summary = alt ?? note.summary?.json;
   const segments = note.transcript?.segments ?? [];
@@ -106,7 +124,20 @@ export function NoteDetail({ note, onDeleted }: { note: Note; onDeleted?: () => 
         <span className="text-sm font-medium text-gray-900 truncate">
           {note.title || 'Untitled recording'}
         </span>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex items-center gap-2 relative">
+          <button
+            type="button"
+            disabled={!summary}
+            title={summary ? 'Share this summary by link' : 'Nothing to share until the summary is ready'}
+            onClick={() => setShareOpen((v) => !v)}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-gray-600 rounded-lg hover:bg-gray-100 disabled:opacity-40"
+          >
+            <Link2 className="w-3.5 h-3.5" />
+            Share
+          </button>
+          {shareOpen && summary && (
+            <SharePanel noteId={note.id} template={tpl} model={model} onClose={() => setShareOpen(false)} />
+          )}
           <button
             type="button"
             disabled={deleting}
@@ -183,22 +214,50 @@ export function NoteDetail({ note, onDeleted }: { note: Note; onDeleted?: () => 
                 </Tab>
 
                 {tab === 'summary' && note.templates?.length > 0 && (
-                  <label className="ml-auto flex items-center gap-1.5 text-xs text-gray-400">
+                  <div className="ml-auto flex items-center gap-3 text-xs text-gray-400">
                     {tplBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
-                    <span>Summarise as</span>
-                    <select
-                      value={tpl}
-                      disabled={tplBusy}
-                      onChange={(e) => chooseTemplate(e.target.value)}
-                      className="text-xs font-medium text-gray-700 bg-transparent border-0 focus:ring-0 cursor-pointer hover:text-gray-900"
+                    <label className="flex items-center gap-1.5">
+                      <span>Summarise as</span>
+                      <select
+                        value={tpl}
+                        disabled={tplBusy}
+                        onChange={(e) => load(e.target.value, model)}
+                        className="text-xs font-medium text-gray-700 bg-transparent border-0 focus:ring-0 cursor-pointer hover:text-gray-900"
+                      >
+                        {note.templates.map((t) => (
+                          <option key={t.key} value={t.key}>
+                            {t.label}{t.ready || madeHere.has(`${t.key}|${model}`) ? '' : ' · generate'}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    {(note.models?.length ?? 0) > 0 && (
+                      <label className="flex items-center gap-1.5" title="Which AI model writes the summary">
+                        <span>Model</span>
+                        <select
+                          value={model}
+                          disabled={tplBusy}
+                          onChange={(e) => load(tpl, e.target.value)}
+                          className="text-xs font-medium text-gray-700 bg-transparent border-0 focus:ring-0 cursor-pointer hover:text-gray-900"
+                        >
+                          {note.models!.map((m) => (
+                            <option key={m.id} value={m.id}>
+                              {m.label}{isReadyModel(m.id) ? '' : ' · generate'}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                    <button
+                      type="button"
+                      disabled={tplBusy || !summary}
+                      title="Write this summary again with the selected model"
+                      onClick={() => load(tpl, model, true)}
+                      className="flex items-center gap-1 font-medium text-gray-500 hover:text-gray-900 disabled:opacity-40"
                     >
-                      {note.templates.map((t) => (
-                        <option key={t.key} value={t.key}>
-                          {t.label}{t.ready || madeHere.has(t.key) ? '' : ' · generate'}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                      <RefreshCw className="w-3.5 h-3.5" /> Regenerate
+                    </button>
+                  </div>
                 )}
               </div>
 
@@ -269,13 +328,17 @@ function SummaryView({ note, summary, onSeek }: {
             its recording must be recognisably the same thing. */}
         <Meta label="Recording" value={`${sessionLabel(note.device_serial, note.session_number)} · ${note.device_serial}`} />
         <Meta label="Length" value={mmss(note.duration_s)} />
+        {summary.meta?.location ? <Meta label="Location" value={summary.meta.location} /> : null}
+        {summary.meta?.participants?.length ? (
+          <Meta label="Participants" value={summary.meta.participants.join(', ')} />
+        ) : null}
         {note.flags?.length > 0 && (
           <Meta label="Flagged" value={`${note.flags.length} moment${note.flags.length > 1 ? 's' : ''}`} />
         )}
       </dl>
 
       {summary.tldr && (
-        <p className="mt-6 text-[15px] leading-relaxed text-gray-600">{summary.tldr}</p>
+        <p className="mt-6 text-[15px] leading-relaxed text-gray-600"><Rich text={summary.tldr} /></p>
       )}
 
       {summary.chapters.length > 0 && (
@@ -296,26 +359,43 @@ function SummaryView({ note, summary, onSeek }: {
       {sections.map((sec) => (
         <section key={sec.key} className="mt-8">
           <h2 className="text-[17px] font-semibold text-gray-900">{sec.title}</h2>
-          <ul className="mt-3 space-y-3">
-            {sec.items.map((it, i) => (
-              <li key={i} className="flex gap-3">
-                <span className="mt-[9px] w-1.5 h-1.5 rounded-full bg-gray-400 shrink-0" />
-                <div className="min-w-0">
-                  <Lead text={it.text} />
-                  {it.sub && it.sub.length > 0 && (
-                    <ul className="mt-2.5 space-y-2 pl-1">
-                      {it.sub.map((x, j) => (
-                        <li key={j} className="flex gap-3">
-                          <span className="mt-[9px] w-1.5 h-1.5 rounded-full border border-gray-400 shrink-0" />
-                          <div className="min-w-0"><Lead text={x} /></div>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              </li>
-            ))}
-          </ul>
+          {sec.kind === 'prose' ? (
+            <div className="mt-3 space-y-3">
+              {sec.items.map((it, i) => (
+                <p key={i} className="text-[15px] leading-relaxed text-gray-700"><Rich text={it.text} /></p>
+              ))}
+            </div>
+          ) : sec.kind === 'todo' ? (
+            <ul className="mt-3 space-y-2.5">
+              {sec.items.map((it, i) => (
+                <li key={i} className="flex gap-3">
+                  <span className="mt-[5px] w-4 h-4 rounded border-[1.5px] border-gray-400 shrink-0" />
+                  <span className="text-[15px] leading-relaxed text-gray-700"><Rich text={it.text} /></span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <ul className="mt-3 space-y-3">
+              {sec.items.map((it, i) => (
+                <li key={i} className="flex gap-3">
+                  <span className="mt-[9px] w-1.5 h-1.5 rounded-full bg-gray-400 shrink-0" />
+                  <div className="min-w-0">
+                    <Lead text={it.text} />
+                    {it.sub && it.sub.length > 0 && (
+                      <ul className="mt-2.5 space-y-2 pl-1">
+                        {it.sub.map((x, j) => (
+                          <li key={j} className="flex gap-3">
+                            <span className="mt-[9px] w-1.5 h-1.5 rounded-full border border-gray-400 shrink-0" />
+                            <div className="min-w-0"><Lead text={x} /></div>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
       ))}
 
@@ -345,14 +425,109 @@ function Meta({ label, value }: { label: string; value: string }) {
 function Lead({ text }: { text: string }) {
   const i = text.indexOf(':');
   const label = i > 0 && i <= 60 ? text.slice(0, i) : null;
-  if (!label || /[.!?]/.test(label)) {
-    return <span className="text-[15px] leading-relaxed text-gray-700">{text}</span>;
+  if (!label || /[.!?]/.test(label) || label.includes('**')) {
+    return <span className="text-[15px] leading-relaxed text-gray-700"><Rich text={text} /></span>;
   }
   return (
     <span className="text-[15px] leading-relaxed text-gray-700">
       <strong className="font-semibold text-gray-900">{label}:</strong>
-      {text.slice(i + 1)}
+      <Rich text={text.slice(i + 1)} />
     </span>
+  );
+}
+
+/** `**bold**` inside model text. Rendered as elements, never as HTML: the text is untrusted. */
+function Rich({ text }: { text: string }) {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  return (
+    <>
+      {parts.map((p, i) =>
+        /^\*\*[^*]+\*\*$/.test(p)
+          ? <strong key={i} className="font-semibold text-gray-900">{p.slice(2, -2)}</strong>
+          : <span key={i}>{p}</span>)}
+    </>
+  );
+}
+
+/**
+ * Share by link. The link is the credential — whoever has it can read THIS summary (not the
+ * transcript, not the audio) until it expires or is turned off here. So the panel says exactly
+ * that, and every live link can be revoked from the same place it was made.
+ */
+function SharePanel({ noteId, template, model, onClose }: {
+  noteId: string; template: string; model: string; onClose: () => void;
+}) {
+  const [shares, setShares] = useState<NoteShare[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
+  const [days, setDays] = useState(30);
+
+  const refresh = () => notesApiService.listShares(noteId).then(setShares).catch((e) => setError(e.message));
+  useEffect(() => { refresh(); }, [noteId]);
+
+  const copy = async (url: string) => {
+    try { await navigator.clipboard.writeText(url); setCopied(url); setTimeout(() => setCopied(null), 1500); }
+    catch { window.prompt('Copy this link:', url); }
+  };
+  const create = async () => {
+    setBusy(true); setError(null);
+    try {
+      const s = await notesApiService.share(noteId, template, model, days);
+      await copy(s.url);
+      await refresh();
+    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+  };
+  const revoke = async (token: string) => {
+    setBusy(true);
+    try { await notesApiService.revokeShare(noteId, token); await refresh(); }
+    catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+  };
+  const active = (shares ?? []).filter((s) => s.active);
+
+  return (
+    <div className="absolute right-0 top-9 z-20 w-[360px] rounded-xl border border-gray-200 bg-white p-4 shadow-lg text-left">
+      <div className="flex items-center">
+        <h3 className="text-sm font-semibold text-gray-900">Share this summary</h3>
+        <button type="button" onClick={onClose} className="ml-auto text-gray-400 hover:text-gray-700"><X className="w-4 h-4" /></button>
+      </div>
+      <p className="mt-1.5 text-xs leading-relaxed text-gray-500">
+        Anyone with the link can read this summary — not the transcript or the audio — until it
+        expires or you turn it off. Check it for anything that should not leave your team first.
+      </p>
+      <div className="mt-3 flex items-center gap-2">
+        <select value={days} onChange={(e) => setDays(Number(e.target.value))}
+          className="text-xs border border-gray-200 rounded-md px-2 py-1.5">
+          <option value={1}>1 day</option>
+          <option value={7}>7 days</option>
+          <option value={30}>30 days</option>
+          <option value={90}>90 days</option>
+        </select>
+        <button type="button" disabled={busy} onClick={create}
+          className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-gray-900 rounded-lg hover:bg-gray-700 disabled:opacity-50">
+          {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Link2 className="w-3.5 h-3.5" />}
+          Create link &amp; copy
+        </button>
+      </div>
+      {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
+      {active.length > 0 && (
+        <ul className="mt-3 space-y-1.5 border-t border-gray-100 pt-3">
+          {active.map((s) => (
+            <li key={s.token} className="flex items-center gap-2 text-xs">
+              <span className="truncate text-gray-600 flex-1" title={s.url}>…/s/{s.token.slice(0, 8)}</span>
+              <span className="text-gray-400 shrink-0">
+                {s.expires_at ? `until ${new Date(s.expires_at).toLocaleDateString()}` : 'no expiry'}
+              </span>
+              <button type="button" title="Copy link" onClick={() => copy(s.url)} className="text-gray-500 hover:text-gray-900">
+                {copied === s.url ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
+              </button>
+              <button type="button" title="Turn this link off" disabled={busy} onClick={() => revoke(s.token)}
+                className="text-gray-400 hover:text-red-600">Turn off</button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 

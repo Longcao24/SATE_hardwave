@@ -32,7 +32,22 @@ export interface NoteSummary {
    * template must not require a change here or in the renderer. Older summaries stored a flat
    * shape; the server converts them on read, so this is the only shape the app ever sees.
    */
-  sections: Array<{ key: string; title: string; items: Array<{ text: string; sub?: string[] }> }>;
+  sections: Array<{
+    key: string; title: string; items: Array<{ text: string; sub?: string[] }>;
+    /** `prose` = paragraphs, `todo` = checklist, absent/`list` = bullets. */
+    kind?: 'list' | 'prose' | 'todo';
+  }>;
+  /** Header facts as the recording states them (detailed meeting template). */
+  meta?: { participants?: string[]; location?: string };
+}
+
+/** A summary model the user may pick; `ready` = this template already has its version. */
+export interface ModelChoice { id: string; label: string; default: boolean; ready: boolean }
+
+/** A link a note is shared by. Anyone holding `url` can read the summary — nothing else. */
+export interface NoteShare {
+  token: string; url: string; template: string; model: string;
+  created_at: string; expires_at: string | null; revoked: boolean; active: boolean;
 }
 
 export interface TemplateChoice { key: string; label: string; ready: boolean }
@@ -102,6 +117,8 @@ export interface Note extends NoteListItem {
   summary: { template: string; model: string; json: NoteSummary } | null;
   /** Every template, and whether this note already has one — `ready:false` costs a generation. */
   templates: TemplateChoice[];
+  /** Every summary model the user may pick, for the shown template. */
+  models?: ModelChoice[];
 }
 
 function baseUrl(): string {
@@ -164,16 +181,37 @@ export const notesApiService = {
     return req<NoteListItem[]>('/api/notes');
   },
 
-  get(id: string, template?: string): Promise<Note> {
-    return req<Note>(`/api/notes/${id}${template ? `?template=${encodeURIComponent(template)}` : ''}`);
+  get(id: string, template?: string, model?: string): Promise<Note> {
+    const q = new URLSearchParams();
+    if (template) q.set('template', template);
+    if (model) q.set('model', model);
+    const qs = q.toString();
+    return req<Note>(`/api/notes/${id}${qs ? `?${qs}` : ''}`);
   },
 
   /**
    * Summarise an existing note a different way. Runs from the stored transcript — one cheap
    * model call, never a re-transcription (that is ~96% of the cost and is already paid).
    */
-  summarizeAs(id: string, template: string): Promise<{ ok: true; template: string; cached?: boolean }> {
-    return req(`/api/notes/${id}/summarize`, { method: 'POST', body: JSON.stringify({ template }) });
+  summarizeAs(
+    id: string, template: string, model?: string, force = false,
+  ): Promise<{ ok: true; template: string; model: string; cached?: boolean }> {
+    return req(`/api/notes/${id}/summarize`, {
+      method: 'POST', body: JSON.stringify({ template, model, force }),
+    });
+  },
+
+  /** Make a share link for the summary on screen. Expires after `days` (default 30). */
+  share(id: string, template: string, model?: string, days?: number): Promise<NoteShare> {
+    return req(`/api/notes/${id}/share`, {
+      method: 'POST', body: JSON.stringify({ template, model, days }),
+    });
+  },
+  listShares(id: string): Promise<NoteShare[]> {
+    return req(`/api/notes/${id}/shares`);
+  },
+  revokeShare(id: string, token: string): Promise<{ ok: true }> {
+    return req(`/api/notes/${id}/share/${encodeURIComponent(token)}`, { method: 'DELETE' });
   },
 
   /**

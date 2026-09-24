@@ -218,7 +218,7 @@ export function DeviceSessionStatus({ sessions }: DeviceSessionStatusProps) {
                     {sessionLabel(s.device_serial, s.session_number)} · {s.patient_id}
                   </p>
                   <p className="text-xs text-gray-400 mt-0.5">
-                    {formatSessionDuration(s.bytes, s.sample_rate)} · {timeAgo(s.at)}
+                    {formatSessionDuration(s.bytes, s.sample_rate, s.audio_seconds)} · {timeAgo(s.at)}
                   </p>
                 </div>
 
