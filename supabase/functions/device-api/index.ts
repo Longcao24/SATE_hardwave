@@ -1,4 +1,4 @@
-// SATE Device API — Supabase Edge Function              [v29]
+// SATE Device API — Supabase Edge Function              [v30]
 // Replaces the mock-server's Express endpoints with a single Edge Function
 // that does internal path routing. Authenticated via Supabase JWT (users) or a
 // device key (the recorder).
@@ -52,6 +52,8 @@
 //      (and the gateway's 502 above it) simply does not apply. `storage_path` is
 //      confined to the caller's own `<user id>/` prefix and the byte count comes
 //      from Storage, never from the client.
+// v30: POST /sessions/upload-url takes `format: 'mp3'` — a SonicNote take, stored as `<id>.mp3`;
+//      cf-processor converts it to the pipeline's 16 kHz mono WAV (ffmpeg) exactly like an `.asc`.
 // v29: sessions carry `audio_seconds` (set here for an ASC take, exactly by cf-processor) and
 //      the list returns it. `bytes` is the UPLOADED size, so for raw ASC it is ~7.8x smaller
 //      than the audio and a duration computed from it — which every screen did — was wrong:
@@ -321,7 +323,8 @@ serve(async (req) => {
       // cf-processor decodes it to a WAV, repoints the row at that WAV, and from then on
       // it is an ordinary session. The extension is the only signal the processor keys on,
       // so it is chosen here from a closed set, never taken from the client verbatim.
-      const ext = body.format === 'asc' ? 'asc' : 'wav';
+      // [v30] `mp3` = a SonicNote take (the recorder's own MP3); cf-processor converts it.
+      const ext = body.format === 'asc' ? 'asc' : body.format === 'mp3' ? 'mp3' : 'wav';
       const path = sessionStoragePath(user.id, body.device_serial || 'external', sessionId, ext);
       const { data, error: sErr } = await supabase.storage.from('device-sessions')
         .createSignedUploadUrl(path);
@@ -1557,7 +1560,7 @@ function newSessionId() {
  * serial, because /sessions/verify and the dedup probe match the value the recorder sends.
  */
 function sessionStoragePath(userId: string, serial: string, sessionId: string,
-                            ext: 'wav' | 'asc' = 'wav') {
+                            ext: 'wav' | 'asc' | 'mp3' = 'wav') {
   const segment = String(serial || '').replace(/[^A-Za-z0-9_-]/g, '') || 'unknown';
   return `${userId}/${segment}/${sessionId}.${ext}`;
 }
@@ -1583,7 +1586,9 @@ async function insertSessionRow(
     // count (82 bytes = 20 ms; a SATEASC1 container's few header bytes are noise),
     // until cf-processor overwrites it with the exact figure. NULL for a WAV, whose
     // bytes still tell the truth.
-    audio_seconds: storagePath.endsWith('.asc') ? Math.floor(bytes / 82) * 0.02 : null,
+    audio_seconds: storagePath.endsWith('.asc') ? Math.floor(bytes / 82) * 0.02
+      // [v30] SonicNote MP3 is 32 kbps CBR = 4000 bytes/s; cf-processor writes the exact value.
+      : storagePath.endsWith('.mp3') ? bytes / 4000 : null,
   });
   if (insertError) throw new Error(insertError.message);
 

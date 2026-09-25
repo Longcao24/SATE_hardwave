@@ -23,9 +23,10 @@
 // the serial prefix is the MODEL, so this has to match on the family, not on
 // one model, or a new one's takes silently fall through to the 'sate' branch
 // and get labelled as numbered recorder sessions.
-const DEVICE_FILE = /^device_(SATE|pendant|plaud|l81\d)[^_]*_s(\d+)/i;
+const DEVICE_FILE = /^device_(SATE|pendant|plaud|l81\d|sonic)[^_]*_s(\d+)/i;
 
-const PREFIX: Record<string, string> = { sate: 'R', pendant: 'P', plaud: 'PL', l81: 'L' };
+// `sonic` = a SonicNote (XLX) recorder, serial `sonic-<SN>`, timestamp session numbers.
+const PREFIX: Record<string, string> = { sate: 'R', pendant: 'P', plaud: 'PL', l81: 'L', sonic: 'SN' };
 
 /** Unix seconds rather than a take number. The recorder never gets near this. */
 const isTimestamp = (n: number) => n >= 1_000_000_000;
@@ -62,6 +63,8 @@ export function sessionLabel(deviceSerial: string | null | undefined, sessionNum
       ? 'plaud'
       : s.startsWith('l81')
         ? 'l81'
-        : 'sate';
+        : s.startsWith('sonic')
+          ? 'sonic'
+          : 'sate';
   return label(source, sessionNumber);
 }
