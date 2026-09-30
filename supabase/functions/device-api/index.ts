@@ -1,4 +1,4 @@
-// SATE Device API — Supabase Edge Function              [v30]
+// SATE Device API — Supabase Edge Function              [v33]
 // Replaces the mock-server's Express endpoints with a single Edge Function
 // that does internal path routing. Authenticated via Supabase JWT (users) or a
 // device key (the recorder).
@@ -52,6 +52,25 @@
 //      (and the gateway's 502 above it) simply does not apply. `storage_path` is
 //      confined to the caller's own `<user id>/` prefix and the byte count comes
 //      from Storage, never from the client.
+// v33: POST /admin/devices/release {serial, hw_serial?} — an ADMIN takes a Bluetooth device away
+//      from whichever account holds it (the holder lost the phone, left, cannot be reached). It
+//      deletes every registration of it and writes the opt-out for every account that uploaded
+//      from it, so no one holds it until someone pairs it again; RECORDINGS ARE KEPT. Written to
+//      sate_device_audit (who, when, from whom) — the only record once the rows are gone.
+// v32: a device is CLAIMED by uploading from it, not only by registering it. v31 counted only
+//      `sate_devices` registrations — and the apps in the field never register, so the registry was
+//      empty and every unit read as "nobody's": the first phone to ask CLAIMED someone else's unit.
+//      Now the owner is the earliest registration, else the account that uploaded from it most
+//      recently (the one holding it), and either is released only by that account removing it
+//      (DELETE /devices/:id, or POST /devices/release from the phone's Unpair) — both write the
+//      opt-out that stops its uploads counting as a claim.
+// v31: ONE ACCOUNT PER BLUETOOTH DEVICE. GET /devices/owner?serial=&hw= says whether an external
+//      device (L81x, SonicNote, pendant, Plaud) is registered to ANOTHER account, and whose (email —
+//      the research build shows it so the user knows who to ask); POST /devices/external refuses
+//      (409) to register one that already belongs to someone else. The owner is the EARLIEST
+//      registration; removing the device (DELETE /devices/:id) is what frees it. `hw_serial` is the
+//      unit's own serial (L81x opcode 0x01) — the same on iPhone and Android, where `serial`
+//      (l816-<BLE id>) is not. Also: externalKind() now knows l815 and sonic (both were rejected).
 // v30: POST /sessions/upload-url takes `format: 'mp3'` — a SonicNote take, stored as `<id>.mp3`;
 //      cf-processor converts it to the pipeline's 16 kHz mono WAV (ffmpeg) exactly like an `.asc`.
 // v29: sessions carry `audio_seconds` (set here for an ASC take, exactly by cf-processor) and
@@ -230,6 +249,16 @@ serve(async (req) => {
     if (subPath === '/devices/external' && method === 'POST') {
       return await registerExternalDevice(supabase, user.id, req);
     }
+    if (subPath === '/devices/release' && method === 'POST') {
+      return await releaseExternalDevice(supabase, user.id, req);
+    }
+    // [v31] Who owns this Bluetooth device? Asked by the phone BEFORE it pairs one.
+    if (subPath === '/devices/owner' && method === 'GET') {
+      const u = new URL(req.url);
+      if (!/^[A-Za-z0-9:_.-]{0,96}$/.test(u.searchParams.get('serial') || '')) return err('bad serial', 400);
+      const o = await externalOwner(supabase, user.id, u.searchParams.get('serial') || '', u.searchParams.get('hw') || '');
+      return json(o);
+    }
     if (subPath === '/devices/claim-token' && method === 'POST') {
       return await createClaimToken(supabase, user);
     }
@@ -284,6 +313,9 @@ serve(async (req) => {
       const fwMatch = subPath.match(/^\/admin\/firmware\/([^/]+)$/);
       if (fwMatch && method === 'DELETE') {
         return await adminDeleteFirmware(supabase, fwMatch[1]);
+      }
+      if (subPath === '/admin/devices/release' && method === 'POST') {
+        return await adminForceRelease(supabase, user, req);
       }
       const devMatch = subPath.match(/^\/admin\/devices\/([^/]+)$/);
       if (devMatch && method === 'DELETE') {
@@ -452,18 +484,133 @@ serve(async (req) => {
  * unknown there shows up as a device whose recordings are named as if they came
  * from a recorder.
  */
-function externalKind(serial: string): 'plaud' | 'pendant' | 'l816' | null {
+function externalKind(serial: string): 'plaud' | 'pendant' | 'l816' | 'sonic' | null {
   const s = (serial || '').toLowerCase();
   if (s.startsWith('pendant')) return 'pendant';
   if (s.startsWith('plaud')) return 'plaud';
-  if (s.startsWith('l816')) return 'l816';
+  // [v31] The whole L81x family (l816-, l815-, …) is one kind; only l816 was accepted.
+  if (/^l81\d-/.test(s)) return 'l816';
+  if (s.startsWith('sonic-')) return 'sonic';
   return null;
+}
+
+/**
+ * [v31] Who a Bluetooth device belongs to. The owner is the account with the EARLIEST
+ * registration of it — matched by `serial` or, when the phone read one, by the unit's own
+ * `hw_serial` (an L81x's BLE id is a per-phone UUID on iOS, so `serial` alone would let an
+ * iPhone and an Android phone each "own" the same unit). Removing the device deletes the
+ * row, which is what frees it for someone else.
+ */
+async function externalOwner(supabase: any, userId: string, serial: string, hw: string) {
+  serial = (serial || '').trim(); hw = (hw || '').trim();
+  // Both go into a PostgREST `or=` filter: a comma or a parenthesis would change its meaning.
+  if (serial && !/^[A-Za-z0-9:_.-]{1,96}$/.test(serial)) throw new Error('bad serial');
+  if (hw && !/^[A-Za-z0-9_.-]{1,48}$/.test(hw)) hw = '';
+  if (!serial && !hw) return { owner: 'none' };
+
+  // 1. An explicit registration — the earliest one wins.
+  let q = supabase.from('sate_devices').select('user_id, created_at, serial, hw_serial')
+    .not('kind', 'is', null).neq('kind', 'sate');
+  q = hw ? q.or(`serial.eq.${serial},hw_serial.eq.${hw}`) : q.eq('serial', serial);
+  const { data, error } = await q.order('created_at', { ascending: true }).limit(1);
+  if (error) throw new Error(error.message);
+  let ownerId: string | null = data?.[0]?.user_id ?? null;
+  let since: string | null = data?.[0]?.created_at ?? null;
+  let source = 'registered';
+
+  // 2. [v32] No registration: whoever UPLOADED from it most recently is holding it, unless
+  //    they have since removed it (their opt-out is exactly "I let this device go").
+  if (!ownerId && serial) {
+    const [{ data: sess, error: e1 }, { data: outs, error: e2 }] = await Promise.all([
+      supabase.from('sate_device_sessions').select('user_id, created_at')
+        .eq('device_serial', serial).order('created_at', { ascending: false }).limit(50),
+      supabase.from('sate_external_device_optouts').select('user_id').eq('serial', serial),
+    ]);
+    if (e1) throw new Error(e1.message);
+    if (e2) throw new Error(e2.message);
+    const released = new Set((outs || []).map((o: any) => o.user_id));
+    const holder = (sess || []).find((r: any) => !released.has(r.user_id));
+    if (holder) { ownerId = holder.user_id; since = holder.created_at; source = 'uploads'; }
+  }
+
+  if (!ownerId) return { owner: 'none' };
+  if (ownerId === userId) return { owner: 'me', source };
+  let email: string | null = null;
+  try {
+    const { data: u } = await supabase.auth.admin.getUserById(ownerId);
+    email = u?.user?.email ?? null;
+  } catch { /* the refusal stands even if the name cannot be looked up */ }
+  return { owner: 'other', owner_email: email, since, source };
+}
+
+/**
+ * [v33] Admin force-release: free a Bluetooth device from EVERY account that holds it.
+ * Registrations are deleted; every account that uploaded from it gets the opt-out that
+ * stops those uploads counting as a claim. Recordings are untouched. Audited.
+ */
+async function adminForceRelease(supabase: any, admin: any, req: Request) {
+  const { serial, hw_serial } = await req.json();
+  if (!serial || !/^[A-Za-z0-9:_.-]{1,96}$/.test(serial)) return err('bad serial', 400);
+  if (!externalKind(serial)) return err('Not an external device serial', 400);
+  const hw = typeof hw_serial === 'string' && /^[A-Za-z0-9_.-]{1,48}$/.test(hw_serial) ? hw_serial : '';
+
+  let sel = supabase.from('sate_devices').select('id, user_id, serial, hw_serial')
+    .not('kind', 'is', null).neq('kind', 'sate');
+  sel = hw ? sel.or(`serial.eq.${serial},hw_serial.eq.${hw}`) : sel.eq('serial', serial);
+  const { data: regs, error: e1 } = await sel;
+  if (e1) throw new Error(e1.message);
+  const { data: sess, error: e2 } = await supabase.from('sate_device_sessions')
+    .select('user_id').eq('device_serial', serial).limit(5000);
+  if (e2) throw new Error(e2.message);
+
+  const holders = new Set<string>([...(regs || []).map((r: any) => r.user_id), ...(sess || []).map((r: any) => r.user_id)]);
+  const serials = new Set<string>([serial, ...(regs || []).map((r: any) => r.serial)]);
+  if ((regs || []).length) {
+    const { error } = await supabase.from('sate_devices').delete().in('id', regs.map((r: any) => r.id));
+    if (error) throw new Error(error.message);
+  }
+  const outs = [...holders].flatMap((u) => [...serials].map((sr) => ({ user_id: u, serial: sr })));
+  if (outs.length) {
+    const { error } = await supabase.from('sate_external_device_optouts').upsert(outs, { onConflict: 'user_id,serial' });
+    if (error) throw new Error(error.message);
+  }
+  const emails: string[] = [];
+  for (const u of holders) {
+    try { const { data } = await supabase.auth.admin.getUserById(u); if (data?.user?.email) emails.push(data.user.email); } catch { /* keep going */ }
+  }
+  const { error: e3 } = await supabase.from('sate_device_audit').insert({
+    serial, hw_serial: hw || null, action: 'force_release', by_user: admin.id, by_email: admin.email,
+    detail: { released_from: emails, registrations_deleted: (regs || []).length, serials: [...serials] },
+  });
+  if (e3) console.error('device audit failed:', e3.message);
+  return json({ ok: true, released_from: emails, registrations_deleted: (regs || []).length });
+}
+
+/**
+ * [v32] The phone's Unpair: let this device go, so another account can claim it. Deletes this
+ * account's registration(s) of it and writes the opt-out that stops this account's uploads from
+ * counting as a claim. The recordings are KEPT — this is about the hardware, not the data.
+ */
+async function releaseExternalDevice(supabase: any, userId: string, req: Request) {
+  const { serial, hw_serial } = await req.json();
+  if (!serial || !/^[A-Za-z0-9:_.-]{1,96}$/.test(serial)) return err('bad serial', 400);
+  if (!externalKind(serial)) return err('Not an external device serial', 400);
+  const hw = typeof hw_serial === 'string' && /^[A-Za-z0-9_.-]{1,48}$/.test(hw_serial) ? hw_serial : '';
+  let del = supabase.from('sate_devices').delete().eq('user_id', userId).not('kind', 'is', null).neq('kind', 'sate');
+  del = hw ? del.or(`serial.eq.${serial},hw_serial.eq.${hw}`) : del.eq('serial', serial);
+  const { error } = await del;
+  if (error) throw new Error(error.message);
+  const { error: e2 } = await supabase.from('sate_external_device_optouts')
+    .upsert({ user_id: userId, serial }, { onConflict: 'user_id,serial' });
+  if (e2) throw new Error(e2.message);
+  return json({ ok: true });
 }
 
 const EXTERNAL_LABEL: Record<string, string> = {
   plaud: 'Plaud',
   pendant: 'SATE Pendant',
   l816: 'SATE L816',
+  sonic: 'SonicNote',
 };
 
 async function listDevices(supabase: any, userId: string) {
@@ -530,13 +677,19 @@ async function listDevices(supabase: any, userId: string) {
  * clears the opt-out that was hiding it.
  */
 async function registerExternalDevice(supabase: any, userId: string, req: Request) {
-  const { serial, name } = await req.json();
+  const { serial, name, hw_serial } = await req.json();
   if (!serial) return err('serial is required');
   const kind = externalKind(serial);
   // Refuse a serial that is not recognisably external. This route writes into
   // the same table the recorder fleet lives in, and a row claiming to be a SATE
   // recorder while having no device key would be offered OTA it can never apply.
   if (!kind) return err('Not an external device serial', 400);
+  if (!/^[A-Za-z0-9:_.-]{1,96}$/.test(serial)) return err('bad serial', 400);
+  // [v31] One account per device, enforced HERE — the phone's popup is courtesy.
+  const o = await externalOwner(supabase, userId, serial, hw_serial || '');
+  if (o.owner === 'other') {
+    return json({ error: 'This device is registered to another account', ...o }, 409);
+  }
 
   const { data: existing } = await supabase.from('sate_devices')
     .select('id').eq('user_id', userId).eq('serial', serial).maybeSingle();
@@ -547,13 +700,14 @@ async function registerExternalDevice(supabase: any, userId: string, req: Reques
     serial,
     fw: EXTERNAL_LABEL[kind],
     kind,
+    hw_serial: (hw_serial || '').trim() || null,
     online: false,
     state: 'idle',
     last_seen: new Date().toISOString(),
   };
   if (existing) {
     const { error } = await supabase.from('sate_devices')
-      .update({ last_seen: row.last_seen, kind })
+      .update({ last_seen: row.last_seen, kind, ...(row.hw_serial ? { hw_serial: row.hw_serial } : {}) })
       .eq('id', existing.id);
     if (error) throw new Error(error.message);
   } else {
