@@ -146,7 +146,7 @@ function App() {
 
       {/* Oversight: READ-ONLY view of other accounts (admins: any; managers: assigned). Self-guards. */}
       <Route
-        path="/oversight"
+        path="/oversight/:uid?/:rid?"
         element={
           <ProtectedRoute>
             <OversightPage />

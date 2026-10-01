@@ -2,7 +2,7 @@
 // Uses the user's Supabase JWT for authentication, so device management
 // is fully integrated with the web app's auth system.
 
-import type { AdminUserDetail,
+import type { AdminProcessing, AdminRecorder, AdminUserDetail,
   ManagedDevice,
   RemoteCommand,
   UploadedSession,
@@ -227,6 +227,14 @@ export const deviceApiService = {
     req<{ ok: true }>(`/admin/users/${id}/password`, { method: 'POST', body: JSON.stringify({ password }) }),
   adminSetDisabled: (id: string, disabled: boolean) =>
     req<{ ok: true; disabled: boolean }>(`/admin/users/${id}/disable`, { method: 'POST', body: JSON.stringify({ disabled }) }),
+  /** [v38] Every queued/processing take, unresolved errors, window stats. */
+  adminProcessing: (days: number) => req<AdminProcessing>(`/admin/processing?days=${days}`),
+  adminRetrySessions: (ids: string[]) =>
+    req<{ retried: string[]; skipped: { id: string; reason: string }[] }>('/admin/sessions/retry', { method: 'POST', body: JSON.stringify({ ids }) }),
+  adminRequeueStuck: (ids: string[]) =>
+    req<{ requeued: string[]; skipped: { id: string; reason: string }[] }>('/admin/sessions/requeue-stuck', { method: 'POST', body: JSON.stringify({ ids }) }),
+  /** [v38] Every device anywhere (incl. app-only hardware) with its holder and every account that used it. */
+  adminRecorders: () => req<{ generated_at: string; recorders: AdminRecorder[] }>('/admin/recorders'),
   adminDeleteUser: (id: string, confirmEmail: string) =>
     req<{ ok: true; removed_files: number }>(`/admin/users/${id}`, { method: 'DELETE', body: JSON.stringify({ confirm_email: confirmEmail }) }),
   /** Every published firmware release. */

@@ -19,11 +19,13 @@ import type { AdminDevice, AdminFirmware, AdminUser } from '@/services/device/de
 import { notesApiService, type NotesGrant } from '@/services/notesApiService';
 import { FirmwarePublishCard } from '@/components/Device/FirmwarePublishCard';
 import { ManagersCard } from '@/components/Admin/ManagersCard';
+import { ProcessingPanel } from '@/components/Admin/ProcessingPanel';
+import { AllRecordersPanel } from '@/components/Admin/AllRecordersPanel';
 import { AccountModal, Badge, fmtHours } from '@/components/Admin/AccountModal';
 import { Button } from '@/components/ui/button';
 import {
   ArrowLeft, ShieldCheck, Trash2, RefreshCw, Cpu, HardDrive, Loader2,
-  Activity, ExternalLink, Users, Search, UserPlus, Eye, FileAudio, Clock, UserCog, X,
+  Activity, ExternalLink, Users, Search, UserPlus, Eye, FileAudio, Clock, UserCog, X, Zap,
 } from 'lucide-react';
 
 // Ops surfaces linked from the admin page (open in a new tab).
@@ -33,7 +35,7 @@ const MONITORING_LINKS = [
   { title: 'Docs', desc: 'Engineering documentation', href: 'https://sate-docs.pages.dev' },
 ];
 
-type Tab = 'accounts' | 'managers' | 'recorders' | 'firmware' | 'monitoring';
+type Tab = 'accounts' | 'managers' | 'processing' | 'recorders' | 'firmware' | 'monitoring';
 
 function timeAgo(iso?: string | null): string {
   if (!iso) return '—';
@@ -172,6 +174,7 @@ export function AdminPage() {
   const TABS: { id: Tab; label: string; icon: React.ReactNode; count?: number }[] = [
     { id: 'accounts', label: 'Accounts', icon: <Users className="w-4 h-4" />, count: users.length },
     { id: 'managers', label: 'Managers', icon: <UserCog className="w-4 h-4" /> },
+    { id: 'processing', label: 'Processing', icon: <Zap className="w-4 h-4" /> },
     { id: 'recorders', label: 'Recorders', icon: <Cpu className="w-4 h-4" />, count: devices.length },
     { id: 'firmware', label: 'Firmware', icon: <HardDrive className="w-4 h-4" />, count: firmware.length },
     { id: 'monitoring', label: 'Monitoring', icon: <Activity className="w-4 h-4" /> },
@@ -291,9 +294,17 @@ export function AdminPage() {
         {/* ---------------- Managers ---------------- */}
         {tab === 'managers' && <ManagersCard userEmails={users.map((u) => u.email).filter(Boolean)} />}
 
+        {/* ---------------- Processing ---------------- */}
+        {tab === 'processing' && <ProcessingPanel />}
+
         {/* ---------------- Recorders ---------------- */}
+        {tab === 'recorders' && <AllRecordersPanel />}
         {tab === 'recorders' && (
           <div className="rounded-xl border border-gray-200 bg-white overflow-x-auto">
+            <div className="px-4 pt-4">
+              <h3 className="font-semibold text-gray-900">SATE recorders — live telemetry</h3>
+              <p className="text-xs text-gray-500 mb-2">Registered recorders that report battery, firmware and state.</p>
+            </div>
             <table className="w-full text-sm">
               <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
                 <tr>

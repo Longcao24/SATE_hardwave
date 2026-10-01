@@ -1,4 +1,4 @@
-// SATE Device API — Supabase Edge Function              [v36]
+// SATE Device API — Supabase Edge Function              [v38]
 // Replaces the mock-server's Express endpoints with a single Edge Function
 // that does internal path routing. Authenticated via Supabase JWT (users) or a
 // device key (the recorder).
@@ -52,6 +52,23 @@
 //      (and the gateway's 502 above it) simply does not apply. `storage_path` is
 //      confined to the caller's own `<user id>/` prefix and the byte count comes
 //      from Storage, never from the client.
+// v38: PROCESSING MONITOR for admins. GET /admin/processing?days=1|7|30 — every queued/processing
+//      take across ALL accounts in claim order (length, attempts, wait, backoff, stuck), the unresolved
+//      errors grouped by reason, and window stats (success rate, no-text, audio hours, turnaround
+//      median/p90, per day, per device family, worker last-finished). POST /admin/sessions/retry
+//      {ids} re-queues failed takes exactly like the owner's Retry (attempts reset, previous error kept
+//      in sate_session_audit with the admin's email); POST /admin/sessions/requeue-stuck {ids} does
+//      what the watchdog would, only for takes already past STUCK_MS.
+//      GET /admin/recorders — EVERY device that exists anywhere (sate_devices rows AND every
+//      device_serial a session was uploaded from, so app-only hardware like the L81x appears too),
+//      with its holder computed by the SAME rules as /devices/owner (SATE recorder: the claiming
+//      account; external: earliest registration, else latest uploader that has not released it),
+//      every account that has used it, and a `shared` flag for cross-connected units.
+// v37: OVERSIGHT EXPORT — GET /oversight/users/:uid/recordings/:rid/export/(audio|lsa|metrics). The same
+//      per-target role check as viewing, audited as export_<type> BEFORE anything is returned. audio →
+//      a 5-minute signed download URL (the bytes never pass through this function, so length is no
+//      limit); lsa → the saved SATE Report exactly as stored (edits kept beside the draft); metrics →
+//      the transcript the web computes the Language Analysis numbers from. Still GET-only/read-only.
 // v36: MANAGER EMAIL — "an account assigned to you has new reports". GET /health/manager-digest
 //      (HEALTH_ALERT_KEY-gated, read-only) lists, per manager with notify_email on, the recordings
 //      created by their assigned accounts since sate_managers.notify_cursor — account email, time
@@ -332,6 +349,18 @@ serve(async (req) => {
       if (!admin) return err('Forbidden', 403);
       if (subPath === '/admin/status' && method === 'GET') {
         return await adminStatus(supabase);
+      }
+      if (subPath === '/admin/processing' && method === 'GET') {
+        return await adminProcessing(supabase, url);
+      }
+      if (subPath === '/admin/recorders' && method === 'GET') {
+        return await adminRecorders(supabase);
+      }
+      if (subPath === '/admin/sessions/retry' && method === 'POST') {
+        return await adminRetrySessions(supabase, user, req);
+      }
+      if (subPath === '/admin/sessions/requeue-stuck' && method === 'POST') {
+        return await adminRequeueStuck(supabase, user, req);
       }
       if (subPath === '/admin/devices' && method === 'GET') {
         return await adminListDevices(supabase);
@@ -671,6 +700,9 @@ async function oversightRoute(supabase: any, user: any, subPath: string, method:
     return json({ role, targets });
   }
 
+  const ex = subPath.match(/^\/oversight\/users\/([0-9a-f-]{36})\/recordings\/([0-9a-f-]{36})\/export\/(audio|lsa|metrics)$/);
+  if (ex) return await oversightExport(supabase, user, ex[1], ex[2], ex[3] as 'audio' | 'lsa' | 'metrics');
+
   const m = subPath.match(/^\/oversight\/users\/([0-9a-f-]{36})\/(recordings|patients|sessions|devices)(?:\/([0-9a-f-]{36}))?$/);
   if (!m || !UUID_RE.test(m[1])) return err('Not found', 404);
   const [, target, kind, rid] = m;
@@ -713,6 +745,35 @@ async function oversightRoute(supabase: any, user: any, subPath: string, method:
     return await listDevices(supabase, target, true);
   }
   return err('Not found', 404);
+}
+
+async function oversightExport(supabase: any, user: any, target: string, rid: string, type: 'audio' | 'lsa' | 'metrics') {
+  if (!UUID_RE.test(target) || !UUID_RE.test(rid)) return err('Not found', 404);
+  const role = await canView(supabase, user, target);
+  if (!role) return err('Forbidden', 403);
+  const { data: rec, error } = await supabase.from('recordings')
+    .select('id, recording_name, file_name, file_path, created_at, duration, patient_id' +
+      (type === 'lsa' ? ', lsa_report' : '') + (type === 'metrics' ? ', transcript, error_counts' : ''))
+    .eq('id', rid).eq('user_id', target).maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!rec) return err('Not found', 404);
+  if (type === 'audio' && !rec.file_path) return err('This recording has no audio', 404);
+  if (type === 'lsa' && !rec.lsa_report) return err('No SATE Report has been generated for this recording', 404);
+
+  // Audit FIRST: an export that cannot be logged is not handed out.
+  await auditAccess(supabase, user, role, target, `export_${type}`, rid);
+  const meta = { id: rec.id, recording_name: rec.recording_name, file_name: rec.file_name,
+    created_at: rec.created_at, duration: rec.duration, patient_id: rec.patient_id };
+
+  if (type === 'audio') {
+    const name = (rec.file_name || `${rec.id}.wav`).replace(/[^\w.\- ]+/g, '_');
+    const { data: signed, error: se } = await supabase.storage.from('recordings')
+      .createSignedUrl(rec.file_path, 300, { download: name });
+    if (se || !signed?.signedUrl) throw new Error(se?.message || 'could not sign the audio');
+    return json({ recording: meta, file_name: name, url: signed.signedUrl, expires_in: 300 });
+  }
+  if (type === 'lsa') return json({ recording: meta, lsa_report: rec.lsa_report });
+  return json({ recording: meta, transcript: rec.transcript, error_counts: rec.error_counts });
 }
 
 async function adminListManagers(supabase: any) {
@@ -1443,6 +1504,266 @@ async function adminStatus(supabase: any) {
     firmware: { latest: fw?.[0]?.version ?? null, recent: fw || [] },
     recordings_total: recordingsTotal || 0,
   });
+}
+
+// ---- [v38] Processing monitor ---------------------------------------------------------------
+
+// Must match cf-processor STUCK_MINUTES (90) — see the THREE-copies note in CLAUDE.md.
+const PROC_STUCK_MS = 90 * 60 * 1000;
+const takeSeconds = (r: any) => (r.audio_seconds ?? Math.max((r.bytes || 0) - 44, 0) / 32000);
+const familyOf = (serial?: string | null) => {
+  const p = String(serial || '').toLowerCase().split('-')[0];
+  if (p === 'sate') return 'SATE recorder';
+  if (p === 'pendant') return 'Pendant';
+  if (p === 'plaud') return 'Plaud';
+  if (/^l81\d$/.test(p)) return 'L81x';
+  if (p === 'sonic') return 'SonicNote';
+  return p ? p : 'unknown';
+};
+// "download failed: Object not found (session 1234)" and the same with another id are ONE reason.
+const errorReason = (e?: string | null) => String(e || 'unknown')
+  .replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, '<id>').replace(/\d+(\.\d+)?/g, 'N').trim().slice(0, 120);
+
+async function adminProcessing(supabase: any, url: URL) {
+  const days = Math.min(Math.max(parseInt(url.searchParams.get('days') || '7', 10) || 7, 1), 30);
+  const now = Date.now();
+  const since = new Date(now - days * 86400_000).toISOString();
+  const emails = new Map<string, string | null>();
+  const email = async (id: string) => { if (!emails.has(id)) emails.set(id, await emailOf(supabase, id)); return emails.get(id); };
+  const cols = 'id, user_id, device_serial, session_number, bytes, audio_seconds, status, attempts, created_at, processing_started_at, heartbeat_at, not_before, processed_at, process_error, no_text, worker_id';
+
+  // Live: everything not finished, in the order claim_next_session would take it.
+  const { data: live, error: e1 } = await supabase.from('sate_device_sessions').select(cols)
+    .in('status', ['queued', 'processing']).limit(500);
+  if (e1) throw new Error(e1.message);
+  // A take backing off (not_before in the future) is SKIPPED by the claim until then, so it
+  // goes behind everything claimable now — ordering it by rank alone shows it in a place the
+  // worker will not take it from.
+  const rank = (r: any) => (r.not_before && Date.parse(r.not_before) > now ? 1e15 + Date.parse(r.not_before) : 0)
+    + Date.parse(r.created_at) + Math.min(takeSeconds(r), 3600) * 100;
+  const liveRows = [];
+  for (const r of (live || []).sort((a: any, b: any) =>
+    (a.status === b.status ? rank(a) - rank(b) : a.status === 'processing' ? -1 : 1))) {
+    liveRows.push({
+      id: r.id, email: await email(r.user_id), device_serial: r.device_serial, family: familyOf(r.device_serial),
+      session_number: r.session_number, seconds: takeSeconds(r), status: r.status, attempts: r.attempts,
+      created_at: r.created_at, processing_started_at: r.processing_started_at, heartbeat_at: r.heartbeat_at,
+      not_before: r.not_before, worker_id: r.worker_id,
+      stuck: r.status === 'processing' && !!r.processing_started_at && now - Date.parse(r.processing_started_at) > PROC_STUCK_MS,
+    });
+  }
+
+  // Unresolved errors (any age — an error never clears by itself).
+  const { data: errs, error: e2 } = await supabase.from('sate_device_sessions').select(cols)
+    .eq('status', 'error').order('created_at', { ascending: false }).limit(300);
+  if (e2) throw new Error(e2.message);
+  const errorRows = [];
+  const reasons = new Map<string, number>();
+  for (const r of errs || []) {
+    const k = errorReason(r.process_error);
+    reasons.set(k, (reasons.get(k) || 0) + 1);
+    errorRows.push({ id: r.id, email: await email(r.user_id), device_serial: r.device_serial, family: familyOf(r.device_serial),
+      session_number: r.session_number, seconds: takeSeconds(r), attempts: r.attempts, created_at: r.created_at,
+      process_error: r.process_error });
+  }
+
+  // Window stats, paged (a day can be thousands of rows).
+  const rows: any[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await supabase.from('sate_device_sessions')
+      .select('status, created_at, processed_at, bytes, audio_seconds, device_serial, no_text')
+      .gte('created_at', since).order('created_at', { ascending: true }).range(from, from + 999);
+    if (error) throw new Error(error.message);
+    rows.push(...(data || []));
+    if (!data || data.length < 1000 || rows.length >= 50000) break;
+  }
+  const count = (st: string) => rows.filter((r) => r.status === st).length;
+  const done = rows.filter((r) => r.status === 'done');
+  const turn = done.filter((r) => r.processed_at).map((r) => (Date.parse(r.processed_at) - Date.parse(r.created_at)) / 1000)
+    .filter((x) => x >= 0).sort((a, b) => a - b);
+  const pct = (q: number) => (turn.length ? turn[Math.min(turn.length - 1, Math.floor(q * turn.length))] : null);
+  const perDay = new Map<string, { done: number; error: number; no_text: number; seconds: number }>();
+  for (let d = 0; d < days; d++) perDay.set(new Date(now - (days - 1 - d) * 86400_000).toISOString().slice(0, 10), { done: 0, error: 0, no_text: 0, seconds: 0 });
+  const perFamily = new Map<string, { done: number; error: number; pending: number; seconds: number }>();
+  for (const r of rows) {
+    const day = perDay.get(String(r.created_at).slice(0, 10));
+    const fam = familyOf(r.device_serial);
+    if (!perFamily.has(fam)) perFamily.set(fam, { done: 0, error: 0, pending: 0, seconds: 0 });
+    const f = perFamily.get(fam)!;
+    if (r.status === 'done') { f.done++; f.seconds += takeSeconds(r); if (day) { day.done++; day.seconds += takeSeconds(r); if (r.no_text) day.no_text++; } }
+    else if (r.status === 'error') { f.error++; if (day) day.error++; }
+    else f.pending++;
+  }
+  const { data: last } = await supabase.from('sate_device_sessions').select('processed_at')
+    .not('processed_at', 'is', null).order('processed_at', { ascending: false }).limit(1);
+  const finished = count('done') + count('error');
+
+  return json({
+    generated_at: new Date(now).toISOString(),
+    days,
+    live: liveRows,
+    errors: errorRows,
+    error_reasons: [...reasons.entries()].map(([reason, n]) => ({ reason, n })).sort((a, b) => b.n - a.n),
+    stats: {
+      uploaded: rows.length, done: count('done'), error: count('error'),
+      queued: liveRows.filter((r) => r.status === 'queued').length,
+      processing: liveRows.filter((r) => r.status === 'processing').length,
+      stuck: liveRows.filter((r) => r.stuck).length,
+      no_text: done.filter((r) => r.no_text).length,
+      success_rate: finished ? count('done') / finished : null,
+      audio_seconds_done: done.reduce((t, r) => t + takeSeconds(r), 0),
+      queue_seconds: liveRows.filter((r) => r.status === 'queued').reduce((t, r) => t + r.seconds, 0),
+      oldest_queued_at: liveRows.filter((r) => r.status === 'queued').map((r) => r.created_at).sort()[0] ?? null,
+      turnaround_p50_s: pct(0.5), turnaround_p90_s: pct(0.9),
+      worker_last_finished_at: last?.[0]?.processed_at ?? null,
+      unresolved_errors: errorRows.length,
+    },
+    per_day: [...perDay.entries()].map(([day, v]) => ({ day, ...v })),
+    per_family: [...perFamily.entries()].map(([family, v]) => ({ family, ...v,
+      success_rate: v.done + v.error ? v.done / (v.done + v.error) : null })).sort((a, b) => (b.done + b.error) - (a.done + a.error)),
+  });
+}
+
+async function adminRecorders(supabase: any) {
+  const emails = new Map<string, string | null>();
+  const email = async (id: string) => { if (!emails.has(id)) emails.set(id, await emailOf(supabase, id)); return emails.get(id); };
+  const { data: devs, error: e1 } = await supabase.from('sate_devices')
+    .select('id, serial, hw_serial, kind, name, user_id, created_at, online, last_seen, fw');
+  if (e1) throw new Error(e1.message);
+  const { data: outs, error: e2 } = await supabase.from('sate_external_device_optouts').select('user_id, serial');
+  if (e2) throw new Error(e2.message);
+  const sess: any[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await supabase.from('sate_device_sessions')
+      .select('device_serial, user_id, created_at').order('created_at', { ascending: false }).range(from, from + 999);
+    if (error) throw new Error(error.message);
+    sess.push(...(data || []));
+    if (!data || data.length < 1000 || sess.length >= 200000) break;
+  }
+
+  type Use = { user_id: string; uploads: number; last_upload: string | null; registered_at: string | null; released: boolean };
+  const units = new Map<string, { serial: string; kind: string | null; name: string | null; hw_serial: string | null;
+    online: boolean; last_seen: string | null; fw: string | null; regs: any[]; uses: Map<string, Use> }>();
+  const unit = (serial: string) => {
+    if (!units.has(serial)) units.set(serial, { serial, kind: null, name: null, hw_serial: null, online: false, last_seen: null, fw: null, regs: [], uses: new Map() });
+    return units.get(serial)!;
+  };
+  const use = (u: ReturnType<typeof unit>, uid: string) => {
+    if (!u.uses.has(uid)) u.uses.set(uid, { user_id: uid, uploads: 0, last_upload: null, registered_at: null, released: false });
+    return u.uses.get(uid)!;
+  };
+  for (const d of devs || []) {
+    if (!d.serial) continue;
+    const u = unit(d.serial);
+    u.kind = u.kind || d.kind; u.name = u.name || d.name; u.hw_serial = u.hw_serial || d.hw_serial;
+    u.online = u.online || !!d.online;
+    if (d.last_seen && (!u.last_seen || d.last_seen > u.last_seen)) u.last_seen = d.last_seen;
+    u.fw = u.fw || d.fw;
+    u.regs.push(d);
+    if (d.user_id) { const x = use(u, d.user_id); if (!x.registered_at || d.created_at < x.registered_at) x.registered_at = d.created_at; }
+  }
+  for (const r of sess) {
+    if (!r.device_serial || !r.user_id) continue;
+    const x = use(unit(r.device_serial), r.user_id);
+    x.uploads++;
+    if (!x.last_upload || r.created_at > x.last_upload) x.last_upload = r.created_at;
+  }
+  for (const o of outs || []) {
+    const u = units.get(o.serial);
+    if (u?.uses.has(o.user_id)) u.uses.get(o.user_id)!.released = true;
+  }
+
+  const out = [];
+  for (const u of units.values()) {
+    const isRecorder = u.kind === 'sate' || (!u.kind && /^sate-/i.test(u.serial));
+    let holder: string | null = null, source: string | null = null;
+    if (isRecorder) {
+      const r = u.regs.filter((d: any) => d.user_id).sort((a: any, b: any) => (a.created_at < b.created_at ? 1 : -1))[0];
+      if (r) { holder = r.user_id; source = 'claimed'; }
+    } else {
+      const reg = u.regs.filter((d: any) => d.user_id && d.kind && d.kind !== 'sate')
+        .sort((a: any, b: any) => (a.created_at < b.created_at ? -1 : 1))[0];
+      if (reg) { holder = reg.user_id; source = 'registered'; }
+      else {
+        const up = [...u.uses.values()].filter((x) => x.uploads && !x.released)
+          .sort((a, b) => ((a.last_upload || '') < (b.last_upload || '') ? 1 : -1))[0];
+        if (up) { holder = up.user_id; source = 'uploads'; }
+      }
+    }
+    const accounts = [];
+    for (const x of [...u.uses.values()].sort((a, b) => ((a.last_upload || a.registered_at || '') < (b.last_upload || b.registered_at || '') ? 1 : -1))) {
+      accounts.push({ ...x, email: await email(x.user_id), holder: x.user_id === holder });
+    }
+    const active = accounts.filter((a) => !a.released);
+    const lastUpload = accounts.map((a) => a.last_upload).filter(Boolean).sort().pop() || null;
+    out.push({
+      serial: u.serial, family: familyOf(u.serial), kind: u.kind, name: u.name, hw_serial: u.hw_serial,
+      online: u.online, last_seen: u.last_seen, fw: u.fw,
+      holder_id: holder, holder_email: holder ? await email(holder) : null, holder_source: source,
+      shared: active.length > 1, accounts, uploads: accounts.reduce((n, a) => n + a.uploads, 0),
+      last_activity: [u.last_seen, lastUpload].filter(Boolean).sort().pop() || null,
+    });
+  }
+  out.sort((a, b) => (a.last_activity || '') < (b.last_activity || '') ? 1 : -1);
+  return json({ generated_at: new Date().toISOString(), recorders: out });
+}
+
+async function adminIds(req: Request): Promise<string[] | null> {
+  const body = await req.json().catch(() => ({}));
+  const ids = Array.isArray(body?.ids) ? body.ids.filter((x: unknown) => typeof x === 'string' && x.length <= 64) : [];
+  return ids.length && ids.length <= 100 ? [...new Set<string>(ids)] : null;
+}
+
+// Same effect as the owner's Retry (retrySession): only a FAILED take, attempts reset, and the
+// failure being retried is written to sate_session_audit first — with who pressed the button.
+async function adminRetrySessions(supabase: any, admin: any, req: Request) {
+  const ids = await adminIds(req);
+  if (!ids) return err('ids: 1-100 session ids required', 400);
+  const retried: string[] = [], skipped: { id: string; reason: string }[] = [];
+  for (const id of ids) {
+    const { data: row } = await supabase.from('sate_device_sessions')
+      .select('id, user_id, status, process_error, attempts').eq('id', id).maybeSingle();
+    if (!row) { skipped.push({ id, reason: 'not found' }); continue; }
+    if (row.status !== 'error') { skipped.push({ id, reason: `status is ${row.status}` }); continue; }
+    await auditSession(supabase, id, row.user_id, 'retry', {
+      previous_error: row.process_error, previous_attempts: row.attempts, previous_status: row.status,
+      by_admin: admin.email ?? admin.id,
+    });
+    // `.eq('status','error')` again: a row that changed under us is left alone.
+    const { data: upd, error } = await supabase.from('sate_device_sessions')
+      .update({ status: 'queued', process_error: null, attempts: 0, not_before: null, processing_started_at: null })
+      .eq('id', id).eq('status', 'error').select('id');
+    if (error) throw new Error(error.message);
+    if (upd?.length) retried.push(id); else skipped.push({ id, reason: 'changed meanwhile' });
+  }
+  return json({ retried, skipped });
+}
+
+// What requeue_stale_sessions does, on demand — and ONLY for a take already past the stuck
+// cutoff, so it can never yank a job out from under a worker that is legitimately on it.
+async function adminRequeueStuck(supabase: any, admin: any, req: Request) {
+  const ids = await adminIds(req);
+  if (!ids) return err('ids: 1-100 session ids required', 400);
+  const cutoff = new Date(Date.now() - PROC_STUCK_MS).toISOString();
+  const requeued: string[] = [], skipped: { id: string; reason: string }[] = [];
+  for (const id of ids) {
+    const { data: row } = await supabase.from('sate_device_sessions')
+      .select('id, user_id, status, processing_started_at, attempts, worker_id').eq('id', id).maybeSingle();
+    if (!row) { skipped.push({ id, reason: 'not found' }); continue; }
+    if (row.status !== 'processing' || !row.processing_started_at || row.processing_started_at >= cutoff) {
+      skipped.push({ id, reason: 'not stuck' }); continue;
+    }
+    await auditSession(supabase, id, row.user_id, 'requeue_stuck', {
+      processing_started_at: row.processing_started_at, attempts: row.attempts, worker_id: row.worker_id,
+      by_admin: admin.email ?? admin.id,
+    });
+    const { data: upd, error } = await supabase.from('sate_device_sessions')
+      .update({ status: 'queued', processing_started_at: null, not_before: null })
+      .eq('id', id).eq('status', 'processing').lt('processing_started_at', cutoff).select('id');
+    if (error) throw new Error(error.message);
+    if (upd?.length) requeued.push(id); else skipped.push({ id, reason: 'changed meanwhile' });
+  }
+  return json({ requeued, skipped });
 }
 
 async function adminListDevices(supabase: any) {
@@ -2243,12 +2564,30 @@ async function listSessions(
     // the beginning but never returned here, so nothing downstream of this endpoint could see
     // them — a meeting note generated from a session silently lost every mark the user had
     // pressed the button for, which is the one thing the hardware does that a phone cannot.
-    .select('id, device_serial, patient_id, session_number, sample_rate, bytes, audio_seconds, created_at, processed, processed_at, recording_id, process_error, no_text, status, attempts, flags')
+    .select('id, device_serial, patient_id, session_number, sample_rate, bytes, audio_seconds, created_at, processed, processed_at, recording_id, process_error, no_text, status, attempts, flags, processing_started_at, not_before')
     .eq('user_id', userId).order('created_at', { ascending: false });
   if (deviceSerial) query = query.eq('device_serial', deviceSerial);
   const { data, error } = await query.limit(limit);
   if (error) throw new Error(error.message);
-  return json((data || []).map((s: any) => ({ ...s, at: s.created_at })));
+  // [v38] Where each of MY queued takes stands in the ONE worker's line. Measured on prod: the
+  // median take waits ~55 s queued but is processing for only ~7 s (19% under 4 s, faster than the
+  // web's poll), so "queued → ready" with no visible "processing" is the normal sight, and the
+  // wait is other people's takes ahead of it. A position (a bare number + seconds of audio ahead,
+  // nothing about whose) makes that wait legible. Same order as claim_next_session.
+  const mine = (data || []).filter((s: any) => s.status === 'queued');
+  const pos = new Map<string, { position: number; ahead_seconds: number }>();
+  if (mine.length) {
+    const { data: q } = await supabase.from('sate_device_sessions')
+      .select('id, created_at, audio_seconds, bytes, not_before').eq('status', 'queued').limit(2000);
+    const t0 = Date.now();
+    const rank = (r: any) => (r.not_before && Date.parse(r.not_before) > t0 ? 1e15 + Date.parse(r.not_before) : 0)
+      + Date.parse(r.created_at) + Math.min(takeSeconds(r), 3600) * 100;
+    const line = (q || []).sort((a: any, b: any) => rank(a) - rank(b));
+    let ahead = 0;
+    line.forEach((r: any, i: number) => { pos.set(r.id, { position: i + 1, ahead_seconds: ahead }); ahead += takeSeconds(r); });
+  }
+  return json((data || []).map((s: any) => ({ ...s, at: s.created_at,
+    ...(pos.has(s.id) ? { queue_position: pos.get(s.id)!.position, queue_ahead_seconds: pos.get(s.id)!.ahead_seconds } : {}) })));
 }
 
 // Re-queue an errored session for the async container. Scoped to the caller's own

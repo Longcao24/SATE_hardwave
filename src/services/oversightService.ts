@@ -25,6 +25,15 @@ export interface OversightRecordingRow {
   source_session_id: string | null;
 }
 
+export interface OversightExportMeta {
+  id: string;
+  recording_name: string | null;
+  file_name: string | null;
+  created_at: string;
+  duration: number | null;
+  patient_id: string | null;
+}
+
 export interface ManagerRow {
   id: string;
   email: string | null;
@@ -67,6 +76,13 @@ export const oversightService = {
   patients: (uid: string) => req<Record<string, any>[]>(`/oversight/users/${uid}/patients`),
   sessions: (uid: string) => req<Record<string, any>[]>(`/oversight/users/${uid}/sessions`),
   devices: (uid: string) => req<Record<string, any>[]>(`/oversight/users/${uid}/devices`),
+  /** Export one report (device-api v37) — role-checked and audited server-side like a view. */
+  exportAudio: (uid: string, rid: string) =>
+    req<{ recording: OversightExportMeta; file_name: string; url: string; expires_in: number }>(`/oversight/users/${uid}/recordings/${rid}/export/audio`),
+  exportLsa: (uid: string, rid: string) =>
+    req<{ recording: OversightExportMeta; lsa_report: any }>(`/oversight/users/${uid}/recordings/${rid}/export/lsa`),
+  exportMetrics: (uid: string, rid: string) =>
+    req<{ recording: OversightExportMeta; transcript: { segments?: any[] } | null; error_counts: any }>(`/oversight/users/${uid}/recordings/${rid}/export/metrics`),
 
   // ---- admin: managers ----
   listManagers: () => req<ManagerRow[]>('/admin/managers'),

@@ -20,6 +20,23 @@ interface DeviceSessionStatusProps {
 
 type Status = 'queued' | 'processing' | 'ready' | 'failed' | 'no_text';
 
+// Short and honest: "3:12" / "45s".
+const dur = (sec: number) => {
+  const s = Math.max(0, Math.round(sec));
+  if (s < 60) return `${s}s`;
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return h ? `${h}h ${m}m` : `${m}m ${String(s % 60).padStart(2, '0')}s`;
+};
+// How long the worker spent on it, and how long it waited first. Most takes are processing for
+// only a few seconds (faster than this page refreshes), so without this "Processing" is never
+// seen and a finished take looks like it skipped a step.
+const timing = (s: UploadedSession) => {
+  if (!s.processing_started_at || !s.processed_at) return null;
+  const proc = (Date.parse(s.processed_at) - Date.parse(s.processing_started_at)) / 1000;
+  const wait = (Date.parse(s.processing_started_at) - Date.parse(s.at)) / 1000;
+  return proc >= 0 && wait >= 0 ? `Processed in ${dur(proc)} · waited ${dur(wait)} in queue` : null;
+};
+
 const statusOf = (s: UploadedSession): Status => {
   // Authoritative async state machine when the column is present.
   if (s.status) {
@@ -219,24 +236,33 @@ export function DeviceSessionStatus({ sessions }: DeviceSessionStatusProps) {
                   </p>
                   <p className="text-xs text-gray-400 mt-0.5">
                     {formatSessionDuration(s.bytes, s.sample_rate, s.audio_seconds)} · {timeAgo(s.at)}
+                    {(status === 'ready' || status === 'no_text') && s.processing_started_at && s.processed_at && (
+                      <span className="text-gray-400" title={timing(s) || undefined}>
+                        {' '}· processed in {dur((Date.parse(s.processed_at) - Date.parse(s.processing_started_at)) / 1000)}
+                      </span>
+                    )}
                   </p>
                 </div>
 
                 {status === 'queued' && (
                   <span
-                    title="Uploaded and waiting for the processor to pick it up."
+                    title={s.queue_position
+                      ? `Waiting for the processor: ${s.queue_position === 1 ? 'next in line' : `${s.queue_position - 1} take(s) ahead`}${s.queue_ahead_seconds ? `, ${dur(s.queue_ahead_seconds)} of audio` : ''}. One processor serves every account, in upload order (short takes slightly first).`
+                      : 'Uploaded and waiting for the processor to pick it up.'}
                     className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-sky-700 bg-sky-50 rounded-lg"
                   >
-                    <Clock className="w-3 h-3" /> Received · Queued
+                    <Clock className="w-3 h-3" /> Received · Queued{s.queue_position ? ` · ${s.queue_position === 1 ? 'next' : `#${s.queue_position} in line`}` : ''}
                   </span>
                 )}
                 {status === 'processing' && (
-                  <span className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-amber-700 bg-amber-50 rounded-lg">
+                  <span className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-amber-700 bg-amber-50 rounded-lg"
+                    title={s.processing_started_at ? `Started ${timeAgo(s.processing_started_at)}` : undefined}>
                     <Loader2 className="w-3 h-3 animate-spin" /> Processing
                   </span>
                 )}
                 {status === 'ready' && (
-                  <span className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-green-700 bg-green-50 rounded-lg">
+                  <span className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-green-700 bg-green-50 rounded-lg"
+                    title={timing(s) || undefined}>
                     <CheckCircle2 className="w-3 h-3" /> Ready · View
                   </span>
                 )}

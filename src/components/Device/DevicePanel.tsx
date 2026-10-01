@@ -218,17 +218,24 @@ export function DevicePanel() {
               <span className="device-action-sub">{sessions.length} recording{sessions.length === 1 ? '' : 's'}</span>
             </div>
             <div className="device-action-card !cursor-default">
-              {selectedDevice && selectedDevice.pending_sessions > 0 ? (
-                <RefreshCw className="w-5 h-5 text-amber-500 animate-spin" />
-              ) : (
-                <CheckCircle2 className="w-5 h-5 text-green-500" />
-              )}
-              <span className="device-action-label">Analysis</span>
-              <span className="device-action-sub">
-                {selectedDevice && selectedDevice.pending_sessions > 0
-                  ? `${selectedDevice.pending_sessions} processing`
-                  : 'All processed'}
-              </span>
+              {(() => {
+                // From the pipeline's own state, not `pending_sessions` (= !processed), which
+                // read "All processed" while takes were still waiting in the queue.
+                const q = sessions.filter((x) => x.status === 'queued').length;
+                const p = sessions.filter((x) => x.status === 'processing').length;
+                const busy = q + p > 0 || (!sessions.some((x) => x.status) && !!selectedDevice && selectedDevice.pending_sessions > 0);
+                return (
+                  <>
+                    {busy ? <RefreshCw className="w-5 h-5 text-amber-500 animate-spin" /> : <CheckCircle2 className="w-5 h-5 text-green-500" />}
+                    <span className="device-action-label">Analysis</span>
+                    <span className="device-action-sub">
+                      {q + p > 0
+                        ? [p ? `${p} processing` : '', q ? `${q} in queue` : ''].filter(Boolean).join(' · ')
+                        : busy ? `${selectedDevice!.pending_sessions} processing` : 'All processed'}
+                    </span>
+                  </>
+                );
+              })()}
             </div>
             <div className="device-action-card !cursor-default">
               <Smartphone className="w-5 h-5 text-indigo-500" />

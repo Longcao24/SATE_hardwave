@@ -7,7 +7,7 @@
 // audited server-side) and has no control that changes anything.
 
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Eye, Loader2, Search, ShieldCheck, Users } from 'lucide-react';
 import { oversightService, type OversightMe, type OversightRecordingRow } from '@/services/oversightService';
 import { recordingLabel } from '@/services/recordingName';
@@ -27,6 +27,9 @@ export default function OversightPage() {
   const navigate = useNavigate();
   const [me, setMe] = useState<OversightMe | null>(null);
   const [query, setQuery] = useState('');
+  // The URL is the state: /oversight/<account>/<report> can be bookmarked, shared with another
+  // admin/manager, and reloaded. Whoever opens it still goes through the same per-target check.
+  const { uid, rid } = useParams<{ uid?: string; rid?: string }>();
   const [target, setTarget] = useState<{ id: string; email: string | null } | null>(null);
   const [tab, setTab] = useState<Tab>('recordings');
   const [recs, setRecs] = useState<OversightRecordingRow[] | null>(null);
@@ -39,15 +42,20 @@ export default function OversightPage() {
 
   const [params] = useSearchParams();
   useEffect(() => {
-    oversightService.me().then((m) => {
-      setMe(m);
-      // Admin → account → "Open this account" lands here with ?user=<id>.
-      const want = params.get('user');
-      const t = want ? m.targets.find((x) => x.id === want) : undefined;
-      if (t) setTarget(t);
-    });
+    oversightService.me().then(setMe);
+    // The older link form (?user=<id>, used by the manager email and Admin → "Open this account").
+    const legacy = params.get('user');
+    if (legacy && !uid) navigate(`/oversight/${legacy}`, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // The account comes from the URL. One this viewer may not see is simply not selected.
+  useEffect(() => {
+    if (!me) return;
+    const t = uid ? me.targets.find((x) => x.id === uid) : undefined;
+    setTarget((cur) => (cur?.id === t?.id ? cur : t || null));
+    if (uid && !t) setError('You do not have access to that account, or it does not exist.');
+  }, [me, uid]);
 
   // Load the selected account. Patients are needed for every tab (names on recordings).
   useEffect(() => {
@@ -73,14 +81,20 @@ export default function OversightPage() {
     return m;
   }, [patients]);
 
+  // The report comes from the URL too; the one on screen stays up while the next one loads.
   const [opening, setOpening] = useState<string | null>(null);
-  const openRecording = async (rid: string) => {
+  useEffect(() => {
     if (!target) return;
+    if (!rid) { setOpenRec(null); return; }
+    let cancelled = false;
     setLoading(true); setError(null); setOpening(rid);
-    try { setOpenRec(await oversightService.recording(target.id, rid)); }
-    catch (e: any) { setError(e.message); }
-    finally { setLoading(false); setOpening(null); }
-  };
+    oversightService.recording(target.id, rid)
+      .then((r) => { if (!cancelled) setOpenRec(r); })
+      .catch((e) => { if (!cancelled) setError(e.message); })
+      .finally(() => { if (!cancelled) { setLoading(false); setOpening(null); } });
+    return () => { cancelled = true; };
+  }, [target, rid]);
+  const openRecording = (id: string) => { if (target) navigate(`/oversight/${target.id}/${id}`); };
 
   if (!me) return <Centered><Loader2 className="w-5 h-5 animate-spin" /></Centered>;
   if (me.role === 'none') {
@@ -120,7 +134,7 @@ export default function OversightPage() {
           </div>
           <div className="overflow-y-auto flex-1">
             {shown.map((t) => (
-              <button key={t.id} onClick={() => { setTarget(t); setTab('recordings'); }}
+              <button key={t.id} onClick={() => { navigate(`/oversight/${t.id}`); setTab('recordings'); }}
                 className={`w-full text-left px-3 py-2 text-sm border-b hover:bg-gray-50 ${target?.id === t.id ? 'bg-violet-50 font-medium' : ''}`}>
                 {t.email || t.id}
               </button>
@@ -131,7 +145,7 @@ export default function OversightPage() {
 
         {/* Selected account */}
         <main className="flex-1 overflow-y-auto p-5">
-          {!target && <p className="text-gray-500">Choose an account to view.</p>}
+          {!target && (error ? <p className="text-red-600 text-sm">{error}</p> : <p className="text-gray-500">Choose an account to view.</p>)}
           {target && (
             <>
               <div className="flex items-center gap-3 mb-4">
@@ -143,7 +157,7 @@ export default function OversightPage() {
               {openRec ? (
                 <OversightReportView ownerId={target.id} ownerEmail={target.email} rec={openRec}
                   patient={openRec.patient_id ? patientName.get(openRec.patient_id) : undefined}
-                  onBack={() => setOpenRec(null)}
+                  onBack={() => navigate(`/oversight/${target.id}`)}
                   recordings={recs || []} patientName={patientName}
                   onOpen={openRecording} opening={opening} error={error} />
               ) : (

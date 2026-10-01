@@ -163,6 +163,11 @@ export interface UploadedSession {
   status?: 'queued' | 'processing' | 'done' | 'error';
   /** How many times the container has claimed this session. */
   attempts?: number;
+  /** When the worker claimed it (device-api v38 returns it in the list). */
+  processing_started_at?: string | null;
+  /** While queued: place in the ONE worker's line (1 = next) and audio ahead of it (v38). */
+  queue_position?: number;
+  queue_ahead_seconds?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -196,4 +201,36 @@ export interface DeviceUser {
   id: string;
   name: string;
   email: string;
+}
+
+// ---- [v38] processing monitor + all recorders -------------------------------------------
+export interface ProcLiveRow {
+  id: string; email: string | null; device_serial: string; family: string; session_number: number | null;
+  seconds: number; status: 'queued' | 'processing'; attempts: number; created_at: string;
+  processing_started_at: string | null; heartbeat_at: string | null; not_before: string | null;
+  worker_id: string | null; stuck: boolean;
+}
+export interface ProcErrorRow {
+  id: string; email: string | null; device_serial: string; family: string; session_number: number | null;
+  seconds: number; attempts: number; created_at: string; process_error: string | null;
+}
+export interface AdminProcessing {
+  generated_at: string; days: number;
+  live: ProcLiveRow[]; errors: ProcErrorRow[]; error_reasons: { reason: string; n: number }[];
+  stats: {
+    uploaded: number; done: number; error: number; queued: number; processing: number; stuck: number;
+    no_text: number; success_rate: number | null; audio_seconds_done: number; queue_seconds: number;
+    oldest_queued_at: string | null; turnaround_p50_s: number | null; turnaround_p90_s: number | null;
+    worker_last_finished_at: string | null; unresolved_errors: number;
+  };
+  per_day: { day: string; done: number; error: number; no_text: number; seconds: number }[];
+  per_family: { family: string; done: number; error: number; pending: number; seconds: number; success_rate: number | null }[];
+}
+export interface AdminRecorder {
+  serial: string; family: string; kind: string | null; name: string | null; hw_serial: string | null;
+  online: boolean; last_seen: string | null; fw: string | null;
+  holder_id: string | null; holder_email: string | null; holder_source: 'claimed' | 'registered' | 'uploads' | null;
+  shared: boolean; uploads: number; last_activity: string | null;
+  accounts: { user_id: string; email: string | null; uploads: number; last_upload: string | null;
+    registered_at: string | null; released: boolean; holder: boolean }[];
 }

@@ -8,14 +8,15 @@
 // Generate, and `recordingId` is withheld so nothing keys local state to the owner's id.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, Eye, Loader2, Search } from 'lucide-react';
+import { ArrowLeft, ChevronDown, Download, Eye, FileAudio, FileJson, Loader2, Search, Sheet } from 'lucide-react';
 import MainContent from '@/components/Layout/MainContent';
 import RightSidebar from '@/components/Layout/RightSidebar';
 import { useAudioPlayer } from '@/hooks/useAudioPlayer';
 import { useSidebarManager } from '@/hooks/useSidebarManager';
 import { calculateSpeechAnalysis, getErrorAnnotations, type IssueCounts, type Segment } from '@/services/dataService';
 import { normalizeSegments } from '@/components/Recording/ConversationView/utils/segmentOperations';
-import type { StoredLsaReport } from '@/services/lsaReportService';
+import { mergeEdits, type StoredLsaReport } from '@/services/lsaReportService';
+import { metricsCsv } from '@/services/languageMetrics';
 import { oversightService, type OversightRecordingRow } from '@/services/oversightService';
 import { recordingLabel } from '@/services/recordingName';
 
@@ -93,6 +94,7 @@ export function OversightReportView({ ownerId, ownerEmail, rec, patient, onBack,
         <span className="ml-auto inline-flex items-center gap-1 text-xs text-violet-700">
           <Eye className="w-3.5 h-3.5" /> Read-only · this view is logged
         </span>
+        <ExportMenu ownerId={ownerId} rec={rec} patient={patient} />
       </div>
 
       <div className="flex flex-1 min-h-0 overflow-hidden relative">
@@ -249,5 +251,95 @@ function ReportList({ ownerEmail, recordings, patientName, currentId, onOpen, op
         {!shown.length && <p className="p-3 text-sm text-gray-500">No reports.</p>}
       </div>
     </aside>
+  );
+}
+
+// ---- Export (device-api v37: every export is role-checked and audited server-side) ----------
+
+const safeName = (s: string) => s.replace(/[^\w.\- ]+/g, '_').replace(/\s+/g, '_').slice(0, 80) || 'report';
+
+function saveBlob(content: BlobPart, type: string, name: string) {
+  const url = URL.createObjectURL(new Blob([content], { type }));
+  const a = document.createElement('a');
+  a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+function ExportMenu({ ownerId, rec, patient }: {
+  ownerId: string; rec: Record<string, any>; patient?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const base = safeName(recordingLabel(rec.recording_name || rec.file_name) || rec.id);
+  const hasLsa = !!(rec.lsa_report && rec.lsa_report.response);
+
+  const run = async (kind: 'audio' | 'lsa' | 'metrics') => {
+    setBusy(kind); setErr(null);
+    try {
+      if (kind === 'audio') {
+        const r = await oversightService.exportAudio(ownerId, rec.id);
+        const a = document.createElement('a');   // signed URL already carries Content-Disposition
+        a.href = r.url; a.download = r.file_name; document.body.appendChild(a); a.click(); a.remove();
+      } else if (kind === 'lsa') {
+        const r = await oversightService.exportLsa(ownerId, rec.id);
+        const doc = {
+          exported_at: new Date().toISOString(),
+          recording: { ...r.recording, label: recordingLabel(r.recording.recording_name || r.recording.file_name), patient: patient ?? null },
+          // What the web shows: the model's draft with the reviewer's edits applied.
+          as_shown: r.lsa_report?.response ? mergeEdits(r.lsa_report) : null,
+          // Exactly what is stored (draft and edits kept apart), for anyone auditing the review.
+          lsa_report: r.lsa_report,
+        };
+        saveBlob(JSON.stringify(doc, null, 2), 'application/json', `${base}_SATE-Report.json`);
+      } else {
+        const r = await oversightService.exportMetrics(ownerId, rec.id);
+        const segs = normalizeSegments(Array.isArray(r.transcript?.segments) ? r.transcript!.segments! : []);
+        if (!segs.length) throw new Error('This recording has no transcript to measure.');
+        const csv = metricsCsv(segs, {
+          report: recordingLabel(r.recording.recording_name || r.recording.file_name) || r.recording.id,
+          recorded: r.recording.created_at, length_s: r.recording.duration, patient,
+        });
+        saveBlob(csv, 'text/csv;charset=utf-8', `${base}_metrics.csv`);
+      }
+      setOpen(false);
+    } catch (e: any) {
+      setErr(String(e?.message || e).replace(/^\d+ /, ''));
+    } finally { setBusy(null); }
+  };
+
+  const Item = ({ kind, icon, title, sub, disabled }: { kind: 'audio' | 'lsa' | 'metrics'; icon: React.ReactNode; title: string; sub: string; disabled?: boolean }) => (
+    <button disabled={!!busy || disabled} onClick={() => run(kind)}
+      className="w-full text-left flex items-start gap-2.5 px-3 py-2 hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-white">
+      <span className="mt-0.5 text-gray-500">{busy === kind ? <Loader2 className="w-4 h-4 animate-spin" /> : icon}</span>
+      <span>
+        <span className="block text-sm text-gray-800">{title}</span>
+        <span className="block text-xs text-gray-500">{sub}</span>
+      </span>
+    </button>
+  );
+
+  return (
+    <div className="relative">
+      <button onClick={() => setOpen((o) => !o)}
+        className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium text-white bg-violet-600 rounded-md hover:bg-violet-700">
+        <Download className="w-3.5 h-3.5" /> Export <ChevronDown className="w-3 h-3" />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 mt-1 z-50 w-72 bg-white border border-gray-200 rounded-lg shadow-lg py-1">
+            <Item kind="audio" icon={<FileAudio className="w-4 h-4" />} title="Audio file"
+              sub={rec.file_name || 'The recording as stored'} disabled={!rec.file_path} />
+            <Item kind="lsa" icon={<FileJson className="w-4 h-4" />} title="SATE Report (JSON)"
+              sub={hasLsa ? 'The report as shown, plus the stored draft and edits' : 'No SATE Report generated yet'} disabled={!hasLsa} />
+            <Item kind="metrics" icon={<Sheet className="w-4 h-4" />} title="Language metrics (CSV)"
+              sub="The Language Analysis numbers, one row per speaker" />
+            {err && <p className="px-3 py-1.5 text-xs text-red-600">{err}</p>}
+            <p className="px-3 pt-1.5 pb-1 text-[11px] text-gray-400 border-t">Every export is logged.</p>
+          </div>
+        </>
+      )}
+    </div>
   );
 }
