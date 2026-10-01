@@ -1,4 +1,4 @@
-// SATE Device API — Supabase Edge Function              [v39]
+// SATE Device API — Supabase Edge Function              [v40]
 // Replaces the mock-server's Express endpoints with a single Edge Function
 // that does internal path routing. Authenticated via Supabase JWT (users) or a
 // device key (the recorder).
@@ -52,6 +52,13 @@
 //      (and the gateway's 502 above it) simply does not apply. `storage_path` is
 //      confined to the caller's own `<user id>/` prefix and the byte count comes
 //      from Storage, never from the client.
+// v40: ONE NAME PER PHYSICAL UNIT, first phone wins. POST /devices/seen {serial, hw_serial, name} — the app
+//      reports a unit the moment it connects. The FIRST report for a hw_serial fixes the unit's name in
+//      sate_device_units (the app's own formula, `SATE L816 · <last 4 of its BLE id>R`, from whichever phone
+//      got there first) and every later report — another iPhone's UUID serial, the Android MAC serial —
+//      is only LINKED to it (sate_device_serial_units, first link wins) and told the name to use. The
+//      session list, the device list and /admin/recorders all show that one name, and the holder rule
+//      counts every linked serial, so the grouping no longer waits for an upload.
 // v39: ONE IDENTITY PER PHYSICAL L81x. An L81x's `device_serial` is built from its BLE id, and on
 //      iOS that id is a PER-PHONE UUID — so one unit uploaded as `l816-<MAC>` from Android and as a
 //      different `l816-<uuid>` from every iPhone, and showed up as several devices with several names.
@@ -313,6 +320,10 @@ serve(async (req) => {
       if (!/^[A-Za-z0-9:_.-]{0,96}$/.test(u.searchParams.get('serial') || '')) return err('bad serial', 400);
       const o = await externalOwner(supabase, user.id, u.searchParams.get('serial') || '', u.searchParams.get('hw') || '');
       return json(o);
+    }
+    // [v40] The phone reports a unit on connect; answers the ONE name everyone shows for it.
+    if (subPath === '/devices/seen' && method === 'POST') {
+      return await deviceSeen(supabase, user.id, req);
     }
     if (subPath === '/devices/claim-token' && method === 'POST') {
       return await createClaimToken(supabase, user);
@@ -626,12 +637,20 @@ async function externalOwner(supabase: any, userId: string, serial: string, hw: 
   if (!ownerId && serial) {
     // [v39] With the unit's own serial, uploads from ANY phone's serial for this unit count —
     // an iPhone sees the same L816 under a different BLE id than Android does.
+    // [v40] Plus every serial a phone has LINKED to this unit on connect, uploaded from or not.
+    let linked: string[] = [];
+    if (hw) {
+      const { data: ls, error: le } = await supabase.from('sate_device_serial_units').select('serial').eq('hw_serial', hw);
+      if (le && !/does not exist|schema cache/i.test(le.message)) throw new Error(le.message);
+      linked = (ls || []).map((r: any) => r.serial).filter((x: string) => /^[A-Za-z0-9:_.-]{1,96}$/.test(x));
+    }
     let sessQ = supabase.from('sate_device_sessions').select('user_id, created_at, device_serial');
-    sessQ = hw ? sessQ.or(`device_serial.eq.${serial},hw_serial.eq.${hw}`) : sessQ.eq('device_serial', serial);
+    sessQ = hw ? sessQ.or([`device_serial.eq.${serial}`, `hw_serial.eq.${hw}`, ...linked.map((x) => `device_serial.eq.${x}`)].join(','))
+      : sessQ.eq('device_serial', serial);
     const { data: sess, error: e1 } = await sessQ.order('created_at', { ascending: false }).limit(50);
     if (e1) throw new Error(e1.message);
     // A release is per serial; releasing the unit under ANY of its serials releases it.
-    const serials = [...new Set([serial, ...(sess || []).map((r: any) => r.device_serial)])];
+    const serials = [...new Set([serial, ...linked, ...(sess || []).map((r: any) => r.device_serial)])];
     const { data: outs, error: e2 } = await supabase.from('sate_external_device_optouts')
       .select('user_id').in('serial', serials);
     if (e2) throw new Error(e2.message);
@@ -659,6 +678,56 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  *  so the character set is closed: no comma, no parenthesis. */
 const hwSerialOf = (v: unknown): string | null =>
   (typeof v === 'string' && /^[A-Za-z0-9_.-]{4,48}$/.test(v.trim()) ? v.trim() : null);
+
+/** [v40] The app's own naming formula, for a serial reported without a name. */
+function defaultUnitName(serial: string): string {
+  const m = serial.match(/^(l81\d)-([0-9A-Za-z]+)$/i);
+  if (!m) return serial;
+  return `SATE ${m[1].toUpperCase()} · ${m[2].toUpperCase().slice(-4)}R`;
+}
+
+/** [v40] serial -> {hw, name} for the serials that have been linked to a unit. */
+async function unitsForSerials(supabase: any, serials: string[]): Promise<Map<string, { hw: string; name: string }>> {
+  const out = new Map<string, { hw: string; name: string }>();
+  const list = [...new Set(serials.filter(Boolean))];
+  for (let i = 0; i < list.length; i += 200) {
+    const { data, error } = await supabase.from('sate_device_serial_units')
+      .select('serial, hw_serial, unit:sate_device_units(name)').in('serial', list.slice(i, i + 200));
+    if (error) {
+      // Tables not migrated yet: no names, never a failed list.
+      if (/does not exist|schema cache/i.test(error.message)) return out;
+      throw new Error(error.message);
+    }
+    for (const r of data || []) out.set(r.serial, { hw: r.hw_serial, name: r.unit?.name ?? defaultUnitName(r.serial) });
+  }
+  return out;
+}
+
+async function deviceSeen(supabase: any, userId: string, req: Request) {
+  const body = await req.json().catch(() => ({}));
+  const serial = typeof body?.serial === 'string' ? body.serial.trim() : '';
+  const hw = hwSerialOf(body?.hw_serial);
+  if (!/^[a-z0-9]{2,12}-[A-Za-z0-9]{4,64}$/.test(serial) || !externalKind(serial)) return err('bad serial', 400);
+  if (!hw) return err('hw_serial required', 400);
+  const offered = typeof body?.name === 'string' ? body.name.replace(/[\u0000-\u001f]/g, '').trim().slice(0, 60) : '';
+  const now = new Date().toISOString();
+  // First report wins: insert-if-absent, never update the name.
+  const { error: e1 } = await supabase.from('sate_device_units').upsert(
+    { hw_serial: hw, name: offered || defaultUnitName(serial), first_serial: serial, first_user_id: userId },
+    { onConflict: 'hw_serial', ignoreDuplicates: true });
+  if (e1) throw new Error(e1.message);
+  await supabase.from('sate_device_units').update({ last_seen_at: now }).eq('hw_serial', hw);
+  // First link wins too: a serial already tied to ANOTHER unit is left alone (and reported).
+  const { error: e2 } = await supabase.from('sate_device_serial_units').upsert(
+    { serial, hw_serial: hw, first_user_id: userId }, { onConflict: 'serial', ignoreDuplicates: true });
+  if (e2) throw new Error(e2.message);
+  const [{ data: unit }, { data: link }] = await Promise.all([
+    supabase.from('sate_device_units').select('name, first_serial, created_at').eq('hw_serial', hw).maybeSingle(),
+    supabase.from('sate_device_serial_units').select('hw_serial').eq('serial', serial).maybeSingle(),
+  ]);
+  return json({ hw_serial: hw, name: unit?.name ?? defaultUnitName(serial), first: unit?.first_serial === serial,
+    conflict: !!link && link.hw_serial !== hw });
+}
 
 async function emailOf(supabase: any, uid: string): Promise<string | null> {
   try { const { data } = await supabase.auth.admin.getUserById(uid); return data?.user?.email ?? null; }
@@ -1051,7 +1120,12 @@ async function listDevices(supabase: any, userId: string, readOnly = false) {
       });
     }
   }
-  return json([...rows, ...derived.values()]);
+  const all = [...rows, ...derived.values()];
+  const units = await unitsForSerials(supabase, all.filter((d: any) => d.kind && d.kind !== 'sate').map((d: any) => d.serial));
+  return json(all.map((d: any) => {
+    const u = units.get(d.serial);
+    return u ? { ...d, name: u.name, hw_serial: d.hw_serial ?? u.hw, unit_name: u.name } : d;
+  }));
 }
 
 /**
@@ -1664,6 +1738,10 @@ async function adminRecorders(supabase: any) {
   const hwOfSerial = new Map<string, string>();
   for (const d of devs || []) if (d.serial && hwSerialOf(d.hw_serial)) hwOfSerial.set(d.serial, d.hw_serial);
   for (const r of sess) if (r.device_serial && hwSerialOf(r.hw_serial) && !hwOfSerial.has(r.device_serial)) hwOfSerial.set(r.device_serial, r.hw_serial);
+  // [v40] Links reported on connect win over everything (they are the unit's own answer), and name it.
+  const { data: links } = await supabase.from('sate_device_serial_units').select('serial, hw_serial, unit:sate_device_units(name)');
+  const unitName = new Map<string, string>();
+  for (const l of links || []) { hwOfSerial.set(l.serial, l.hw_serial); if (l.unit?.name) unitName.set(l.hw_serial, l.unit.name); }
   const keyOf = (serial: string) => (hwOfSerial.has(serial) ? `hw:${hwOfSerial.get(serial)}` : serial);
   type Use = { user_id: string; uploads: number; last_upload: string | null; registered_at: string | null; released: boolean };
   const units = new Map<string, { serial: string; serials: Set<string>; kind: string | null; name: string | null; hw_serial: string | null;
@@ -1695,6 +1773,9 @@ async function adminRecorders(supabase: any) {
     x.uploads++;
     if (!x.last_upload || r.created_at > x.last_upload) x.last_upload = r.created_at;
   }
+  // [v40] A serial a phone has only CONNECTED with (no upload, no registration) is still one of the
+  // unit's names on that phone — list it, so the admin sees every phone that has met the unit.
+  for (const l of links || []) unit(l.serial);
   for (const o of outs || []) {
     const u = units.get(keyOf(o.serial));
     if (u?.uses.has(o.user_id)) u.uses.get(o.user_id)!.released = true;
@@ -1724,7 +1805,8 @@ async function adminRecorders(supabase: any) {
     const active = accounts.filter((a) => !a.released);
     const lastUpload = accounts.map((a) => a.last_upload).filter(Boolean).sort().pop() || null;
     out.push({
-      serial: u.serial, serials: [...u.serials], family: familyOf(u.serial), kind: u.kind, name: u.name, hw_serial: u.hw_serial,
+      serial: u.serial, serials: [...u.serials], family: familyOf(u.serial), kind: u.kind,
+      name: (u.hw_serial && unitName.get(u.hw_serial)) || u.name, hw_serial: u.hw_serial,
       online: u.online, last_seen: u.last_seen, fw: u.fw,
       holder_id: holder, holder_email: holder ? await email(holder) : null, holder_source: source,
       shared: active.length > 1, accounts, uploads: accounts.reduce((n, a) => n + a.uploads, 0),
@@ -2615,8 +2697,13 @@ async function listSessions(
     let ahead = 0;
     line.forEach((r: any, i: number) => { pos.set(r.id, { position: i + 1, ahead_seconds: ahead }); ahead += takeSeconds(r); });
   }
-  return json((data || []).map((s: any) => ({ ...s, at: s.created_at,
-    ...(pos.has(s.id) ? { queue_position: pos.get(s.id)!.position, queue_ahead_seconds: pos.get(s.id)!.ahead_seconds } : {}) })));
+  const units = await unitsForSerials(supabase, (data || []).map((s: any) => s.device_serial));
+  return json((data || []).map((s: any) => {
+    const u = units.get(s.device_serial);
+    return { ...s, at: s.created_at,
+      ...(u ? { hw_serial: s.hw_serial ?? u.hw, unit_name: u.name } : {}),
+      ...(pos.has(s.id) ? { queue_position: pos.get(s.id)!.position, queue_ahead_seconds: pos.get(s.id)!.ahead_seconds } : {}) };
+  }));
 }
 
 // Re-queue an errored session for the async container. Scoped to the caller's own

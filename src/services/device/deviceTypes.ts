@@ -40,6 +40,9 @@ export interface ManagedDevice {
   /** [v39] Every device_serial this ONE physical unit has uploaded under (an L81x used from Android
    *  and from iPhones has several, because iOS randomises the BLE id). Absent = just `serial`. */
   serials?: string[];
+  /** [v40] The unit's own serial and its ONE shared name, when a phone has reported it. */
+  hw_serial?: string | null;
+  unit_name?: string | null;
   /** true = device is reachable over Wi-Fi right now */
   online: boolean;
   ip?: string;
@@ -170,6 +173,8 @@ export interface UploadedSession {
   processing_started_at?: string | null;
   /** [v39] The unit's OWN serial (L81x opcode 0x01), identical on every phone. */
   hw_serial?: string | null;
+  /** [v40] The unit's ONE shared name (the first phone to report it named it). */
+  unit_name?: string | null;
   /** While queued: place in the ONE worker's line (1 = next) and audio ahead of it (v38). */
   queue_position?: number;
   queue_ahead_seconds?: number;

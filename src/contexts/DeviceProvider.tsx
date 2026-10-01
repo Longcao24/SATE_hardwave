@@ -142,9 +142,12 @@ function deriveExternalDevices(sessions: UploadedSession[]): ManagedDevice[] {
     const pending = ss.filter((s) => !s.processed).length;
     const family = familyFor(serial)!;
     const short = serial.slice(family.prefix.length);
+    const unitName = ss.find((s) => s.unit_name)?.unit_name;
     return {
       id: `${family.kind}:${serial}`,
-      name: `${family.label} ${short.slice(-4)}`,
+      // [v40] The ONE name the unit has everywhere (first phone to report it named it); else the
+      // app's own formula, so web and phone agree even before that.
+      name: unitName ?? (family.kind === 'l816' ? `${family.label} · ${short.toUpperCase().slice(-4)}R` : `${family.label} ${short.slice(-4)}`),
       serial,
       fw: family.label,
       online: false,
@@ -162,7 +165,15 @@ function deriveExternalDevices(sessions: UploadedSession[]): ManagedDevice[] {
 // it (`SATE L816 · 0315R`). A serial never seen with a hw_serial is left as it is.
 function groupByUnit(devices: ManagedDevice[], sessions: UploadedSession[]): ManagedDevice[] {
   const hwOf = new Map<string, string>();
-  for (const s of sessions) if (s.hw_serial && s.device_serial && !hwOf.has(s.device_serial)) hwOf.set(s.device_serial, s.hw_serial);
+  const nameOf = new Map<string, string>();   // hw -> the unit's shared name (v40)
+  for (const s of sessions) {
+    if (s.hw_serial && s.device_serial && !hwOf.has(s.device_serial)) hwOf.set(s.device_serial, s.hw_serial);
+    if (s.hw_serial && s.unit_name && !nameOf.has(s.hw_serial)) nameOf.set(s.hw_serial, s.unit_name);
+  }
+  for (const d of devices) {
+    if (d.hw_serial && !hwOf.has(d.serial)) hwOf.set(d.serial, d.hw_serial);
+    if (d.hw_serial && d.unit_name && !nameOf.has(d.hw_serial)) nameOf.set(d.hw_serial, d.unit_name);
+  }
   const groups = new Map<string, ManagedDevice[]>();
   const out: ManagedDevice[] = [];
   for (const d of devices) {
@@ -175,13 +186,10 @@ function groupByUnit(devices: ManagedDevice[], sessions: UploadedSession[]): Man
   for (const [k, ds] of groups) {
     const hw = k.slice(k.indexOf(':') + 1);
     const latest = ds.reduce((a, b) => ((a.last_seen || '') >= (b.last_seen || '') ? a : b));
-    const family = familyFor(latest.serial);
     out.push({
       ...latest,
       id: `${latest.kind}:hw:${hw}`,
-      name: family?.kind === 'l816'
-        ? `${family.label} · ${hw.replace(/[^0-9a-zA-Z]/g, '').toUpperCase().slice(-4)}R`
-        : latest.name,
+      name: nameOf.get(hw) ?? latest.name,
       serials: [...new Set(ds.flatMap((d) => d.serials ?? [d.serial]))],
       pending_sessions: ds.reduce((n, d) => n + (d.pending_sessions || 0), 0),
       online: ds.some((d) => d.online),
