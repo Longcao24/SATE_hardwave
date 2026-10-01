@@ -14,6 +14,7 @@ interface ReportHeaderProps {
   onEditSave: () => void;
   onEditCancel: () => void;
   onKeyPress: (e: React.KeyboardEvent) => void;
+  readOnly?: boolean;
 }
 
 export const ReportHeader: React.FC<ReportHeaderProps> = ({
@@ -27,6 +28,7 @@ export const ReportHeader: React.FC<ReportHeaderProps> = ({
   onEditSave,
   onEditCancel,
   onKeyPress,
+  readOnly = false,
 }) => {
   return (
     <div className="flex-1">
@@ -63,13 +65,13 @@ export const ReportHeader: React.FC<ReportHeaderProps> = ({
             <h2 className="text-xl font-semibold text-gray-800">
               {recordingLabel(recordingName) || "Untitled Report"}
             </h2>
-            <button
+            {!readOnly && <button
               onClick={onEditStart}
               className="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded opacity-0 group-hover:opacity-100 transition-opacity"
               title="Edit report name"
             >
               <Edit2 className="w-4 h-4" />
-            </button>
+            </button>}
           </div>
         )}
       </div>

@@ -586,10 +586,14 @@ interface SateReportPopupProps {
   onClose: () => void;
   recordingId?: string;
   transcriptData: Segment[];
+  /** Oversight (admin/manager viewing another account): show the saved report, never write. */
+  readOnly?: boolean;
+  /** The saved report, when it came from somewhere other than this account's own row. */
+  initialReport?: StoredLsaReport | null;
 }
 
 export const SateReportPopup: React.FC<SateReportPopupProps> = ({
-  isOpen, onClose, recordingId, transcriptData,
+  isOpen, onClose, recordingId, transcriptData, readOnly = false, initialReport,
 }) => {
   const [ageYears, setAgeYears] = React.useState('');
   const [ageMonths, setAgeMonths] = React.useState('');
@@ -655,6 +659,21 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
     setEditing(false);
     setDraft(null);
     setConfirmRegen(false);
+
+    const apply = (saved: StoredLsaReport) => {
+      setReport(saved);
+      setStatus('ready');
+      const savedAge = parseAge(saved.sample.age);
+      setAgeYears(savedAge.years);
+      setAgeMonths(savedAge.months);
+      setTask(saved.sample.task);
+      setUseNorms(!!saved.norms);
+    };
+    if (readOnly) {
+      // Same acceptance rule as loadStoredLsaReport, plus `sample`, which apply() reads.
+      if (initialReport?.response && initialReport.sample) apply(initialReport);
+      return;
+    }
     if (!recordingId) return;
 
     setLoadingSaved(true);
@@ -675,7 +694,7 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
       .finally(() => { if (!cancelled) setLoadingSaved(false); });
 
     return () => { cancelled = true; };
-  }, [isOpen, recordingId]);
+  }, [isOpen, recordingId, readOnly, initialReport]);
 
   // Default the target speaker to the one SALT calls the child.
   React.useEffect(() => {
@@ -694,6 +713,7 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
   }, [status]);
 
   const persist = (field: string, value: string) => {
+    if (readOnly) return;
     try { localStorage.setItem(storeKey(field, recordingId), value); } catch { /* ignore */ }
   };
 
@@ -716,6 +736,7 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
   };
 
   const saveEdits = async () => {
+    if (readOnly) return;
     if (!report || !draft) return;
     const edits = draftToEdits(report, draft);
     const next: StoredLsaReport = {
@@ -773,6 +794,7 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
   const isStale = report != null && report.transcript_hash !== transcriptFingerprint(saltText);
 
   const generate = async () => {
+    if (readOnly) return;
     setStatus('loading');
     setError('');
     setSaveWarning('');
@@ -913,7 +935,7 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
             )}
           </div>
           <div className="flex items-center gap-2">
-            {editing ? (
+            {readOnly ? null : editing ? (
               <>
                 <button onClick={saveEdits} disabled={savingEdits}
                   className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800 disabled:bg-gray-300 transition-colors">
@@ -947,7 +969,9 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
           </div>
         </div>
 
-        {/* Sample information — what the analysis needs and the transcript cannot supply. */}
+        {/* Sample information — what the analysis needs and the transcript cannot supply.
+            Hidden read-only: it exists to generate a report, and a viewer must not. */}
+        {!readOnly && (
         <div className="flex flex-wrap items-end gap-3 px-5 py-3 border-b border-gray-200 bg-gray-50">
           <div className="flex flex-col gap-1">
             <span className="text-xs font-medium text-gray-600">Patient age</span>
@@ -1058,6 +1082,7 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
               : <><Sparkles className="w-4 h-4" /> {report ? 'Regenerate' : 'Generate report'}</>}
           </button>
         </div>
+        )}
 
         <div className="overflow-y-auto p-6 bg-gray-100">
           {confirmRegen && (
@@ -1089,7 +1114,7 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
               <div>
                 <div className="font-medium">The transcript changed after this report was generated</div>
                 <div className="text-amber-800">
-                  It still shows the transcript it was built from. Regenerate to analyse the current one.
+                  It still shows the transcript it was built from.{readOnly ? '' : ' Regenerate to analyse the current one.'}
                 </div>
               </div>
             </div>
@@ -1126,6 +1151,8 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
                 <p className="flex items-center gap-2 text-gray-500">
                   <Loader2 className="w-4 h-4 animate-spin" /> Looking for a saved report…
                 </p>
+              ) : readOnly ? (
+                <p>No SATE Report has been generated for this recording yet.</p>
               ) : targetUtterances === 0 ? (
                 <p>This recording has no utterances for the selected speaker, so there is nothing to analyse.</p>
               ) : (

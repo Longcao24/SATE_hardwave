@@ -89,6 +89,34 @@ export interface AdminUser {
   last_sign_in_at?: string | null;
   devices: number;
   is_admin: boolean;
+  // [device-api v35] — optional so an older server still type-checks
+  is_manager?: boolean;
+  disabled?: boolean;
+  recordings?: number;
+  sate_reports?: number;
+  audio_seconds?: number;
+  last_recording_at?: string | null;
+}
+
+/** GET /admin/users/:id (device-api v35). */
+export interface AdminUserDetail {
+  id: string;
+  email: string;
+  created_at?: string;
+  last_sign_in_at?: string | null;
+  email_confirmed_at?: string | null;
+  disabled: boolean;
+  is_admin: boolean;
+  is_manager: boolean;
+  stats: {
+    recordings: number;
+    sate_reports: number;
+    audio_seconds: number;
+    last_recording_at: string | null;
+    patients: number;
+    sessions: number;
+    devices: number;
+  };
 }
 
 /** A published firmware release row (admin firmware manager). */

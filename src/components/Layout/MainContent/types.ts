@@ -1,4 +1,5 @@
 import type { Segment, IssueCounts } from '@/services/dataService';
+import type { StoredLsaReport } from '@/services/lsaReportService';
 import type { EditingState, EditingActions } from '../../Recording/ConversationView/types';
 
 export interface MainContentProps {
@@ -46,6 +47,10 @@ export interface MainContentProps {
   onAddFlag?: (rawMs: number) => void;
   onDeleteFlag?: (rawMs: number) => void;
   onUpdateFlagNote?: (rawMs: number, note: string) => void;
+  // Oversight (admin/manager viewing another account): no rename, no Edit, and the SATE
+  // Report shows `lsaReport` without offering to generate or edit. Off for everyone else.
+  readOnly?: boolean;
+  lsaReport?: StoredLsaReport | null;
 }
 
 

@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { LayoutDashboard, Mic, ShieldCheck, FileAudio } from 'lucide-react';
+import { LayoutDashboard, Mic, ShieldCheck, FileAudio, Users } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { deviceApiService } from '@/services/device/deviceApiService';
 import { notesApiService } from '@/services/notesApiService';
+import { oversightService } from '@/services/oversightService';
 
 interface ActionButtonsProps {
   showDashboardButton: boolean;
@@ -28,6 +29,15 @@ export const ActionButtons: React.FC<ActionButtonsProps> = ({
   useEffect(() => {
     let cancelled = false;
     notesApiService.access().then((a) => { if (!cancelled) setHasNotes(Boolean(a?.enabled)); });
+    return () => { cancelled = true; };
+  }, []);
+
+  // A MANAGER sees "My team" (read-only view of the accounts an admin assigned them);
+  // admins reach the same page from Admin. me() never throws — no role, no button.
+  const [isManager, setIsManager] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    oversightService.me().then((m) => { if (!cancelled) setIsManager(m.role === 'manager'); });
     return () => { cancelled = true; };
   }, []);
 
@@ -61,6 +71,17 @@ export const ActionButtons: React.FC<ActionButtonsProps> = ({
         >
           <FileAudio className="w-4 h-4" />
           Voice Notes
+        </Button>
+      )}
+
+      {isManager && (
+        <Button
+          onClick={() => onNavigate('/oversight')}
+          variant="outline"
+          className="w-full text-sm bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100 hover:border-violet-300 flex items-center justify-center gap-2"
+        >
+          <Users className="w-4 h-4" />
+          My team
         </Button>
       )}
 

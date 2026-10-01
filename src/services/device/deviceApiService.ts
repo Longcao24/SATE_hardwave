@@ -2,7 +2,7 @@
 // Uses the user's Supabase JWT for authentication, so device management
 // is fully integrated with the web app's auth system.
 
-import type {
+import type { AdminUserDetail,
   ManagedDevice,
   RemoteCommand,
   UploadedSession,
@@ -219,6 +219,16 @@ export const deviceApiService = {
   async adminListUsers(): Promise<AdminUser[]> {
     return req<AdminUser[]>('/admin/users');
   },
+  // ---- [v35] account management ----
+  adminGetUser: (id: string) => req<AdminUserDetail>(`/admin/users/${id}`),
+  adminCreateUser: (email: string, password: string) =>
+    req<{ ok: true; id: string; email: string }>('/admin/users', { method: 'POST', body: JSON.stringify({ email, password }) }),
+  adminSetPassword: (id: string, password: string) =>
+    req<{ ok: true }>(`/admin/users/${id}/password`, { method: 'POST', body: JSON.stringify({ password }) }),
+  adminSetDisabled: (id: string, disabled: boolean) =>
+    req<{ ok: true; disabled: boolean }>(`/admin/users/${id}/disable`, { method: 'POST', body: JSON.stringify({ disabled }) }),
+  adminDeleteUser: (id: string, confirmEmail: string) =>
+    req<{ ok: true; removed_files: number }>(`/admin/users/${id}`, { method: 'DELETE', body: JSON.stringify({ confirm_email: confirmEmail }) }),
   /** Every published firmware release. */
   async adminListFirmware(): Promise<AdminFirmware[]> {
     return req<AdminFirmware[]>('/admin/firmware');

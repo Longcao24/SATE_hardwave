@@ -1,24 +1,29 @@
 // AdminPage — system-wide management for SATE admins (users in sate_admins).
-// Sections: the accounts in the system (and which per-account features they have), every
-// recorder across all accounts, and the firmware catalog. Non-admins are bounced to home.
 //
-// The Users section is where a feature is GIVEN to an account. Meeting notes (the consumer
-// lane) is off for everyone until an admin turns it on here — which is the whole reason a
-// clinical user never sees that the feature exists. The switch used to live on the notes
-// Worker's own /console page: a second URL, a second admin list, and a grant that could only
-// be given to an account that had already visited that lane. It belongs with the people who
-// already administer this system, so it lives here.
+// One page, five tabs, so each job has room instead of one long scroll:
+//   Accounts   — every account with its numbers; create one; open an account to see its stats,
+//                view it read-only, set a password, disable or delete it, and turn per-account
+//                features on (AccountModal). The Meeting notes switch is in that popup: it is how
+//                the feature is GIVEN to an account (off for everyone until an admin turns it on);
+//                it used to live on the notes Worker's own /console — a second URL and admin list.
+//   Managers   — who may view (read-only) which accounts (ManagersCard).
+//   Recorders  — every recorder across all accounts.
+//   Firmware   — publish and manage releases.
+//   Monitoring — links to the ops surfaces.
+// Non-admins are bounced.
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { deviceApiService } from '@/services/device/deviceApiService';
 import type { AdminDevice, AdminFirmware, AdminUser } from '@/services/device/deviceTypes';
 import { notesApiService, type NotesGrant } from '@/services/notesApiService';
 import { FirmwarePublishCard } from '@/components/Device/FirmwarePublishCard';
+import { ManagersCard } from '@/components/Admin/ManagersCard';
+import { AccountModal, Badge, fmtHours } from '@/components/Admin/AccountModal';
 import { Button } from '@/components/ui/button';
 import {
   ArrowLeft, ShieldCheck, Trash2, RefreshCw, Cpu, HardDrive, Loader2,
-  Activity, ExternalLink, Users, Mic,
+  Activity, ExternalLink, Users, Search, UserPlus, Eye, FileAudio, Clock, UserCog, X,
 } from 'lucide-react';
 
 // Ops surfaces linked from the admin page (open in a new tab).
@@ -28,7 +33,9 @@ const MONITORING_LINKS = [
   { title: 'Docs', desc: 'Engineering documentation', href: 'https://sate-docs.pages.dev' },
 ];
 
-function timeAgo(iso?: string): string {
+type Tab = 'accounts' | 'managers' | 'recorders' | 'firmware' | 'monitoring';
+
+function timeAgo(iso?: string | null): string {
   if (!iso) return '—';
   const secs = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
   if (secs < 60) return 'just now';
@@ -49,6 +56,7 @@ function batteryClass(pct?: number | null): string {
 export function AdminPage() {
   const navigate = useNavigate();
   const [allowed, setAllowed] = useState<boolean | null>(null);
+  const [tab, setTab] = useState<Tab>('accounts');
   const [devices, setDevices] = useState<AdminDevice[]>([]);
   const [firmware, setFirmware] = useState<AdminFirmware[]>([]);
   const [users, setUsers] = useState<AdminUser[]>([]);
@@ -59,27 +67,27 @@ export function AdminPage() {
   const [savingUser, setSavingUser] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+  const [openUser, setOpenUser] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
 
   const load = useCallback(async () => {
     setBusy(true);
     setError(null);
-    try {
-      const [d, f, u, g] = await Promise.all([
-        deviceApiService.adminListDevices(),
-        deviceApiService.adminListFirmware(),
-        deviceApiService.adminListUsers(),
-        // Its own backend, its own failure. A notes outage must not blank the admin page.
-        notesApiService.adminListGrants(),
-      ]);
-      setDevices(d);
-      setFirmware(f);
-      setUsers(u);
-      setGrants(g && Object.fromEntries(g.map((x) => [x.user_id, x])));
-    } catch (e) {
-      setError((e as Error).message || 'Failed to load');
-    } finally {
-      setBusy(false);
-    }
+    // Each source on its own: one failing (e.g. the notes service) must not blank the rest.
+    const [d, f, u, g] = await Promise.allSettled([
+      deviceApiService.adminListDevices(),
+      deviceApiService.adminListFirmware(),
+      deviceApiService.adminListUsers(),
+      notesApiService.adminListGrants(),
+    ]);
+    if (d.status === 'fulfilled') setDevices(d.value);
+    if (f.status === 'fulfilled') setFirmware(f.value);
+    if (u.status === 'fulfilled') setUsers(u.value);
+    setGrants(g.status === 'fulfilled' && g.value ? Object.fromEntries(g.value.map((x) => [x.user_id, x])) : null);
+    const failed = [d, f, u].filter((r) => r.status === 'rejected') as PromiseRejectedResult[];
+    if (failed.length) setError(failed.map((r) => (r.reason as Error)?.message || 'Failed to load').join(' · '));
+    setBusy(false);
   }, []);
 
   useEffect(() => {
@@ -91,6 +99,19 @@ export function AdminPage() {
     });
     return () => { cancelled = true; };
   }, [load]);
+
+  const totals = useMemo(() => ({
+    accounts: users.length,
+    reports: users.reduce((a, u) => a + (u.recordings || 0), 0),
+    sateReports: users.reduce((a, u) => a + (u.sate_reports || 0), 0),
+    audio: users.reduce((a, u) => a + (u.audio_seconds || 0), 0),
+    online: devices.filter((d) => d.online).length,
+  }), [users, devices]);
+
+  const shownUsers = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return q ? users.filter((u) => u.email.toLowerCase().includes(q)) : users;
+  }, [users, query]);
 
   const deleteFirmware = async (fw: AdminFirmware) => {
     if (!window.confirm(`Delete firmware ${fw.version}? This removes the .bin and the release record.`)) return;
@@ -148,211 +169,274 @@ export function AdminPage() {
     );
   }
 
+  const TABS: { id: Tab; label: string; icon: React.ReactNode; count?: number }[] = [
+    { id: 'accounts', label: 'Accounts', icon: <Users className="w-4 h-4" />, count: users.length },
+    { id: 'managers', label: 'Managers', icon: <UserCog className="w-4 h-4" /> },
+    { id: 'recorders', label: 'Recorders', icon: <Cpu className="w-4 h-4" />, count: devices.length },
+    { id: 'firmware', label: 'Firmware', icon: <HardDrive className="w-4 h-4" />, count: firmware.length },
+    { id: 'monitoring', label: 'Monitoring', icon: <Activity className="w-4 h-4" /> },
+  ];
+
   return (
     <div className="min-h-screen bg-gray-50">
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <Button
-          variant="outline"
-          onClick={() => navigate('/')}
-          className="mb-4 text-gray-600 border-gray-200 hover:bg-gray-50"
-        >
-          <ArrowLeft className="w-4 h-4 mr-2" /> Back to Dashboard
-        </Button>
-
-        <div className="flex items-center justify-between mb-6">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-violet-100 rounded-lg flex items-center justify-center">
-              <ShieldCheck className="w-6 h-6 text-violet-600" />
-            </div>
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900">Admin</h1>
-              <p className="text-gray-600">Manage every recorder and firmware release in the system</p>
-            </div>
+      {/* Header */}
+      <div className="bg-white border-b">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-4 flex items-center gap-3">
+          <button onClick={() => navigate('/')} className="text-gray-500 hover:text-gray-800" title="Back to Dashboard">
+            <ArrowLeft className="w-5 h-5" />
+          </button>
+          <div className="w-9 h-9 bg-violet-100 rounded-lg flex items-center justify-center">
+            <ShieldCheck className="w-5 h-5 text-violet-600" />
           </div>
+          <div className="flex-1">
+            <h1 className="text-xl font-bold text-gray-900 leading-tight">Admin</h1>
+            <p className="text-xs text-gray-500">Accounts, managers, recorders and firmware across the whole system</p>
+          </div>
+          <Button variant="outline" onClick={() => navigate('/oversight')} className="hidden sm:flex">
+            <Eye className="w-4 h-4 mr-2" /> View accounts
+          </Button>
           <Button variant="outline" onClick={load} disabled={busy}>
-            <RefreshCw className={`w-4 h-4 mr-2 ${busy ? 'animate-spin' : ''}`} /> Refresh
+            <RefreshCw className={`w-4 h-4 sm:mr-2 ${busy ? 'animate-spin' : ''}`} /><span className="hidden sm:inline">Refresh</span>
           </Button>
         </div>
 
-        {error && (
-          <div className="mb-4 rounded-lg bg-red-50 text-red-700 text-sm p-3">{error}</div>
+        {/* KPIs */}
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 pb-4 grid grid-cols-2 md:grid-cols-5 gap-3">
+          <Kpi icon={<Users className="w-4 h-4" />} label="Accounts" value={totals.accounts} />
+          <Kpi icon={<FileAudio className="w-4 h-4" />} label="Reports" value={totals.reports} />
+          <Kpi icon={<ShieldCheck className="w-4 h-4" />} label="SATE reports" value={totals.sateReports} />
+          <Kpi icon={<Clock className="w-4 h-4" />} label="Total audio" value={fmtHours(totals.audio)} />
+          <Kpi icon={<Cpu className="w-4 h-4" />} label="Recorders online" value={`${totals.online} / ${devices.length}`} />
+        </div>
+
+        {/* Tabs */}
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 flex gap-1 overflow-x-auto">
+          {TABS.map((t) => (
+            <button key={t.id} onClick={() => setTab(t.id)}
+              className={`flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 -mb-px whitespace-nowrap ${
+                tab === t.id ? 'border-violet-600 text-violet-700 font-medium' : 'border-transparent text-gray-500 hover:text-gray-800'}`}>
+              {t.icon}{t.label}{t.count != null && <span className="text-xs text-gray-400">{t.count}</span>}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6">
+        {error && <div className="mb-4 rounded-lg bg-red-50 text-red-700 text-sm p-3">{error}</div>}
+
+        {/* ---------------- Accounts ---------------- */}
+        {tab === 'accounts' && (
+          <>
+            <div className="flex flex-wrap items-center gap-2 mb-3">
+              <div className="flex items-center gap-2 bg-white border rounded-md px-2 flex-1 min-w-[220px]">
+                <Search className="w-4 h-4 text-gray-400" />
+                <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search accounts by email"
+                  className="w-full py-2 text-sm outline-none bg-transparent" />
+              </div>
+              <Button onClick={() => setCreating(true)} className="bg-violet-600 hover:bg-violet-700 text-white">
+                <UserPlus className="w-4 h-4 mr-2" /> Create account
+              </Button>
+            </div>
+            <div className="rounded-xl border border-gray-200 bg-white overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
+                  <tr>
+                    <th className="text-left font-semibold px-4 py-2">Account</th>
+                    <th className="text-right font-semibold px-3 py-2">Reports</th>
+                    <th className="text-right font-semibold px-3 py-2">Audio</th>
+                    <th className="text-right font-semibold px-3 py-2">Recorders</th>
+                    <th className="text-right font-semibold px-3 py-2">Last sign-in</th>
+                    <th className="px-3 py-2"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {shownUsers.length === 0 && (
+                    <tr><td colSpan={6} className="px-4 py-4 text-gray-500">{users.length ? 'No account matches.' : 'No accounts yet.'}</td></tr>
+                  )}
+                  {shownUsers.map((u) => {
+                    const notesOn = Boolean(grants?.[u.id]?.enabled);
+                    return (
+                      <tr key={u.id} className={`hover:bg-gray-50 ${u.disabled ? 'opacity-60' : ''}`}>
+                        <td className="px-4 py-2.5">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <button onClick={() => setOpenUser(u.id)} className="font-medium text-gray-900 hover:text-violet-700 text-left">
+                              {u.email || '(no email)'}
+                            </button>
+                            {u.is_admin && <Badge tone="violet">admin</Badge>}
+                            {u.is_manager && <Badge tone="blue">manager</Badge>}
+                            {u.disabled && <Badge tone="red">disabled</Badge>}
+                            {notesOn && <Badge tone="green">meeting notes</Badge>}
+                          </div>
+                          <div className="text-xs text-gray-400">
+                            joined {timeAgo(u.created_at)}
+                            {u.last_recording_at ? ` · last recording ${timeAgo(u.last_recording_at)}` : ''}
+                          </div>
+                        </td>
+                        <td className="px-3 py-2.5 text-right tabular-nums">{u.recordings ?? '—'}</td>
+                        <td className="px-3 py-2.5 text-right tabular-nums">{u.audio_seconds != null ? fmtHours(u.audio_seconds) : '—'}</td>
+                        <td className="px-3 py-2.5 text-right tabular-nums">{u.devices}</td>
+                        <td className="px-3 py-2.5 text-right text-gray-500 whitespace-nowrap">{u.last_sign_in_at ? timeAgo(u.last_sign_in_at) : 'never'}</td>
+                        <td className="px-3 py-2.5 text-right">
+                          <button onClick={() => setOpenUser(u.id)} className="text-xs px-2.5 py-1 rounded-md border hover:bg-white">Manage</button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
 
-        {/* Users & feature access */}
-        <h2 className="flex items-center gap-2 text-xl font-semibold text-gray-900 mb-1">
-          <Users className="w-5 h-5 text-gray-500" /> Users ({users.length})
-        </h2>
-        <p className="text-sm text-gray-500 mb-3">
-          Turn per-account features on or off. Meeting notes is off for every account until it
-          is granted here.
-        </p>
-        <div className="rounded-xl border border-gray-200 bg-white overflow-hidden mb-8">
-          <div className="hidden sm:grid grid-cols-[1fr_auto_auto_auto] gap-4 px-4 py-2 bg-gray-50 text-xs font-semibold uppercase tracking-wide text-gray-500">
-            <span>Account</span>
-            <span className="text-right">Recorders</span>
-            <span className="text-right">Last sign-in</span>
-            <span className="text-right">Meeting notes</span>
+        {/* ---------------- Managers ---------------- */}
+        {tab === 'managers' && <ManagersCard userEmails={users.map((u) => u.email).filter(Boolean)} />}
+
+        {/* ---------------- Recorders ---------------- */}
+        {tab === 'recorders' && (
+          <div className="rounded-xl border border-gray-200 bg-white overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
+                <tr>
+                  <th className="text-left font-semibold px-4 py-2">Device</th>
+                  <th className="text-left font-semibold px-3 py-2">Owner</th>
+                  <th className="text-left font-semibold px-3 py-2">FW</th>
+                  <th className="text-left font-semibold px-3 py-2">Battery</th>
+                  <th className="text-left font-semibold px-3 py-2">Cell</th>
+                  <th className="text-right font-semibold px-3 py-2">Recordings</th>
+                  <th className="text-left font-semibold px-3 py-2">Status</th>
+                  <th className="text-left font-semibold px-3 py-2">Last seen</th>
+                  <th className="px-3 py-2"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {devices.length === 0 && <tr><td colSpan={9} className="px-4 py-4 text-gray-500">No recorders registered.</td></tr>}
+                {devices.map((d) => (
+                  <tr key={d.id} className="hover:bg-gray-50">
+                    <td className="px-4 py-2">
+                      <div className="font-medium text-gray-900">{d.name}</div>
+                      <div className="text-xs text-gray-400 font-mono">{d.serial}</div>
+                    </td>
+                    <td className="px-3 py-2 text-gray-700">{d.owner_email || d.slp || '—'}</td>
+                    <td className="px-3 py-2 text-gray-700">{d.fw || '—'}</td>
+                    <td className={`px-3 py-2 font-medium ${batteryClass(d.battery_pct)}`}>{d.battery_pct == null ? '—' : `${d.battery_pct}%`}</td>
+                    <td className="px-3 py-2 text-gray-700 tabular-nums">{d.battery_mv == null || d.battery_mv < 0 ? '—' : `${d.battery_mv} mV`}</td>
+                    <td className="px-3 py-2 text-gray-700 text-right tabular-nums">{d.total_recordings ?? 0}</td>
+                    <td className="px-3 py-2">
+                      <span className={`inline-flex items-center gap-1.5 ${d.online ? 'text-green-600' : 'text-gray-400'}`}>
+                        <span className={`w-2 h-2 rounded-full ${d.online ? 'bg-green-500' : 'bg-gray-300'}`} />
+                        {d.online ? (d.state || 'online') : 'offline'}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-gray-500 whitespace-nowrap">{timeAgo(d.last_seen)}</td>
+                    <td className="px-3 py-2 text-right">
+                      <button onClick={() => unlinkDevice(d)} className="text-gray-400 hover:text-red-600 p-1.5" title="Unlink device">
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-          {users.length === 0 && (
-            <div className="p-4 text-sm text-gray-500">No accounts yet.</div>
-          )}
-          <div className="divide-y divide-gray-100">
-            {users.map((u) => {
-              const grant = grants?.[u.id];
-              const on = Boolean(grant?.enabled);
-              // Unknown, not off: see the `grants === null` note above.
-              const unknown = grants === null;
-              return (
-                <div key={u.id} className="grid grid-cols-[1fr_auto] sm:grid-cols-[1fr_auto_auto_auto] gap-4 items-center px-4 py-3">
+        )}
+
+        {/* ---------------- Firmware ---------------- */}
+        {tab === 'firmware' && (
+          <>
+            <FirmwarePublishCard />
+            <div className="rounded-xl border border-gray-200 bg-white divide-y divide-gray-100">
+              {firmware.length === 0 && <div className="p-4 text-sm text-gray-500">No firmware published yet.</div>}
+              {firmware.map((fw, i) => (
+                <div key={fw.id} className="flex items-center justify-between p-4">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="font-medium text-gray-900 truncate">{u.email || '(no email)'}</span>
-                      {u.is_admin && (
-                        <span className="text-xs bg-violet-100 text-violet-700 rounded px-1.5 py-0.5 shrink-0">admin</span>
-                      )}
+                      <span className="font-semibold text-gray-900">{fw.version}</span>
+                      {i === 0 && <Badge tone="green">latest</Badge>}
+                      <span className="text-xs text-gray-400">{timeAgo(fw.created_at)}</span>
                     </div>
-                    <p className="text-xs text-gray-400 truncate" title={u.id}>
-                      joined {timeAgo(u.created_at)}
-                      {grant?.notes ? ` · ${grant.notes} note${grant.notes > 1 ? 's' : ''}` : ''}
-                    </p>
+                    {fw.notes && <p className="text-sm text-gray-500 truncate">{fw.notes}</p>}
                   </div>
-                  <span className="hidden sm:block text-sm text-gray-600 text-right tabular-nums">{u.devices}</span>
-                  <span className="hidden sm:block text-sm text-gray-500 text-right">
-                    {u.last_sign_in_at ? timeAgo(u.last_sign_in_at) : 'never'}
-                  </span>
-                  <button
-                    onClick={() => setNotesAccess(u, !on)}
-                    disabled={unknown || savingUser === u.id}
-                    title={unknown ? 'The notes service did not answer — try Refresh' : on ? 'Revoke meeting notes' : 'Grant meeting notes'}
-                    className={`justify-self-end inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold transition disabled:opacity-50 ${
-                      on
-                        ? 'border-green-200 bg-green-50 text-green-700 hover:bg-green-100'
-                        : 'border-gray-200 bg-white text-gray-500 hover:bg-gray-50'
-                    }`}
-                  >
-                    {savingUser === u.id
-                      ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      : <Mic className="w-3.5 h-3.5" />}
-                    {unknown ? 'unknown' : on ? 'On' : 'Off'}
+                  <button onClick={() => deleteFirmware(fw)} className="text-gray-400 hover:text-red-600 p-2 shrink-0" title="Delete release">
+                    <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Monitoring & status */}
-        <h2 className="flex items-center gap-2 text-xl font-semibold text-gray-900 mb-3">
-          <Activity className="w-5 h-5 text-gray-500" /> Monitoring &amp; status
-        </h2>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-8">
-          {MONITORING_LINKS.map((l) => (
-            <a
-              key={l.href}
-              href={l.href}
-              target="_blank"
-              rel="noreferrer"
-              className="group rounded-xl border border-gray-200 bg-white p-4 hover:border-violet-300 hover:shadow-sm transition"
-            >
-              <div className="flex items-center justify-between">
-                <span className="font-medium text-gray-900">{l.title}</span>
-                <ExternalLink className="w-4 h-4 text-gray-400 group-hover:text-violet-600" />
-              </div>
-              <p className="text-sm text-gray-500 mt-1">{l.desc}</p>
-            </a>
-          ))}
-        </div>
-
-        {/* Firmware catalog */}
-        <h2 className="flex items-center gap-2 text-xl font-semibold text-gray-900 mb-3">
-          <HardDrive className="w-5 h-5 text-gray-500" /> Firmware
-        </h2>
-        <FirmwarePublishCard />
-        <div className="rounded-xl border border-gray-200 bg-white divide-y divide-gray-100 mb-8">
-          {firmware.length === 0 && (
-            <div className="p-4 text-sm text-gray-500">No firmware published yet.</div>
-          )}
-          {firmware.map((fw, i) => (
-            <div key={fw.id} className="flex items-center justify-between p-4">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="font-semibold text-gray-900">{fw.version}</span>
-                  {i === 0 && (
-                    <span className="text-xs bg-green-100 text-green-700 rounded px-1.5 py-0.5">latest</span>
-                  )}
-                  <span className="text-xs text-gray-400">{timeAgo(fw.created_at)}</span>
-                </div>
-                {fw.notes && <p className="text-sm text-gray-500 truncate">{fw.notes}</p>}
-              </div>
-              <button
-                onClick={() => deleteFirmware(fw)}
-                className="text-gray-400 hover:text-red-600 p-2 shrink-0"
-                title="Delete release"
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
-            </div>
-          ))}
-        </div>
-
-        {/* All devices */}
-        <h2 className="flex items-center gap-2 text-xl font-semibold text-gray-900 mb-3">
-          <Cpu className="w-5 h-5 text-gray-500" /> Recorders ({devices.length})
-        </h2>
-        <div className="rounded-xl border border-gray-200 bg-white overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 text-gray-500">
-              <tr>
-                <th className="text-left font-medium px-4 py-2">Device</th>
-                <th className="text-left font-medium px-4 py-2">Owner</th>
-                <th className="text-left font-medium px-4 py-2">FW</th>
-                <th className="text-left font-medium px-4 py-2">Battery</th>
-                <th className="text-left font-medium px-4 py-2">Cell mV</th>
-                <th className="text-left font-medium px-4 py-2">Recordings</th>
-                <th className="text-left font-medium px-4 py-2">Status</th>
-                <th className="text-left font-medium px-4 py-2">Last seen</th>
-                <th className="px-4 py-2"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {devices.length === 0 && (
-                <tr><td colSpan={9} className="px-4 py-4 text-gray-500">No recorders registered.</td></tr>
-              )}
-              {devices.map((d) => (
-                <tr key={d.id}>
-                  <td className="px-4 py-2">
-                    <div className="font-medium text-gray-900">{d.name}</div>
-                    <div className="text-xs text-gray-400">{d.serial}</div>
-                  </td>
-                  <td className="px-4 py-2 text-gray-700">{d.owner_email || d.slp || '—'}</td>
-                  <td className="px-4 py-2 text-gray-700">{d.fw || '—'}</td>
-                  <td className={`px-4 py-2 font-medium ${batteryClass(d.battery_pct)}`}>
-                    {d.battery_pct == null ? '—' : `${d.battery_pct}%`}
-                  </td>
-                  <td className="px-4 py-2 text-gray-700 tabular-nums">
-                    {d.battery_mv == null || d.battery_mv < 0 ? '—' : `${d.battery_mv} mV`}
-                  </td>
-                  <td className="px-4 py-2 text-gray-700">{d.total_recordings ?? 0}</td>
-                  <td className="px-4 py-2">
-                    <span className={`inline-flex items-center gap-1.5 ${d.online ? 'text-green-600' : 'text-gray-400'}`}>
-                      <span className={`w-2 h-2 rounded-full ${d.online ? 'bg-green-500' : 'bg-gray-300'}`} />
-                      {d.online ? (d.state || 'online') : 'offline'}
-                    </span>
-                  </td>
-                  <td className="px-4 py-2 text-gray-500">{timeAgo(d.last_seen)}</td>
-                  <td className="px-4 py-2 text-right">
-                    <button
-                      onClick={() => unlinkDevice(d)}
-                      className="text-gray-400 hover:text-red-600 p-1.5"
-                      title="Unlink device"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </td>
-                </tr>
               ))}
-            </tbody>
-          </table>
+            </div>
+          </>
+        )}
+
+        {/* ---------------- Monitoring ---------------- */}
+        {tab === 'monitoring' && (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {MONITORING_LINKS.map((l) => (
+              <a key={l.href} href={l.href} target="_blank" rel="noreferrer"
+                className="group rounded-xl border border-gray-200 bg-white p-4 hover:border-violet-300 hover:shadow-sm transition">
+                <div className="flex items-center justify-between">
+                  <span className="font-medium text-gray-900">{l.title}</span>
+                  <ExternalLink className="w-4 h-4 text-gray-400 group-hover:text-violet-600" />
+                </div>
+                <p className="text-sm text-gray-500 mt-1">{l.desc}</p>
+              </a>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {openUser && (() => {
+        const u = users.find((x) => x.id === openUser);
+        return (
+          <AccountModal userId={openUser} onClose={() => setOpenUser(null)} onChanged={load}
+            notes={u ? {
+              on: grants === null ? null : Boolean(grants[u.id]?.enabled),
+              saving: savingUser === u.id,
+              count: grants?.[u.id]?.notes,
+              toggle: (enabled) => setNotesAccess(u, enabled),
+            } : undefined} />
+        );
+      })()}
+      {creating && <CreateAccountModal onClose={() => setCreating(false)} onCreated={(id) => { setCreating(false); load(); setOpenUser(id); }} />}
+    </div>
+  );
+}
+
+function Kpi({ icon, label, value }: { icon: React.ReactNode; label: string; value: React.ReactNode }) {
+  return (
+    <div className="rounded-lg border bg-gray-50 px-3 py-2">
+      <div className="text-xs text-gray-500 flex items-center gap-1">{icon}{label}</div>
+      <div className="text-lg font-semibold text-gray-900 tabular-nums">{value}</div>
+    </div>
+  );
+}
+
+function CreateAccountModal({ onClose, onCreated }: { onClose: () => void; onCreated: (id: string) => void }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const submit = async () => {
+    setBusy(true); setError(null);
+    try { const r = await deviceApiService.adminCreateUser(email.trim(), password); onCreated(r.id); }
+    catch (e: any) { setError(String(e.message || e).replace(/^\d+ /, '')); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-5" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center mb-3">
+          <h2 className="text-lg font-semibold flex-1">Create account</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-700"><X className="w-5 h-5" /></button>
+        </div>
+        <p className="text-xs text-gray-500 mb-3">The account can sign in straight away (no confirmation email). Give the person their password.</p>
+        <div className="space-y-2">
+          <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" type="email" className="w-full border rounded-md px-2 py-2 text-sm" />
+          <input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password (8+ characters)" type="text" autoComplete="new-password" className="w-full border rounded-md px-2 py-2 text-sm" />
+        </div>
+        {error && <div className="mt-3 rounded-md bg-red-50 text-red-700 text-sm p-2">{error}</div>}
+        <div className="flex justify-end gap-2 mt-4">
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button disabled={busy || !email.includes('@') || password.length < 8} onClick={submit} className="bg-violet-600 hover:bg-violet-700 text-white">
+            {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Create'}
+          </Button>
         </div>
       </div>
     </div>

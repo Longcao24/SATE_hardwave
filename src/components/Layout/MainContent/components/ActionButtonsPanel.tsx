@@ -4,6 +4,7 @@ import { SaltExportPopup } from '@/components/Modals/SaltExportPopup';
 import { SateReportPopup } from '@/components/Modals/SateReportPopup';
 import type { Segment } from '@/services/dataService';
 import type { UndoRedoReturn } from '@/hooks/useUndoRedo';
+import type { StoredLsaReport } from '@/services/lsaReportService';
 
 interface ActionButtonsPanelProps {
   isEditable?: boolean;
@@ -14,6 +15,8 @@ interface ActionButtonsPanelProps {
   onSaveChanges?: () => void;
   onCancelEdit?: () => void;
   onShowCancelConfirmation: () => void;
+  readOnly?: boolean;
+  lsaReport?: StoredLsaReport | null;
 }
 
 export const ActionButtonsPanel: React.FC<ActionButtonsPanelProps> = ({
@@ -25,6 +28,8 @@ export const ActionButtonsPanel: React.FC<ActionButtonsPanelProps> = ({
   onSaveChanges,
   onCancelEdit,
   onShowCancelConfirmation,
+  readOnly = false,
+  lsaReport,
 }) => {
   const [showSaltExportPopup, setShowSaltExportPopup] = useState(false);
   const [showSateReportPopup, setShowSateReportPopup] = useState(false);
@@ -85,7 +90,7 @@ export const ActionButtonsPanel: React.FC<ActionButtonsPanelProps> = ({
         </button>
 
       {/* Edit Mode Toggle */}
-      {isEditable ? (
+      {readOnly ? null : isEditable ? (
         <div className="flex items-center gap-2">
           <button
             onClick={async () => {
@@ -149,6 +154,8 @@ export const ActionButtonsPanel: React.FC<ActionButtonsPanelProps> = ({
         onClose={() => setShowSateReportPopup(false)}
         recordingId={recordingId}
         transcriptData={transcriptData}
+        readOnly={readOnly}
+        initialReport={lsaReport}
       />
     </>
   );

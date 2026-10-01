@@ -53,6 +53,8 @@ const MainContent: React.FC<MainContentProps> = ({
   onAddFlag,
   onDeleteFlag,
   onUpdateFlagNote,
+  readOnly = false,
+  lsaReport,
 }) => {
   // Device flags land ~0.5s late (clinician reaction time + hardware latency), so
   // the moment the clinician meant to mark is slightly earlier. Shift every flag
@@ -182,6 +184,7 @@ const MainContent: React.FC<MainContentProps> = ({
                 onEditSave={nameEditor.handleEditSave}
                 onEditCancel={nameEditor.handleEditCancel}
                 onKeyPress={nameEditor.handleKeyPress}
+                readOnly={readOnly}
               />
 
               {/* Checked Segments Controls - Only show when in edit mode and segments are checked */}
@@ -205,6 +208,8 @@ const MainContent: React.FC<MainContentProps> = ({
                 onSaveChanges={onSaveChanges}
                 onCancelEdit={onCancelEdit}
                 onShowCancelConfirmation={() => setShowCancelConfirmation(true)}
+                readOnly={readOnly}
+                lsaReport={lsaReport}
               />
               
               {/* Second Row - Display Mode Toggle */}

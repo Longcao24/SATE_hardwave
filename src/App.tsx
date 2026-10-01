@@ -19,6 +19,7 @@ import InviteCodesPage from './components/Profile/InviteCodesPage';
 import { DevicePage } from './components/Device/DevicePage';
 import { NotesPage } from '@/components/Notes/NotesPage';
 import { AdminPage } from './components/Admin/AdminPage';
+import OversightPage from './components/Oversight/OversightPage';
 
 // Protected Route component
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -139,6 +140,16 @@ function App() {
         element={
           <ProtectedRoute>
             <NotesPage />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Oversight: READ-ONLY view of other accounts (admins: any; managers: assigned). Self-guards. */}
+      <Route
+        path="/oversight"
+        element={
+          <ProtectedRoute>
+            <OversightPage />
           </ProtectedRoute>
         }
       />

@@ -1,4 +1,4 @@
-// SATE Device API — Supabase Edge Function              [v33]
+// SATE Device API — Supabase Edge Function              [v36]
 // Replaces the mock-server's Express endpoints with a single Edge Function
 // that does internal path routing. Authenticated via Supabase JWT (users) or a
 // device key (the recorder).
@@ -52,6 +52,27 @@
 //      (and the gateway's 502 above it) simply does not apply. `storage_path` is
 //      confined to the caller's own `<user id>/` prefix and the byte count comes
 //      from Storage, never from the client.
+// v36: MANAGER EMAIL — "an account assigned to you has new reports". GET /health/manager-digest
+//      (HEALTH_ALERT_KEY-gated, read-only) lists, per manager with notify_email on, the recordings
+//      created by their assigned accounts since sate_managers.notify_cursor — account email, time
+//      and length ONLY, never a patient or a transcript. POST /health/manager-digest/ack
+//      {manager_id, until} moves the cursor, and the sate-status Worker calls it only AFTER the email
+//      was sent, so a failed send is retried rather than lost. A newly assigned account is counted
+//      only from its assignment, never its history. POST /admin/managers/:id/notify {enabled}.
+// v35: ACCOUNT MANAGEMENT for admins. GET /admin/users now carries per-account stats (recordings,
+//      SATE reports, total audio, last recording, manager, disabled); GET /admin/users/:id the detail;
+//      POST /admin/users (create), POST /admin/users/:id/password (force a new password),
+//      POST /admin/users/:id/disable {disabled} (ban — reversible, data kept), DELETE /admin/users/:id
+//      {confirm_email} (PERMANENT: auth.users deletion CASCADES to recordings, patients, sessions,
+//      devices AND billing rows; this also removes the account's audio from Storage). An admin cannot
+//      be deleted or disabled here, nor can you act on yourself. Everything is in sate_access_audit.
+// v34: OVERSIGHT — READ-ONLY cross-account viewing. An ADMIN (sate_admins) may view any account; a
+//      MANAGER (sate_managers) may view the accounts an admin assigned to them (sate_manager_members).
+//      GET /oversight/me, /oversight/users/:uid/{recordings,recordings/:rid,patients,sessions,devices}.
+//      Every read is checked against the viewer's role for THAT target and written to
+//      sate_access_audit. Deliberately not RLS: widening SELECT on recordings/patients would change what
+//      every existing query returns for an admin (the web's lists rely on RLS to mean "mine"). There is
+//      no write route here, by design. Admin manages managers at /admin/managers*.
 // v33: POST /admin/devices/release {serial, hw_serial?} — an ADMIN takes a Bluetooth device away
 //      from whichever account holds it (the holder lost the phone, left, cannot be reached). It
 //      deletes every registration of it and writes the opt-out for every account that uploaded
@@ -217,6 +238,15 @@ serve(async (req) => {
     if (!want || key !== want) return err('forbidden', 403);
     return await healthAlerts(supabase);
   }
+  // [v36] Manager "new reports" digest + ack — same secret, no user JWT.
+  if (subPath === '/health/manager-digest' || subPath === '/health/manager-digest/ack') {
+    const key = url.searchParams.get('key') || '';
+    const want = Deno.env.get('HEALTH_ALERT_KEY') || '';
+    if (!want || key !== want) return err('forbidden', 403);
+    if (subPath === '/health/manager-digest' && method === 'GET') return await managerDigest(supabase);
+    if (subPath === '/health/manager-digest/ack' && method === 'POST') return await managerDigestAck(supabase, req);
+    return err('method not allowed', 405);
+  }
 
   if (subPath === '/sessions/verify' && method === 'GET' && authHeader.startsWith('Bearer key-')) {
     return await handleSessionVerify(supabase, req);
@@ -286,6 +316,11 @@ serve(async (req) => {
       return await publishFirmware(supabase, req);
     }
 
+    // ---- [v34] Oversight: READ-ONLY viewing of another account -------------
+    if (subPath.startsWith('/oversight')) {
+      return await oversightRoute(supabase, user, subPath, method, url);
+    }
+
     // ---- Admin (system-wide management) ----------------------------------
     // Gated on the caller's email being in sate_admins. Everything here spans
     // ALL users, so it must never be reachable by a normal account.
@@ -313,6 +348,35 @@ serve(async (req) => {
       const fwMatch = subPath.match(/^\/admin\/firmware\/([^/]+)$/);
       if (fwMatch && method === 'DELETE') {
         return await adminDeleteFirmware(supabase, fwMatch[1]);
+      }
+      if (subPath === '/admin/users' && method === 'POST') {
+        return await adminCreateUser(supabase, user, req);
+      }
+      const accMatch = subPath.match(/^\/admin\/users\/([0-9a-f-]{36})(?:\/(password|disable))?$/);
+      if (accMatch && !accMatch[2] && method === 'GET') return await adminGetUser(supabase, user, accMatch[1]);
+      if (accMatch && !accMatch[2] && method === 'DELETE') return await adminDeleteUser(supabase, user, accMatch[1], req);
+      if (accMatch && accMatch[2] === 'password' && method === 'POST') return await adminSetPassword(supabase, user, accMatch[1], req);
+      if (accMatch && accMatch[2] === 'disable' && method === 'POST') return await adminSetDisabled(supabase, user, accMatch[1], req);
+      if (subPath === '/admin/managers' && method === 'GET') {
+        return await adminListManagers(supabase);
+      }
+      if (subPath === '/admin/managers' && method === 'POST') {
+        return await adminAddManager(supabase, user, req);
+      }
+      const mgrMatch = subPath.match(/^\/admin\/managers\/([0-9a-f-]{36})$/);
+      if (mgrMatch && method === 'DELETE') {
+        return await adminRemoveManager(supabase, user, mgrMatch[1]);
+      }
+      const notifyMatch = subPath.match(/^\/admin\/managers\/([0-9a-f-]{36})\/notify$/);
+      if (notifyMatch && method === 'POST') {
+        return await adminSetManagerNotify(supabase, user, notifyMatch[1], req);
+      }
+      const memMatch = subPath.match(/^\/admin\/managers\/([0-9a-f-]{36})\/members(?:\/([0-9a-f-]{36}))?$/);
+      if (memMatch && method === 'POST' && !memMatch[2]) {
+        return await adminAssignMember(supabase, user, memMatch[1], req);
+      }
+      if (memMatch && method === 'DELETE' && memMatch[2]) {
+        return await adminUnassignMember(supabase, user, memMatch[1], memMatch[2]);
       }
       if (subPath === '/admin/devices/release' && method === 'POST') {
         return await adminForceRelease(supabase, user, req);
@@ -543,6 +607,245 @@ async function externalOwner(supabase: any, userId: string, serial: string, hw: 
   return { owner: 'other', owner_email: email, since, source };
 }
 
+// ============================================================================
+// [v34] OVERSIGHT — read-only cross-account viewing
+// ============================================================================
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+async function emailOf(supabase: any, uid: string): Promise<string | null> {
+  try { const { data } = await supabase.auth.admin.getUserById(uid); return data?.user?.email ?? null; }
+  catch { return null; }
+}
+
+/** The viewer's oversight role. Admin wins over manager. */
+async function oversightRole(supabase: any, user: any): Promise<'admin' | 'manager' | 'none'> {
+  if (await isAdmin(supabase, user.email)) return 'admin';
+  const { data } = await supabase.from('sate_managers').select('user_id').eq('user_id', user.id).maybeSingle();
+  return data ? 'manager' : 'none';
+}
+
+/** May `user` view `target`? Returns the role that allows it, or null. */
+async function canView(supabase: any, user: any, target: string): Promise<'admin' | 'manager' | null> {
+  if (target === user.id) return null; // your own account is the app's job, not oversight's
+  const role = await oversightRole(supabase, user);
+  if (role === 'admin') return 'admin';
+  if (role === 'manager') {
+    const { data } = await supabase.from('sate_manager_members').select('member_id')
+      .eq('manager_id', user.id).eq('member_id', target).maybeSingle();
+    if (data) return 'manager';
+  }
+  return null;
+}
+
+async function auditAccess(supabase: any, user: any, role: string, target: string, resource: string, resourceId?: string | null) {
+  const { error } = await supabase.from('sate_access_audit').insert({
+    viewer_id: user.id, viewer_email: user.email ?? null, role,
+    target_id: target, target_email: await emailOf(supabase, target),
+    resource, resource_id: resourceId ?? null,
+  });
+  // A view that cannot be audited is not served: the record IS the permission's price.
+  if (error) throw new Error('access audit failed: ' + error.message);
+}
+
+async function oversightRoute(supabase: any, user: any, subPath: string, method: string, url: URL) {
+  if (method !== 'GET') return err('Oversight is read-only', 405);
+  if (subPath === '/oversight/me') {
+    const role = await oversightRole(supabase, user);
+    let targets: { id: string; email: string | null }[] = [];
+    if (role === 'admin') {
+      const all: any[] = [];
+      for (let page = 1; ; page++) {
+        const { data, error } = await supabase.auth.admin.listUsers({ page, perPage: 1000 });
+        if (error) throw new Error(error.message);
+        all.push(...(data?.users || []));
+        if (!data?.users?.length || data.users.length < 1000) break;
+      }
+      targets = all.filter((u) => u.id !== user.id).map((u) => ({ id: u.id, email: u.email ?? null }));
+    } else if (role === 'manager') {
+      const { data, error } = await supabase.from('sate_manager_members').select('member_id').eq('manager_id', user.id);
+      if (error) throw new Error(error.message);
+      for (const m of data || []) targets.push({ id: m.member_id, email: await emailOf(supabase, m.member_id) });
+    }
+    targets.sort((a, b) => (a.email || '').localeCompare(b.email || ''));
+    return json({ role, targets });
+  }
+
+  const m = subPath.match(/^\/oversight\/users\/([0-9a-f-]{36})\/(recordings|patients|sessions|devices)(?:\/([0-9a-f-]{36}))?$/);
+  if (!m || !UUID_RE.test(m[1])) return err('Not found', 404);
+  const [, target, kind, rid] = m;
+  const role = await canView(supabase, user, target);
+  if (!role) return err('Forbidden', 403);
+
+  if (kind === 'recordings' && !rid) {
+    await auditAccess(supabase, user, role, target, 'recordings');
+    const { data, error } = await supabase.from('recordings')
+      .select('id, recording_name, file_name, created_at, updated_at, duration, patient_id, protocol, needs_review, segments_edited, version, source_session_id')
+      .eq('user_id', target).order('created_at', { ascending: false }).limit(1000);
+    if (error) throw new Error(error.message);
+    return json(data || []);
+  }
+  if (kind === 'recordings' && rid) {
+    if (!UUID_RE.test(rid)) return err('Not found', 404);
+    const { data: rec, error } = await supabase.from('recordings').select('*').eq('id', rid).eq('user_id', target).maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!rec) return err('Not found', 404);
+    await auditAccess(supabase, user, role, target, 'recording', rid);
+    let audio_url: string | null = null;
+    if (rec.file_path) {
+      const { data: signed } = await supabase.storage.from('recordings').createSignedUrl(rec.file_path, 3600);
+      audio_url = signed?.signedUrl ?? null;
+    }
+    return json({ ...rec, audio_url });
+  }
+  if (kind === 'patients') {
+    await auditAccess(supabase, user, role, target, 'patients');
+    const { data, error } = await supabase.from('patients').select('*').eq('slp_id', target).order('created_at', { ascending: false });
+    if (error) throw new Error(error.message);
+    return json(data || []);
+  }
+  if (kind === 'sessions') {
+    await auditAccess(supabase, user, role, target, 'sessions');
+    return await listSessions(supabase, target, url.searchParams.get('device'), url.searchParams.get('limit'));
+  }
+  if (kind === 'devices') {
+    await auditAccess(supabase, user, role, target, 'devices');
+    return await listDevices(supabase, target, true);
+  }
+  return err('Not found', 404);
+}
+
+async function adminListManagers(supabase: any) {
+  const { data: mgrs, error } = await supabase.from('sate_managers').select('user_id, created_at, notify_email');
+  if (error) throw new Error(error.message);
+  const { data: mems, error: e2 } = await supabase.from('sate_manager_members').select('manager_id, member_id, created_at');
+  if (e2) throw new Error(e2.message);
+  const out = [];
+  for (const g of mgrs || []) {
+    const members = [];
+    for (const x of (mems || []).filter((x: any) => x.manager_id === g.user_id)) {
+      members.push({ id: x.member_id, email: await emailOf(supabase, x.member_id), since: x.created_at });
+    }
+    out.push({ id: g.user_id, email: await emailOf(supabase, g.user_id), since: g.created_at,
+      notify_email: g.notify_email !== false, members });
+  }
+  out.sort((a: any, b: any) => (a.email || '').localeCompare(b.email || ''));
+  return json(out);
+}
+
+async function adminSetManagerNotify(supabase: any, admin: any, managerId: string, req: Request) {
+  const body = await req.json().catch(() => ({}));
+  if (typeof body?.enabled !== 'boolean') return err('enabled (boolean) required', 400);
+  // Switching it back ON restarts the cursor, so the email never mails the backlog from while it was off.
+  const patch: Record<string, unknown> = { notify_email: body.enabled };
+  if (body.enabled) patch.notify_cursor = new Date().toISOString();
+  const { data, error } = await supabase.from('sate_managers').update(patch).eq('user_id', managerId).select('user_id');
+  if (error) throw new Error(error.message);
+  if (!data?.length) return err('Not a manager', 404);
+  await auditAccess(supabase, admin, 'admin', managerId, 'manager_change', `new-report email ${body.enabled ? 'on' : 'off'}`);
+  return json({ ok: true, notify_email: body.enabled });
+}
+
+// [v36] Per manager: the new recordings of their assigned accounts since the cursor.
+// Snapshot `until` is taken 60 s in the past: a recording's created_at is set when its insert
+// starts, so a row can become visible a moment after a later timestamp was read — counting only
+// up to (now - 60 s) and starting the next window there means such a row is never skipped.
+async function managerDigest(supabase: any) {
+  const until = new Date(Date.now() - 60_000).toISOString();
+  const { data: mgrs, error } = await supabase.from('sate_managers')
+    .select('user_id, notify_cursor').eq('notify_email', true);
+  if (error) throw new Error(error.message);
+  const { data: mems, error: e2 } = await supabase.from('sate_manager_members').select('manager_id, member_id, created_at');
+  if (e2) throw new Error(e2.message);
+
+  const out = [];
+  for (const m of mgrs || []) {
+    const t = (v: string) => Date.parse(v);
+    if (!(t(m.notify_cursor) < t(until))) continue;
+    const accounts = [];
+    for (const x of (mems || []).filter((y: any) => y.manager_id === m.user_id)) {
+      // Only what was recorded since BOTH the cursor and the assignment.
+      const from = t(x.created_at) > t(m.notify_cursor) ? x.created_at : m.notify_cursor;
+      if (!(t(from) < t(until))) continue;
+      const { data: recs, count, error: e3 } = await supabase.from('recordings')
+        .select('created_at, duration', { count: 'exact' })
+        .eq('user_id', x.member_id).gt('created_at', from).lte('created_at', until)
+        .order('created_at', { ascending: false }).limit(10);
+      if (e3) throw new Error(e3.message);
+      if (!count) continue;
+      accounts.push({ id: x.member_id, email: await emailOf(supabase, x.member_id), count,
+        latest: (recs || []).map((r: any) => ({ created_at: r.created_at, duration: r.duration ?? null })) });
+    }
+    const email = await emailOf(supabase, m.user_id);
+    // Nothing new still advances nothing: the cursor only moves when an email is acked, and a
+    // window with no recordings stays open (it is cheap — one count per assigned account).
+    if (accounts.length && email) out.push({ manager_id: m.user_id, email, until, accounts });
+  }
+  return json({ until, managers: out });
+}
+
+async function managerDigestAck(supabase: any, req: Request) {
+  const body = await req.json().catch(() => ({}));
+  const id = typeof body?.manager_id === 'string' && UUID_RE.test(body.manager_id) ? body.manager_id : null;
+  const until = typeof body?.until === 'string' && !Number.isNaN(Date.parse(body.until)) ? new Date(body.until).toISOString() : null;
+  if (!id || !until) return err('manager_id and until required', 400);
+  if (Date.parse(until) > Date.now()) return err('until is in the future', 400);
+  // Only forward: a late or repeated ack can never re-open a window that was already mailed.
+  const { data, error } = await supabase.from('sate_managers').update({ notify_cursor: until })
+    .eq('user_id', id).lt('notify_cursor', until).select('user_id');
+  if (error) throw new Error(error.message);
+  return json({ ok: true, moved: !!data?.length });
+}
+
+async function resolveUserId(supabase: any, body: any): Promise<string | null> {
+  if (typeof body?.user_id === 'string' && UUID_RE.test(body.user_id)) return body.user_id;
+  const email = typeof body?.email === 'string' ? body.email.trim().toLowerCase() : '';
+  if (!email) return null;
+  for (let page = 1; ; page++) {
+    const { data, error } = await supabase.auth.admin.listUsers({ page, perPage: 1000 });
+    if (error) throw new Error(error.message);
+    const hit = (data?.users || []).find((u: any) => (u.email || '').toLowerCase() === email);
+    if (hit) return hit.id;
+    if (!data?.users?.length || data.users.length < 1000) return null;
+  }
+}
+
+async function adminAddManager(supabase: any, admin: any, req: Request) {
+  const uid = await resolveUserId(supabase, await req.json());
+  if (!uid) return err('No such account', 404);
+  const { error } = await supabase.from('sate_managers').upsert({ user_id: uid, created_by: admin.id }, { onConflict: 'user_id' });
+  if (error) throw new Error(error.message);
+  await auditAccess(supabase, admin, 'admin', uid, 'manager_change', 'granted manager');
+  return json({ ok: true, id: uid });
+}
+
+async function adminRemoveManager(supabase: any, admin: any, managerId: string) {
+  const { error } = await supabase.from('sate_managers').delete().eq('user_id', managerId);
+  if (error) throw new Error(error.message);
+  await auditAccess(supabase, admin, 'admin', managerId, 'manager_change', 'revoked manager');
+  return noContent();
+}
+
+async function adminAssignMember(supabase: any, admin: any, managerId: string, req: Request) {
+  const { data: g } = await supabase.from('sate_managers').select('user_id').eq('user_id', managerId).maybeSingle();
+  if (!g) return err('Not a manager', 404);
+  const uid = await resolveUserId(supabase, await req.json());
+  if (!uid) return err('No such account', 404);
+  if (uid === managerId) return err('A manager cannot be assigned to themselves', 400);
+  const { error } = await supabase.from('sate_manager_members')
+    .upsert({ manager_id: managerId, member_id: uid, assigned_by: admin.id }, { onConflict: 'manager_id,member_id' });
+  if (error) throw new Error(error.message);
+  await auditAccess(supabase, admin, 'admin', uid, 'manager_change', `assigned to manager ${managerId}`);
+  return json({ ok: true, id: uid });
+}
+
+async function adminUnassignMember(supabase: any, admin: any, managerId: string, memberId: string) {
+  const { error } = await supabase.from('sate_manager_members').delete().eq('manager_id', managerId).eq('member_id', memberId);
+  if (error) throw new Error(error.message);
+  await auditAccess(supabase, admin, 'admin', memberId, 'manager_change', `unassigned from manager ${managerId}`);
+  return noContent();
+}
+
 /**
  * [v33] Admin force-release: free a Bluetooth device from EVERY account that holds it.
  * Registrations are deleted; every account that uploaded from it gets the opt-out that
@@ -613,7 +916,7 @@ const EXTERNAL_LABEL: Record<string, string> = {
   sonic: 'SonicNote',
 };
 
-async function listDevices(supabase: any, userId: string) {
+async function listDevices(supabase: any, userId: string, readOnly = false) {
   // Mark a RECORDER offline when its heartbeat goes quiet.
   //
   // [v25] `kind is null` restricts this to real recorders. An external device is
@@ -622,10 +925,13 @@ async function listDevices(supabase: any, userId: string) {
   // to "Offline" permanently, which reads as broken hardware rather than as
   // "this one works differently".
   const cutoff = new Date(Date.now() - 45000).toISOString();
-  await supabase.from('sate_devices')
-    .update({ online: false, state: 'idle' })
-    .eq('user_id', userId).lt('last_seen', cutoff).eq('online', true)
-    .is('kind', null);
+  // [v34] Oversight passes readOnly: viewing someone's devices must not write to them.
+  if (!readOnly) {
+    await supabase.from('sate_devices')
+      .update({ online: false, state: 'idle' })
+      .eq('user_id', userId).lt('last_seen', cutoff).eq('online', true)
+      .is('kind', null);
+  }
   const { data, error } = await supabase.from('sate_devices')
     .select('*').eq('user_id', userId).order('created_at', { ascending: true });
   if (error) throw new Error(error.message);
@@ -1155,22 +1461,53 @@ async function adminListDevices(supabase: any) {
 // [v21] All accounts, with the number of recorders each one owns.
 // The uuid is the point: a per-account feature grant is keyed on the Supabase auth
 // id, and asking a user to read their own uuid out of a JWT is not a workflow.
-async function adminListUsers(supabase: any) {
+async function allAuthUsers(supabase: any): Promise<any[]> {
   const users: any[] = [];
-  let page = 1;
-  for (;;) {
+  for (let page = 1; ; page++) {
     const { data, error } = await supabase.auth.admin.listUsers({ page, perPage: 1000 });
     if (error) throw new Error(error.message);
     if (!data?.users?.length) break;
     users.push(...data.users);
     if (data.users.length < 1000) break;
-    page++;
   }
+  return users;
+}
+
+/** [v35] Every recording's owner, length and whether it has a SATE report — paged (PostgREST caps a page). */
+async function recordingStats(supabase: any, userId?: string) {
+  const per: Record<string, { recordings: number; sate_reports: number; audio_seconds: number; last_recording_at: string | null }> = {};
+  for (let from = 0; ; from += 1000) {
+    let q = supabase.from('recordings').select('user_id, duration, created_at, lsa:lsa_report->>generated_at')
+      .order('id').range(from, from + 999);
+    if (userId) q = q.eq('user_id', userId);
+    const { data, error } = await q;
+    if (error) throw new Error(error.message);
+    for (const r of data || []) {
+      const x = per[r.user_id] ||= { recordings: 0, sate_reports: 0, audio_seconds: 0, last_recording_at: null };
+      x.recordings++;
+      if (r.lsa) x.sate_reports++;
+      x.audio_seconds += Number(r.duration) || 0;
+      if (!x.last_recording_at || r.created_at > x.last_recording_at) x.last_recording_at = r.created_at;
+    }
+    if (!data || data.length < 1000) break;
+  }
+  return per;
+}
+
+function isBanned(u: any): boolean {
+  return !!u.banned_until && Date.parse(u.banned_until) > Date.now();
+}
+
+async function adminListUsers(supabase: any) {
+  const users = await allAuthUsers(supabase);
   const { data: devs } = await supabase.from('sate_devices').select('user_id');
   const deviceCount: Record<string, number> = {};
   for (const d of devs || []) deviceCount[d.user_id] = (deviceCount[d.user_id] || 0) + 1;
   const { data: admins } = await supabase.from('sate_admins').select('email');
   const adminSet = new Set((admins || []).map((a: any) => (a.email || '').toLowerCase()));
+  const { data: mgrs } = await supabase.from('sate_managers').select('user_id');
+  const mgrSet = new Set((mgrs || []).map((m: any) => m.user_id));
+  const stats = await recordingStats(supabase);
 
   return json(users.map((u) => ({
     id: u.id,
@@ -1179,7 +1516,128 @@ async function adminListUsers(supabase: any) {
     last_sign_in_at: u.last_sign_in_at || null,
     devices: deviceCount[u.id] || 0,
     is_admin: adminSet.has((u.email || '').toLowerCase()),
+    is_manager: mgrSet.has(u.id),
+    disabled: isBanned(u),
+    recordings: stats[u.id]?.recordings || 0,
+    sate_reports: stats[u.id]?.sate_reports || 0,
+    audio_seconds: Math.round(stats[u.id]?.audio_seconds || 0),
+    last_recording_at: stats[u.id]?.last_recording_at || null,
   })).sort((a, b) => a.email.localeCompare(b.email)));
+}
+
+// ---- [v35] account management (admin) ----------------------------------------
+
+async function adminTarget(supabase: any, admin: any, id: string) {
+  if (!UUID_RE.test(id)) return { error: err('Not found', 404) };
+  const { data, error } = await supabase.auth.admin.getUserById(id);
+  if (error || !data?.user) return { error: err('No such account', 404) };
+  const u = data.user;
+  const targetIsAdmin = await isAdmin(supabase, u.email);
+  return { u, targetIsAdmin, self: id === admin.id };
+}
+
+async function adminGetUser(supabase: any, admin: any, id: string) {
+  const t = await adminTarget(supabase, admin, id);
+  if (t.error) return t.error;
+  const [stats, pats, sess, devs, mgr] = await Promise.all([
+    recordingStats(supabase, id),
+    supabase.from('patients').select('id', { count: 'exact', head: true }).eq('slp_id', id),
+    supabase.from('sate_device_sessions').select('id', { count: 'exact', head: true }).eq('user_id', id),
+    supabase.from('sate_devices').select('id', { count: 'exact', head: true }).eq('user_id', id),
+    supabase.from('sate_managers').select('user_id').eq('user_id', id).maybeSingle(),
+  ]);
+  const st = stats[id] || { recordings: 0, sate_reports: 0, audio_seconds: 0, last_recording_at: null };
+  return json({
+    id, email: t.u.email || '', created_at: t.u.created_at, last_sign_in_at: t.u.last_sign_in_at || null,
+    email_confirmed_at: t.u.email_confirmed_at || null, disabled: isBanned(t.u),
+    is_admin: t.targetIsAdmin, is_manager: !!mgr.data,
+    stats: {
+      recordings: st.recordings, sate_reports: st.sate_reports, audio_seconds: Math.round(st.audio_seconds),
+      last_recording_at: st.last_recording_at, patients: pats.count || 0, sessions: sess.count || 0, devices: devs.count || 0,
+    },
+  });
+}
+
+const PASSWORD_MIN = 8;
+
+async function adminCreateUser(supabase: any, admin: any, req: Request) {
+  const { email, password } = await req.json().catch(() => ({}));
+  const e = typeof email === 'string' ? email.trim().toLowerCase() : '';
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) return err('A valid email is required', 400);
+  if (typeof password !== 'string' || password.length < PASSWORD_MIN) return err(`Password must be at least ${PASSWORD_MIN} characters`, 400);
+  const { data, error } = await supabase.auth.admin.createUser({ email: e, password, email_confirm: true });
+  if (error) return err(error.message, 400);
+  await auditAccess(supabase, admin, 'admin', data.user.id, 'account_change', 'created account');
+  return json({ ok: true, id: data.user.id, email: e });
+}
+
+async function adminSetPassword(supabase: any, admin: any, id: string, req: Request) {
+  const t = await adminTarget(supabase, admin, id);
+  if (t.error) return t.error;
+  if (t.self) return err('Change your own password from your profile', 400);
+  const { password } = await req.json().catch(() => ({}));
+  if (typeof password !== 'string' || password.length < PASSWORD_MIN) return err(`Password must be at least ${PASSWORD_MIN} characters`, 400);
+  const { error } = await supabase.auth.admin.updateUserById(id, { password });
+  if (error) return err(error.message, 400);
+  await auditAccess(supabase, admin, 'admin', id, 'account_change', 'password reset by admin');
+  return json({ ok: true });
+}
+
+async function adminSetDisabled(supabase: any, admin: any, id: string, req: Request) {
+  const t = await adminTarget(supabase, admin, id);
+  if (t.error) return t.error;
+  if (t.self) return err('You cannot disable your own account', 400);
+  if (t.targetIsAdmin) return err('An admin cannot be disabled here — remove them from sate_admins first', 400);
+  const { disabled } = await req.json().catch(() => ({}));
+  // ~100 years = "until an admin re-enables it". 'none' lifts it. Data is untouched either way.
+  const { error } = await supabase.auth.admin.updateUserById(id, { ban_duration: disabled ? '876000h' : 'none' });
+  if (error) return err(error.message, 400);
+  await auditAccess(supabase, admin, 'admin', id, 'account_change', disabled ? 'disabled account' : 're-enabled account');
+  return json({ ok: true, disabled: !!disabled });
+}
+
+/** Every object under `<prefix>/` in a bucket (Storage lists one folder level at a time). */
+async function listObjects(supabase: any, bucket: string, prefix: string): Promise<string[]> {
+  const out: string[] = [];
+  for (let offset = 0; ; offset += 1000) {
+    const { data, error } = await supabase.storage.from(bucket).list(prefix, { limit: 1000, offset });
+    if (error || !data?.length) break;
+    for (const o of data) {
+      const path = `${prefix}/${o.name}`;
+      if (o.id === null) out.push(...await listObjects(supabase, bucket, path)); // a folder
+      else out.push(path);
+    }
+    if (data.length < 1000) break;
+  }
+  return out;
+}
+
+async function adminDeleteUser(supabase: any, admin: any, id: string, req: Request) {
+  const t = await adminTarget(supabase, admin, id);
+  if (t.error) return t.error;
+  if (t.self) return err('You cannot delete your own account', 400);
+  if (t.targetIsAdmin) return err('An admin cannot be deleted here — remove them from sate_admins first', 400);
+  const { confirm_email } = await req.json().catch(() => ({}));
+  if (typeof confirm_email !== 'string' || confirm_email.trim().toLowerCase() !== (t.u.email || '').toLowerCase()) {
+    return err('Type the account email exactly to confirm', 400);
+  }
+  // Audit BEFORE: once the account is gone there is nothing left to say whose it was.
+  const st = (await recordingStats(supabase, id))[id];
+  await auditAccess(supabase, admin, 'admin', id, 'account_change',
+    `DELETED account ${t.u.email} (${st?.recordings || 0} recordings, ${Math.round((st?.audio_seconds || 0) / 60)} min audio)`);
+  // The audio is not covered by the database cascade: remove it explicitly, or it is orphaned
+  // clinical audio nobody can see or delete.
+  let removed = 0;
+  for (const [bucket, prefix] of [['recordings', id], ['device-sessions', id], ['device-sessions', `u_${id}`]] as const) {
+    const paths = await listObjects(supabase, bucket, prefix);
+    for (let i = 0; i < paths.length; i += 100) {
+      const { error } = await supabase.storage.from(bucket).remove(paths.slice(i, i + 100));
+      if (!error) removed += Math.min(100, paths.length - i);
+    }
+  }
+  const { error } = await supabase.auth.admin.deleteUser(id);
+  if (error) return err(`Audio removed (${removed} files) but the account could not be deleted: ${error.message}`, 500);
+  return json({ ok: true, removed_files: removed });
 }
 
 async function adminListFirmware(supabase: any) {
