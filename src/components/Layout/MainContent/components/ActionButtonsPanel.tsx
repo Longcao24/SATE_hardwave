@@ -17,6 +17,8 @@ interface ActionButtonsPanelProps {
   onShowCancelConfirmation: () => void;
   readOnly?: boolean;
   lsaReport?: StoredLsaReport | null;
+  lsaAllowGenerate?: boolean;
+  onSaveLsaReport?: (stored: StoredLsaReport) => Promise<StoredLsaReport | void>;
 }
 
 export const ActionButtonsPanel: React.FC<ActionButtonsPanelProps> = ({
@@ -30,6 +32,8 @@ export const ActionButtonsPanel: React.FC<ActionButtonsPanelProps> = ({
   onShowCancelConfirmation,
   readOnly = false,
   lsaReport,
+  lsaAllowGenerate,
+  onSaveLsaReport,
 }) => {
   const [showSaltExportPopup, setShowSaltExportPopup] = useState(false);
   const [showSateReportPopup, setShowSateReportPopup] = useState(false);
@@ -156,6 +160,8 @@ export const ActionButtonsPanel: React.FC<ActionButtonsPanelProps> = ({
         transcriptData={transcriptData}
         readOnly={readOnly}
         initialReport={lsaReport}
+        allowGenerate={lsaAllowGenerate}
+        saveReport={onSaveLsaReport}
       />
     </>
   );

@@ -54,6 +54,9 @@ export function OversightReportView({ ownerId, ownerEmail, rec, patient, onBack,
     rec.flag_notes && typeof rec.flag_notes === 'object' && !Array.isArray(rec.flag_notes) ? rec.flag_notes : {};
 
   const [activeFilters, setActiveFilters] = useState<string[]>([]);
+  // The report on screen: what was loaded, or one just generated here (so it shows without a reload).
+  const [lsa, setLsa] = useState<StoredLsaReport | null>((rec.lsa_report as StoredLsaReport) || null);
+  useEffect(() => { setLsa((rec.lsa_report as StoredLsaReport) || null); }, [rec]);
   const [selectedSpeaker, setSelectedSpeaker] = useState<string | undefined>(undefined);
   useEffect(() => { setActiveFilters(availableErrorTypes); }, [availableErrorTypes]);
 
@@ -94,7 +97,7 @@ export function OversightReportView({ ownerId, ownerEmail, rec, patient, onBack,
         <span className="ml-auto inline-flex items-center gap-1 text-xs text-violet-700">
           <Eye className="w-3.5 h-3.5" /> Read-only · this view is logged
         </span>
-        <ExportMenu ownerId={ownerId} rec={rec} patient={patient} />
+        <ExportMenu ownerId={ownerId} rec={rec} patient={patient} hasLsa={!!lsa?.response} />
       </div>
 
       <div className="flex flex-1 min-h-0 overflow-hidden relative">
@@ -136,7 +139,14 @@ export function OversightReportView({ ownerId, ownerEmail, rec, patient, onBack,
             flags={flags}
             flagNotes={flagNotes}
             readOnly
-            lsaReport={(rec.lsa_report as StoredLsaReport) || null}
+            lsaReport={lsa}
+            // [v43] The one write oversight allows: a SATE Report where there is none.
+            lsaAllowGenerate={!lsa}
+            onSaveLsaReport={async (stored) => {
+              const r = await oversightService.saveLsaReport(ownerId, rec.id, stored);
+              setLsa(r.lsa_report as StoredLsaReport);
+              return r.lsa_report as StoredLsaReport;
+            }}
           />
 
           {sidebar.rightSidebarVisible ? (
@@ -265,14 +275,13 @@ function saveBlob(content: BlobPart, type: string, name: string) {
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
-function ExportMenu({ ownerId, rec, patient }: {
-  ownerId: string; rec: Record<string, any>; patient?: string;
+function ExportMenu({ ownerId, rec, patient, hasLsa }: {
+  ownerId: string; rec: Record<string, any>; patient?: string; hasLsa: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const base = safeName(recordingLabel(rec.recording_name || rec.file_name) || rec.id);
-  const hasLsa = !!(rec.lsa_report && rec.lsa_report.response);
 
   const run = async (kind: 'audio' | 'lsa' | 'metrics' | 'transcript') => {
     setBusy(kind); setErr(null);

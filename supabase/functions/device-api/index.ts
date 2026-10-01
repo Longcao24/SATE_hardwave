@@ -1,4 +1,4 @@
-// SATE Device API — Supabase Edge Function              [v42]
+// SATE Device API — Supabase Edge Function              [v43]
 // Replaces the mock-server's Express endpoints with a single Edge Function
 // that does internal path routing. Authenticated via Supabase JWT (users) or a
 // device key (the recorder).
@@ -52,6 +52,12 @@
 //      (and the gateway's 502 above it) simply does not apply. `storage_path` is
 //      confined to the caller's own `<user id>/` prefix and the byte count comes
 //      from Storage, never from the client.
+// v43: A MANAGER (or admin) MAY GENERATE THE SATE REPORT of an assigned recording that has NONE —
+//      the one write oversight allows. POST /oversight/users/:uid/recordings/:rid/lsa-report {report}:
+//      same per-target check, audited (`generate_lsa`) BEFORE the write, and the write is conditional on
+//      lsa_report still being NULL, so it can never replace a clinician's report (or their edits) and two
+//      people pressing Generate at once cannot overwrite each other (409). The stored report is stamped
+//      `generated_by {email, role, at}`. Editing the drafted prose stays the clinician's.
 // v42: the `lsa` export also carries the full transcript, so the SATE Report JSON stands on its own.
 // v41: OVERSIGHT EXPORT `transcript` — the transcript (segments with their annotations), the stored
 //      analysis and issue counts, and the flags, for the "Transcript + metrics (JSON)" export. Same
@@ -358,7 +364,7 @@ serve(async (req) => {
 
     // ---- [v34] Oversight: READ-ONLY viewing of another account -------------
     if (subPath.startsWith('/oversight')) {
-      return await oversightRoute(supabase, user, subPath, method, url);
+      return await oversightRoute(supabase, user, subPath, method, url, req);
     }
 
     // ---- Admin (system-wide management) ----------------------------------
@@ -768,7 +774,10 @@ async function auditAccess(supabase: any, user: any, role: string, target: strin
   if (error) throw new Error('access audit failed: ' + error.message);
 }
 
-async function oversightRoute(supabase: any, user: any, subPath: string, method: string, url: URL) {
+async function oversightRoute(supabase: any, user: any, subPath: string, method: string, url: URL, req?: Request) {
+  // [v43] The ONE write: generating a SATE Report where there is none.
+  const gen = subPath.match(/^\/oversight\/users\/([0-9a-f-]{36})\/recordings\/([0-9a-f-]{36})\/lsa-report$/);
+  if (gen && method === 'POST' && req) return await oversightGenerateLsa(supabase, user, gen[1], gen[2], req);
   if (method !== 'GET') return err('Oversight is read-only', 405);
   if (subPath === '/oversight/me') {
     const role = await oversightRole(supabase, user);
@@ -836,6 +845,34 @@ async function oversightRoute(supabase: any, user: any, subPath: string, method:
     return await listDevices(supabase, target, true);
   }
   return err('Not found', 404);
+}
+
+async function oversightGenerateLsa(supabase: any, user: any, target: string, rid: string, req: Request) {
+  if (!UUID_RE.test(target) || !UUID_RE.test(rid)) return err('Not found', 404);
+  const role = await canView(supabase, user, target);
+  if (!role) return err('Forbidden', 403);
+  const raw = await req.text();
+  if (raw.length > 1_000_000) return err('report too large', 413);
+  let body: any;
+  try { body = JSON.parse(raw); } catch { return err('invalid JSON', 400); }
+  const report = body?.report;
+  if (!report || typeof report !== 'object' || !report.response?.analysis || !report.sample || !report.generated_at) {
+    return err('report must be a generated SATE Report', 400);
+  }
+  const { data: rec, error } = await supabase.from('recordings')
+    .select('id, lsa_report').eq('id', rid).eq('user_id', target).maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!rec) return err('Not found', 404);
+  if (rec.lsa_report) return err('This recording already has a SATE Report', 409);
+  // Audit FIRST: a write to someone else's clinical record that cannot be logged does not happen.
+  await auditAccess(supabase, user, role, target, 'generate_lsa', rid);
+  const stored = { ...report, edits: undefined, edited_at: null,
+    generated_by: { email: user.email ?? null, role, at: new Date().toISOString() } };
+  const { data: upd, error: ue } = await supabase.from('recordings')
+    .update({ lsa_report: stored }).eq('id', rid).eq('user_id', target).is('lsa_report', null).select('id');
+  if (ue) throw new Error(ue.message);
+  if (!upd?.length) return err('This recording already has a SATE Report', 409);
+  return json({ ok: true, lsa_report: stored });
 }
 
 async function oversightExport(supabase: any, user: any, target: string, rid: string, type: 'audio' | 'lsa' | 'metrics' | 'transcript') {

@@ -55,6 +55,8 @@ const MainContent: React.FC<MainContentProps> = ({
   onUpdateFlagNote,
   readOnly = false,
   lsaReport,
+  lsaAllowGenerate,
+  onSaveLsaReport,
 }) => {
   // Device flags land ~0.5s late (clinician reaction time + hardware latency), so
   // the moment the clinician meant to mark is slightly earlier. Shift every flag
@@ -210,6 +212,8 @@ const MainContent: React.FC<MainContentProps> = ({
                 onShowCancelConfirmation={() => setShowCancelConfirmation(true)}
                 readOnly={readOnly}
                 lsaReport={lsaReport}
+                lsaAllowGenerate={lsaAllowGenerate}
+                onSaveLsaReport={onSaveLsaReport}
               />
               
               {/* Second Row - Display Mode Toggle */}

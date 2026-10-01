@@ -184,6 +184,9 @@ export interface StoredLsaReport {
   /** The reviewing clinician's corrections, applied over `response` when rendering. */
   edits?: LsaReportEdits;
   edited_at?: string | null;
+  /** [device-api v43] Set when someone other than the account owner generated it (a manager or admin,
+   *  from oversight). Absent for a report the clinician made themselves. */
+  generated_by?: { email: string | null; role: string; at: string };
   /** The service's response minus `latex` — the app renders its own HTML. */
   response: Omit<LsaReportResponse, 'latex' | 'pdf_base64'>;
 }

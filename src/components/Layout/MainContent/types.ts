@@ -51,6 +51,9 @@ export interface MainContentProps {
   // Report shows `lsaReport` without offering to generate or edit. Off for everyone else.
   readOnly?: boolean;
   lsaReport?: StoredLsaReport | null;
+  /** Oversight: may generate a SATE Report where there is none, saved through this. */
+  lsaAllowGenerate?: boolean;
+  onSaveLsaReport?: (stored: StoredLsaReport) => Promise<StoredLsaReport | void>;
 }
 
 
