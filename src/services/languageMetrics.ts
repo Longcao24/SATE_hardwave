@@ -179,6 +179,11 @@ export function computeSpeakerMetrics(transcript: Segment[], speaker: string): S
   };
 }
 
+/** Every speaker's metrics, for the JSON export (same numbers as the CSV). */
+export function metricsBySpeaker(transcript: Segment[]): SpeakerMetrics[] {
+  return speakersOf(transcript).map((sp) => computeSpeakerMetrics(transcript, sp));
+}
+
 const COLUMNS: [keyof SpeakerMetrics, string, number?][] = [
   ['speaker', 'Speaker'], ['tnu', 'TNU'], ['ntw', 'TNW (NTW)'], ['ntaw', 'NTAW (incl. mazes)'], ['ndw', 'NDW'],
   ['ttr', 'TTR', 3], ['mluw', 'MLUw', 2], ['mlum', 'MLUm', 2], ['elapsed_seconds', 'Elapsed time (s)', 2],

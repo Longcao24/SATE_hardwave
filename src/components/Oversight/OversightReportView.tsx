@@ -8,7 +8,7 @@
 // Generate, and `recordingId` is withheld so nothing keys local state to the owner's id.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, ChevronDown, Download, Eye, FileAudio, FileJson, Loader2, Search, Sheet } from 'lucide-react';
+import { ArrowLeft, ChevronDown, Download, Eye, FileAudio, FileJson, FileText, Loader2, Search, Sheet } from 'lucide-react';
 import MainContent from '@/components/Layout/MainContent';
 import RightSidebar from '@/components/Layout/RightSidebar';
 import { useAudioPlayer } from '@/hooks/useAudioPlayer';
@@ -16,7 +16,7 @@ import { useSidebarManager } from '@/hooks/useSidebarManager';
 import { calculateSpeechAnalysis, getErrorAnnotations, type IssueCounts, type Segment } from '@/services/dataService';
 import { normalizeSegments } from '@/components/Recording/ConversationView/utils/segmentOperations';
 import { mergeEdits, type StoredLsaReport } from '@/services/lsaReportService';
-import { metricsCsv } from '@/services/languageMetrics';
+import { metricsBySpeaker, metricsCsv } from '@/services/languageMetrics';
 import { oversightService, type OversightRecordingRow } from '@/services/oversightService';
 import { recordingLabel } from '@/services/recordingName';
 
@@ -274,7 +274,7 @@ function ExportMenu({ ownerId, rec, patient }: {
   const base = safeName(recordingLabel(rec.recording_name || rec.file_name) || rec.id);
   const hasLsa = !!(rec.lsa_report && rec.lsa_report.response);
 
-  const run = async (kind: 'audio' | 'lsa' | 'metrics') => {
+  const run = async (kind: 'audio' | 'lsa' | 'metrics' | 'transcript') => {
     setBusy(kind); setErr(null);
     try {
       if (kind === 'audio') {
@@ -292,6 +292,21 @@ function ExportMenu({ ownerId, rec, patient }: {
           lsa_report: r.lsa_report,
         };
         saveBlob(JSON.stringify(doc, null, 2), 'application/json', `${base}_SATE-Report.json`);
+      } else if (kind === 'transcript') {
+        const r = await oversightService.exportTranscript(ownerId, rec.id);
+        const segs = normalizeSegments(Array.isArray(r.transcript?.segments) ? r.transcript.segments : []);
+        const doc = {
+          exported_at: new Date().toISOString(),
+          recording: { ...r.recording, label: recordingLabel(r.recording.recording_name || r.recording.file_name), patient: patient ?? null },
+          // The Language Analysis numbers, per speaker — the same as the CSV export.
+          metrics: metricsBySpeaker(segs),
+          issue_counts: r.error_counts ?? null,
+          flags_ms: r.flags ?? [],
+          flag_notes: r.flag_notes ?? {},
+          // Every utterance with its speaker, times, words and annotations, as stored.
+          transcript: { segments: segs },
+        };
+        saveBlob(JSON.stringify(doc, null, 2), 'application/json', `${base}_transcript.json`);
       } else {
         const r = await oversightService.exportMetrics(ownerId, rec.id);
         const segs = normalizeSegments(Array.isArray(r.transcript?.segments) ? r.transcript!.segments! : []);
@@ -308,7 +323,7 @@ function ExportMenu({ ownerId, rec, patient }: {
     } finally { setBusy(null); }
   };
 
-  const Item = ({ kind, icon, title, sub, disabled }: { kind: 'audio' | 'lsa' | 'metrics'; icon: React.ReactNode; title: string; sub: string; disabled?: boolean }) => (
+  const Item = ({ kind, icon, title, sub, disabled }: { kind: 'audio' | 'lsa' | 'metrics' | 'transcript'; icon: React.ReactNode; title: string; sub: string; disabled?: boolean }) => (
     <button disabled={!!busy || disabled} onClick={() => run(kind)}
       className="w-full text-left flex items-start gap-2.5 px-3 py-2 hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-white">
       <span className="mt-0.5 text-gray-500">{busy === kind ? <Loader2 className="w-4 h-4 animate-spin" /> : icon}</span>
@@ -335,6 +350,9 @@ function ExportMenu({ ownerId, rec, patient }: {
               sub={hasLsa ? 'The report as shown, plus the stored draft and edits' : 'No SATE Report generated yet'} disabled={!hasLsa} />
             <Item kind="metrics" icon={<Sheet className="w-4 h-4" />} title="Language metrics (CSV)"
               sub="The Language Analysis numbers, one row per speaker" />
+            <Item kind="transcript" icon={<FileText className="w-4 h-4" />} title="Transcript + metrics (JSON)"
+              sub="Every utterance with its annotations, plus the metrics per speaker"
+              disabled={!Array.isArray(rec.transcript?.segments) || !rec.transcript.segments.length} />
             {err && <p className="px-3 py-1.5 text-xs text-red-600">{err}</p>}
             <p className="px-3 pt-1.5 pb-1 text-[11px] text-gray-400 border-t">Every export is logged.</p>
           </div>

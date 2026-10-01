@@ -1,4 +1,4 @@
-// SATE Device API — Supabase Edge Function              [v40]
+// SATE Device API — Supabase Edge Function              [v41]
 // Replaces the mock-server's Express endpoints with a single Edge Function
 // that does internal path routing. Authenticated via Supabase JWT (users) or a
 // device key (the recorder).
@@ -52,6 +52,9 @@
 //      (and the gateway's 502 above it) simply does not apply. `storage_path` is
 //      confined to the caller's own `<user id>/` prefix and the byte count comes
 //      from Storage, never from the client.
+// v41: OVERSIGHT EXPORT `transcript` — the transcript (segments with their annotations), the stored
+//      analysis and issue counts, and the flags, for the "Transcript + metrics (JSON)" export. Same
+//      per-target check and audit-first as the other export types (`export_transcript`).
 // v40: ONE NAME PER PHYSICAL UNIT, first phone wins. POST /devices/seen {serial, hw_serial, name} — the app
 //      reports a unit the moment it connects. The FIRST report for a hw_serial fixes the unit's name in
 //      sate_device_units (the app's own formula, `SATE L816 · <last 4 of its BLE id>R`, from whichever phone
@@ -787,8 +790,8 @@ async function oversightRoute(supabase: any, user: any, subPath: string, method:
     return json({ role, targets });
   }
 
-  const ex = subPath.match(/^\/oversight\/users\/([0-9a-f-]{36})\/recordings\/([0-9a-f-]{36})\/export\/(audio|lsa|metrics)$/);
-  if (ex) return await oversightExport(supabase, user, ex[1], ex[2], ex[3] as 'audio' | 'lsa' | 'metrics');
+  const ex = subPath.match(/^\/oversight\/users\/([0-9a-f-]{36})\/recordings\/([0-9a-f-]{36})\/export\/(audio|lsa|metrics|transcript)$/);
+  if (ex) return await oversightExport(supabase, user, ex[1], ex[2], ex[3] as 'audio' | 'lsa' | 'metrics' | 'transcript');
 
   const m = subPath.match(/^\/oversight\/users\/([0-9a-f-]{36})\/(recordings|patients|sessions|devices)(?:\/([0-9a-f-]{36}))?$/);
   if (!m || !UUID_RE.test(m[1])) return err('Not found', 404);
@@ -834,18 +837,22 @@ async function oversightRoute(supabase: any, user: any, subPath: string, method:
   return err('Not found', 404);
 }
 
-async function oversightExport(supabase: any, user: any, target: string, rid: string, type: 'audio' | 'lsa' | 'metrics') {
+async function oversightExport(supabase: any, user: any, target: string, rid: string, type: 'audio' | 'lsa' | 'metrics' | 'transcript') {
   if (!UUID_RE.test(target) || !UUID_RE.test(rid)) return err('Not found', 404);
   const role = await canView(supabase, user, target);
   if (!role) return err('Forbidden', 403);
   const { data: rec, error } = await supabase.from('recordings')
     .select('id, recording_name, file_name, file_path, created_at, duration, patient_id' +
-      (type === 'lsa' ? ', lsa_report' : '') + (type === 'metrics' ? ', transcript, error_counts' : ''))
+      (type === 'lsa' ? ', lsa_report' : '') + (type === 'metrics' ? ', transcript, error_counts' : '')
+      + (type === 'transcript' ? ', transcript, error_counts, analysis, flags, flag_notes' : ''))
     .eq('id', rid).eq('user_id', target).maybeSingle();
   if (error) throw new Error(error.message);
   if (!rec) return err('Not found', 404);
   if (type === 'audio' && !rec.file_path) return err('This recording has no audio', 404);
   if (type === 'lsa' && !rec.lsa_report) return err('No SATE Report has been generated for this recording', 404);
+  if (type === 'transcript' && (!Array.isArray(rec.transcript?.segments) || !rec.transcript.segments.length)) {
+    return err('This recording has no transcript yet', 404);
+  }
 
   // Audit FIRST: an export that cannot be logged is not handed out.
   await auditAccess(supabase, user, role, target, `export_${type}`, rid);
@@ -860,6 +867,10 @@ async function oversightExport(supabase: any, user: any, target: string, rid: st
     return json({ recording: meta, file_name: name, url: signed.signedUrl, expires_in: 300 });
   }
   if (type === 'lsa') return json({ recording: meta, lsa_report: rec.lsa_report });
+  if (type === 'transcript') {
+    return json({ recording: meta, transcript: rec.transcript, error_counts: rec.error_counts,
+      analysis: rec.analysis, flags: rec.flags ?? [], flag_notes: rec.flag_notes ?? {} });
+  }
   return json({ recording: meta, transcript: rec.transcript, error_counts: rec.error_counts });
 }
 
