@@ -1,4 +1,4 @@
-// SATE Device API — Supabase Edge Function              [v38]
+// SATE Device API — Supabase Edge Function              [v39]
 // Replaces the mock-server's Express endpoints with a single Edge Function
 // that does internal path routing. Authenticated via Supabase JWT (users) or a
 // device key (the recorder).
@@ -52,6 +52,14 @@
 //      (and the gateway's 502 above it) simply does not apply. `storage_path` is
 //      confined to the caller's own `<user id>/` prefix and the byte count comes
 //      from Storage, never from the client.
+// v39: ONE IDENTITY PER PHYSICAL L81x. An L81x's `device_serial` is built from its BLE id, and on
+//      iOS that id is a PER-PHONE UUID — so one unit uploaded as `l816-<MAC>` from Android and as a
+//      different `l816-<uuid>` from every iPhone, and showed up as several devices with several names.
+//      The app now sends `hw_serial` (the unit's OWN serial, opcode 0x01, identical on every phone) with
+//      each upload; it is stored on the session row. `device_serial` is NOT changed — it is in every
+//      storage path and in the upload dedup key, so rewriting it would duplicate takes. Instead the
+//      holder rule (/devices/owner) and /admin/recorders treat every serial that carries the same
+//      hw_serial as ONE unit, and one session carrying it is enough to attach a serial's whole history.
 // v38: PROCESSING MONITOR for admins. GET /admin/processing?days=1|7|30 — every queued/processing
 //      take across ALL accounts in claim order (length, attempts, wait, backoff, stuck), the unresolved
 //      errors grouped by reason, and window stats (success rate, no-text, audio hours, turnaround
@@ -485,6 +493,7 @@ serve(async (req) => {
         session_number: Number(body.session_number || 0),
         sample_rate: Number(body.sample_rate || 16000),
         flags: Array.isArray(body.flags) ? body.flags.filter((n: unknown) => Number.isFinite(n)) : undefined,
+        hw_serial: hwSerialOf(body.hw_serial),
       };
       // Same idempotency the byte-carrying routes have: a retried register must
       // not create a second session, and a second AI run.
@@ -538,6 +547,7 @@ serve(async (req) => {
         session_number: meta.session_number || 0,
         sample_rate: meta.sample_rate || 16000,
         flags: Array.isArray(meta.flags) ? meta.flags.filter((n: unknown) => Number.isFinite(n)) : undefined,
+        hw_serial: hwSerialOf(meta.hw_serial),
       }, wavBytes);
     }
     if (subPath === '/sessions' && method === 'GET') {
@@ -614,12 +624,16 @@ async function externalOwner(supabase: any, userId: string, serial: string, hw: 
   // 2. [v32] No registration: whoever UPLOADED from it most recently is holding it, unless
   //    they have since removed it (their opt-out is exactly "I let this device go").
   if (!ownerId && serial) {
-    const [{ data: sess, error: e1 }, { data: outs, error: e2 }] = await Promise.all([
-      supabase.from('sate_device_sessions').select('user_id, created_at')
-        .eq('device_serial', serial).order('created_at', { ascending: false }).limit(50),
-      supabase.from('sate_external_device_optouts').select('user_id').eq('serial', serial),
-    ]);
+    // [v39] With the unit's own serial, uploads from ANY phone's serial for this unit count —
+    // an iPhone sees the same L816 under a different BLE id than Android does.
+    let sessQ = supabase.from('sate_device_sessions').select('user_id, created_at, device_serial');
+    sessQ = hw ? sessQ.or(`device_serial.eq.${serial},hw_serial.eq.${hw}`) : sessQ.eq('device_serial', serial);
+    const { data: sess, error: e1 } = await sessQ.order('created_at', { ascending: false }).limit(50);
     if (e1) throw new Error(e1.message);
+    // A release is per serial; releasing the unit under ANY of its serials releases it.
+    const serials = [...new Set([serial, ...(sess || []).map((r: any) => r.device_serial)])];
+    const { data: outs, error: e2 } = await supabase.from('sate_external_device_optouts')
+      .select('user_id').in('serial', serials);
     if (e2) throw new Error(e2.message);
     const released = new Set((outs || []).map((o: any) => o.user_id));
     const holder = (sess || []).find((r: any) => !released.has(r.user_id));
@@ -641,6 +655,10 @@ async function externalOwner(supabase: any, userId: string, serial: string, hw: 
 // ============================================================================
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** [v39] A unit's own serial, if the client sent a plausible one. It goes into PostgREST `or=` filters,
+ *  so the character set is closed: no comma, no parenthesis. */
+const hwSerialOf = (v: unknown): string | null =>
+  (typeof v === 'string' && /^[A-Za-z0-9_.-]{4,48}$/.test(v.trim()) ? v.trim() : null);
 
 async function emailOf(supabase: any, uid: string): Promise<string | null> {
   try { const { data } = await supabase.auth.admin.getUserById(uid); return data?.user?.email ?? null; }
@@ -1635,18 +1653,27 @@ async function adminRecorders(supabase: any) {
   const sess: any[] = [];
   for (let from = 0; ; from += 1000) {
     const { data, error } = await supabase.from('sate_device_sessions')
-      .select('device_serial, user_id, created_at').order('created_at', { ascending: false }).range(from, from + 999);
+      .select('device_serial, user_id, created_at, hw_serial').order('created_at', { ascending: false }).range(from, from + 999);
     if (error) throw new Error(error.message);
     sess.push(...(data || []));
     if (!data || data.length < 1000 || sess.length >= 200000) break;
   }
 
+  // [v39] Which serials are one physical unit: any serial seen with a hw_serial (on a session or a
+  // registration) is keyed by it, so an L81x used from Android and from iPhones is ONE row.
+  const hwOfSerial = new Map<string, string>();
+  for (const d of devs || []) if (d.serial && hwSerialOf(d.hw_serial)) hwOfSerial.set(d.serial, d.hw_serial);
+  for (const r of sess) if (r.device_serial && hwSerialOf(r.hw_serial) && !hwOfSerial.has(r.device_serial)) hwOfSerial.set(r.device_serial, r.hw_serial);
+  const keyOf = (serial: string) => (hwOfSerial.has(serial) ? `hw:${hwOfSerial.get(serial)}` : serial);
   type Use = { user_id: string; uploads: number; last_upload: string | null; registered_at: string | null; released: boolean };
-  const units = new Map<string, { serial: string; kind: string | null; name: string | null; hw_serial: string | null;
+  const units = new Map<string, { serial: string; serials: Set<string>; kind: string | null; name: string | null; hw_serial: string | null;
     online: boolean; last_seen: string | null; fw: string | null; regs: any[]; uses: Map<string, Use> }>();
   const unit = (serial: string) => {
-    if (!units.has(serial)) units.set(serial, { serial, kind: null, name: null, hw_serial: null, online: false, last_seen: null, fw: null, regs: [], uses: new Map() });
-    return units.get(serial)!;
+    const k = keyOf(serial);
+    if (!units.has(k)) units.set(k, { serial, serials: new Set(), kind: null, name: null, hw_serial: hwOfSerial.get(serial) ?? null, online: false, last_seen: null, fw: null, regs: [], uses: new Map() });
+    const u = units.get(k)!;
+    u.serials.add(serial);
+    return u;
   };
   const use = (u: ReturnType<typeof unit>, uid: string) => {
     if (!u.uses.has(uid)) u.uses.set(uid, { user_id: uid, uploads: 0, last_upload: null, registered_at: null, released: false });
@@ -1669,7 +1696,7 @@ async function adminRecorders(supabase: any) {
     if (!x.last_upload || r.created_at > x.last_upload) x.last_upload = r.created_at;
   }
   for (const o of outs || []) {
-    const u = units.get(o.serial);
+    const u = units.get(keyOf(o.serial));
     if (u?.uses.has(o.user_id)) u.uses.get(o.user_id)!.released = true;
   }
 
@@ -1697,7 +1724,7 @@ async function adminRecorders(supabase: any) {
     const active = accounts.filter((a) => !a.released);
     const lastUpload = accounts.map((a) => a.last_upload).filter(Boolean).sort().pop() || null;
     out.push({
-      serial: u.serial, family: familyOf(u.serial), kind: u.kind, name: u.name, hw_serial: u.hw_serial,
+      serial: u.serial, serials: [...u.serials], family: familyOf(u.serial), kind: u.kind, name: u.name, hw_serial: u.hw_serial,
       online: u.online, last_seen: u.last_seen, fw: u.fw,
       holder_id: holder, holder_email: holder ? await email(holder) : null, holder_source: source,
       shared: active.length > 1, accounts, uploads: accounts.reduce((n, a) => n + a.uploads, 0),
@@ -2422,7 +2449,7 @@ function parseFlags(raw: string | null): number[] {
 async function storeSessionRecord(
   supabase: any,
   userId: string,
-  meta: { device_serial: string; patient_id: string; session_number: number; sample_rate: number; flags?: number[] },
+  meta: { device_serial: string; patient_id: string; session_number: number; sample_rate: number; flags?: number[]; hw_serial?: string | null },
   wavBytes: Uint8Array,
 ) {
   // Idempotency: a client retry of the SAME take must not create a second session
@@ -2503,7 +2530,7 @@ function sessionStoragePath(userId: string, serial: string, sessionId: string,
 async function insertSessionRow(
   supabase: any,
   userId: string,
-  meta: { device_serial: string; patient_id: string; session_number: number; sample_rate: number; flags?: number[] },
+  meta: { device_serial: string; patient_id: string; session_number: number; sample_rate: number; flags?: number[]; hw_serial?: string | null },
   sessionId: string,
   storagePath: string,
   bytes: number,
@@ -2513,6 +2540,8 @@ async function insertSessionRow(
     patient_id: meta.patient_id, session_number: meta.session_number,
     sample_rate: meta.sample_rate, bytes, storage_path: storagePath,
     flags: meta.flags && meta.flags.length ? meta.flags : null,
+    // [v39] Only when sent: an insert naming the column fails on a database without the migration.
+    ...(meta.hw_serial ? { hw_serial: meta.hw_serial } : {}),
     // [v29] A RAW ASC take's `bytes` is ~7.8x smaller than the audio it holds, and
     // every screen used to turn `bytes` into a duration as if it were a WAV — a
     // 66-minute take read "8m 28s". So its length is stated here, from the frame
@@ -2564,7 +2593,7 @@ async function listSessions(
     // the beginning but never returned here, so nothing downstream of this endpoint could see
     // them — a meeting note generated from a session silently lost every mark the user had
     // pressed the button for, which is the one thing the hardware does that a phone cannot.
-    .select('id, device_serial, patient_id, session_number, sample_rate, bytes, audio_seconds, created_at, processed, processed_at, recording_id, process_error, no_text, status, attempts, flags, processing_started_at, not_before')
+    .select('id, device_serial, patient_id, session_number, sample_rate, bytes, audio_seconds, created_at, processed, processed_at, recording_id, process_error, no_text, status, attempts, flags, processing_started_at, not_before, hw_serial')
     .eq('user_id', userId).order('created_at', { ascending: false });
   if (deviceSerial) query = query.eq('device_serial', deviceSerial);
   const { data, error } = await query.limit(limit);

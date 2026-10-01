@@ -37,6 +37,9 @@ export interface ManagedDevice {
    *  key and no network of its own. Kept in step with the mobile `ManagedDevice`
    *  (src/protocol.ts) so the two unions cannot drift. */
   kind?: 'sate' | 'plaud' | 'pendant' | 'l816';
+  /** [v39] Every device_serial this ONE physical unit has uploaded under (an L81x used from Android
+   *  and from iPhones has several, because iOS randomises the BLE id). Absent = just `serial`. */
+  serials?: string[];
   /** true = device is reachable over Wi-Fi right now */
   online: boolean;
   ip?: string;
@@ -165,6 +168,8 @@ export interface UploadedSession {
   attempts?: number;
   /** When the worker claimed it (device-api v38 returns it in the list). */
   processing_started_at?: string | null;
+  /** [v39] The unit's OWN serial (L81x opcode 0x01), identical on every phone. */
+  hw_serial?: string | null;
   /** While queued: place in the ONE worker's line (1 = next) and audio ahead of it (v38). */
   queue_position?: number;
   queue_ahead_seconds?: number;

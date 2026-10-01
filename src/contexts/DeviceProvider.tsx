@@ -155,6 +155,41 @@ function deriveExternalDevices(sessions: UploadedSession[]): ManagedDevice[] {
   });
 }
 
+// [device-api v39] ONE card per PHYSICAL unit. An L81x's device_serial is built from its BLE id, and
+// iOS makes that id up per phone — so the same recorder uploads as l816-<MAC> from Android and as a
+// different l816-<uuid> from each iPhone. Sessions now carry the unit's OWN serial (hw_serial), and
+// every serial seen with the same one is folded into a single card, named the way the phone names
+// it (`SATE L816 · 0315R`). A serial never seen with a hw_serial is left as it is.
+function groupByUnit(devices: ManagedDevice[], sessions: UploadedSession[]): ManagedDevice[] {
+  const hwOf = new Map<string, string>();
+  for (const s of sessions) if (s.hw_serial && s.device_serial && !hwOf.has(s.device_serial)) hwOf.set(s.device_serial, s.hw_serial);
+  const groups = new Map<string, ManagedDevice[]>();
+  const out: ManagedDevice[] = [];
+  for (const d of devices) {
+    const hw = d.kind && d.kind !== 'sate' ? hwOf.get(d.serial) : undefined;
+    if (!hw) { out.push(d); continue; }
+    const k = `${d.kind}:${hw}`;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k)!.push(d);
+  }
+  for (const [k, ds] of groups) {
+    const hw = k.slice(k.indexOf(':') + 1);
+    const latest = ds.reduce((a, b) => ((a.last_seen || '') >= (b.last_seen || '') ? a : b));
+    const family = familyFor(latest.serial);
+    out.push({
+      ...latest,
+      id: `${latest.kind}:hw:${hw}`,
+      name: family?.kind === 'l816'
+        ? `${family.label} · ${hw.replace(/[^0-9a-zA-Z]/g, '').toUpperCase().slice(-4)}R`
+        : latest.name,
+      serials: [...new Set(ds.flatMap((d) => d.serials ?? [d.serial]))],
+      pending_sessions: ds.reduce((n, d) => n + (d.pending_sessions || 0), 0),
+      online: ds.some((d) => d.online),
+    });
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Provider
 // ---------------------------------------------------------------------------
@@ -192,7 +227,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   const sessions = useMemo(
     () =>
       selectedDevice
-        ? allSessions.filter((s) => s.device_serial === selectedDevice.serial).slice(0, 10)
+        ? allSessions.filter((s) => (selectedDevice.serials ?? [selectedDevice.serial]).includes(s.device_serial)).slice(0, 10)
         : [],
     [allSessions, selectedDevice],
   );
@@ -224,7 +259,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       for (const d of [...deriveExternalDevices(allSessions), ...list]) {
         bySerial.set(d.serial, d);
       }
-      const merged = [...bySerial.values()];
+      const merged = groupByUnit([...bySerial.values()], allSessions);
       setDevices(merged);
       setAllSessions(allSessions);
       setIsConnected(true);
