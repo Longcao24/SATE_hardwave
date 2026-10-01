@@ -290,6 +290,10 @@ function ExportMenu({ ownerId, rec, patient }: {
           as_shown: r.lsa_report?.response ? mergeEdits(r.lsa_report) : null,
           // Exactly what is stored (draft and edits kept apart), for anyone auditing the review.
           lsa_report: r.lsa_report,
+          // The full transcript the report was made from (every utterance with its annotations),
+          // so the file stands on its own. An older server sends none: fall back to what is on screen.
+          transcript: { segments: normalizeSegments(Array.isArray(r.transcript?.segments) ? r.transcript!.segments!
+            : Array.isArray(rec.transcript?.segments) ? rec.transcript.segments : []) },
         };
         saveBlob(JSON.stringify(doc, null, 2), 'application/json', `${base}_SATE-Report.json`);
       } else if (kind === 'transcript') {
@@ -347,7 +351,7 @@ function ExportMenu({ ownerId, rec, patient }: {
             <Item kind="audio" icon={<FileAudio className="w-4 h-4" />} title="Audio file"
               sub={rec.file_name || 'The recording as stored'} disabled={!rec.file_path} />
             <Item kind="lsa" icon={<FileJson className="w-4 h-4" />} title="SATE Report (JSON)"
-              sub={hasLsa ? 'The report as shown, plus the stored draft and edits' : 'No SATE Report generated yet'} disabled={!hasLsa} />
+              sub={hasLsa ? 'The report as shown, the stored draft and edits, and the full transcript' : 'No SATE Report generated yet'} disabled={!hasLsa} />
             <Item kind="metrics" icon={<Sheet className="w-4 h-4" />} title="Language metrics (CSV)"
               sub="The Language Analysis numbers, one row per speaker" />
             <Item kind="transcript" icon={<FileText className="w-4 h-4" />} title="Transcript + metrics (JSON)"

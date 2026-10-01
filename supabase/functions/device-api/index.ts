@@ -1,4 +1,4 @@
-// SATE Device API — Supabase Edge Function              [v41]
+// SATE Device API — Supabase Edge Function              [v42]
 // Replaces the mock-server's Express endpoints with a single Edge Function
 // that does internal path routing. Authenticated via Supabase JWT (users) or a
 // device key (the recorder).
@@ -52,6 +52,7 @@
 //      (and the gateway's 502 above it) simply does not apply. `storage_path` is
 //      confined to the caller's own `<user id>/` prefix and the byte count comes
 //      from Storage, never from the client.
+// v42: the `lsa` export also carries the full transcript, so the SATE Report JSON stands on its own.
 // v41: OVERSIGHT EXPORT `transcript` — the transcript (segments with their annotations), the stored
 //      analysis and issue counts, and the flags, for the "Transcript + metrics (JSON)" export. Same
 //      per-target check and audit-first as the other export types (`export_transcript`).
@@ -843,7 +844,7 @@ async function oversightExport(supabase: any, user: any, target: string, rid: st
   if (!role) return err('Forbidden', 403);
   const { data: rec, error } = await supabase.from('recordings')
     .select('id, recording_name, file_name, file_path, created_at, duration, patient_id' +
-      (type === 'lsa' ? ', lsa_report' : '') + (type === 'metrics' ? ', transcript, error_counts' : '')
+      (type === 'lsa' ? ', lsa_report, transcript' : '') + (type === 'metrics' ? ', transcript, error_counts' : '')
       + (type === 'transcript' ? ', transcript, error_counts, analysis, flags, flag_notes' : ''))
     .eq('id', rid).eq('user_id', target).maybeSingle();
   if (error) throw new Error(error.message);
@@ -866,7 +867,7 @@ async function oversightExport(supabase: any, user: any, target: string, rid: st
     if (se || !signed?.signedUrl) throw new Error(se?.message || 'could not sign the audio');
     return json({ recording: meta, file_name: name, url: signed.signedUrl, expires_in: 300 });
   }
-  if (type === 'lsa') return json({ recording: meta, lsa_report: rec.lsa_report });
+  if (type === 'lsa') return json({ recording: meta, lsa_report: rec.lsa_report, transcript: rec.transcript ?? null });
   if (type === 'transcript') {
     return json({ recording: meta, transcript: rec.transcript, error_counts: rec.error_counts,
       analysis: rec.analysis, flags: rec.flags ?? [], flag_notes: rec.flag_notes ?? {} });

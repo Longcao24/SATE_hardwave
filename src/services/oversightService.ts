@@ -80,7 +80,7 @@ export const oversightService = {
   exportAudio: (uid: string, rid: string) =>
     req<{ recording: OversightExportMeta; file_name: string; url: string; expires_in: number }>(`/oversight/users/${uid}/recordings/${rid}/export/audio`),
   exportLsa: (uid: string, rid: string) =>
-    req<{ recording: OversightExportMeta; lsa_report: any }>(`/oversight/users/${uid}/recordings/${rid}/export/lsa`),
+    req<{ recording: OversightExportMeta; lsa_report: any; transcript?: { segments?: any[] } | null }>(`/oversight/users/${uid}/recordings/${rid}/export/lsa`),
   exportTranscript: (uid: string, rid: string) =>
     req<{ recording: OversightExportMeta; transcript: { segments?: any[] }; error_counts: any; analysis: any;
       flags: number[]; flag_notes: Record<string, string> }>(`/oversight/users/${uid}/recordings/${rid}/export/transcript`),
