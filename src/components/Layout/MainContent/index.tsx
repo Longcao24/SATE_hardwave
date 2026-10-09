@@ -5,6 +5,7 @@ import { type Segment } from '@/services/dataService';
 import { useUndoRedo } from '@/hooks/useUndoRedo';
 import { ConfirmationDialog } from '../../Common/ConfirmationDialog';
 import { SampleDataBanner } from './components/SampleDataBanner';
+import { TranscriptGapsBanner } from './components/TranscriptGapsBanner';
 import { ReportHeader } from './components/ReportHeader';
 import { CheckedSegmentsPanel } from './components/CheckedSegmentsPanel';
 import { ActionButtonsPanel } from './components/ActionButtonsPanel';
@@ -29,6 +30,7 @@ const MainContent: React.FC<MainContentProps> = ({
   categoryExpanded,
   onApplyPreset,
   transcriptData,
+  transcriptGaps,
   issueCounts,
   audioRef,
   onTimeUpdate,
@@ -170,6 +172,12 @@ const MainContent: React.FC<MainContentProps> = ({
         <SampleDataBanner onBackToDashboard={handleBackToDashboard} />
       )}
       
+      {/* Untranscribed spans: above the report, not dismissable — the metrics cover less than
+          the recording, and the page must not read as complete. */}
+      {transcriptGaps && transcriptGaps.length > 0 && (
+        <TranscriptGapsBanner gaps={transcriptGaps} onSeekExact={onSeekExact} />
+      )}
+
       {/* Report Header - Only show when there's data */}
       {showControls && (
         <div className="p-6 border-b border-gray-200">

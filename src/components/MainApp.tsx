@@ -423,6 +423,7 @@ export function MainApp() {
             categoryExpanded={sidebarManager.categoryExpanded}
             onApplyPreset={applyPreset}
             transcriptData={transcriptProcessor.transcriptData}
+            transcriptGaps={transcriptProcessor.currentTranscriptGaps}
             issueCounts={transcriptProcessor.issueCounts}
             audioRef={audioPlayer.audioRef}
             onTimeUpdate={audioPlayer.setCurrentTime}

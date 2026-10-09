@@ -376,7 +376,8 @@ const PatientDetails: React.FC = () => {
             const mappedProgress = 30 + Math.round(apiProgress * 0.7);
             setProcessingProgress(mappedProgress);
           },
-          () => setShowTimeoutWarning(true)
+          () => setShowTimeoutWarning(true),
+          'patient-upload'
         );
 
         console.log('API processing complete, updating form data...');

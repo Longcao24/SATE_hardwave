@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { UploadedSession } from '@/services/device/deviceTypes';
-import { formatSessionDuration, timeAgo } from '@/hooks/useDevices';
+import { formatSessionDuration, sessionSeconds, timeAgo } from '@/hooks/useDevices';
 import { CheckCircle2, Loader2, AlertCircle, FileAudio, MicOff, Trash2, Clock, RotateCw, Sparkles } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { deviceApiService } from '@/services/device/deviceApiService';
@@ -36,6 +36,15 @@ const timing = (s: UploadedSession) => {
   const wait = (Date.parse(s.processing_started_at) - Date.parse(s.at)) / 1000;
   return proc >= 0 && wait >= 0 ? `Processed in ${dur(proc)} · waited ${dur(wait)} in queue` : null;
 };
+
+// A LONG take that ended "no text" is almost never really silent: the AI returned no words
+// on all three attempts for audio that was audible (cf-processor), and before this the row
+// was a dead end — no error, no Retry. Offer a Retry (device-api accepts a done/no_text row
+// with no recording). A short one is usually a real accidental tap and keeps today's display.
+// Only a `done` row: a legacy row with no status reads as no_text too, and the server refuses it.
+const NO_TEXT_RETRY_MIN_SEC = 30;
+const noTextRetryable = (s: UploadedSession) =>
+  s.status === 'done' && !!s.no_text && !s.recording_id && sessionSeconds(s.bytes, s.sample_rate, s.audio_seconds) >= NO_TEXT_RETRY_MIN_SEC;
 
 const statusOf = (s: UploadedSession): Status => {
   // Authoritative async state machine when the column is present.
@@ -266,13 +275,29 @@ export function DeviceSessionStatus({ sessions }: DeviceSessionStatusProps) {
                     <CheckCircle2 className="w-3 h-3" /> Ready · View
                   </span>
                 )}
-                {status === 'no_text' && (
+                {status === 'no_text' && !noTextRetryable(s) && (
                   <span
                     title="The AI found no speech in this audio, so no report was created."
                     className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-600 bg-slate-100 rounded-lg"
                   >
                     <MicOff className="w-3 h-3" /> No text in audio
                   </span>
+                )}
+                {status === 'no_text' && noTextRetryable(s) && (
+                  <button
+                    type="button"
+                    onClick={(e) => handleRetry(e, s)}
+                    disabled={retryingId === s.id}
+                    title="The AI returned no words for this recording, which is unusual for a take this long. The audio is kept — retry to process it again."
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-amber-800 bg-amber-50 rounded-lg hover:bg-amber-100 disabled:opacity-50"
+                  >
+                    {retryingId === s.id ? (
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                    ) : (
+                      <MicOff className="w-3 h-3" />
+                    )}
+                    No words found — Retry
+                  </button>
                 )}
                 {status === 'failed' && (
                   <span

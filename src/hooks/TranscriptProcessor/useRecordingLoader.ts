@@ -7,6 +7,8 @@ import {
 } from '@/services/dataService';
 import { audioStorageService } from '@/services/audioStorageService';
 import { normalizeSegments } from '@/components/Recording/ConversationView/utils/segmentOperations';
+import { readTranscriptGaps } from '@/services/transcriptGaps';
+import type { TranscriptGap } from '@/services/DataService/types';
 import type { Segment, IssueCounts, SpeechAnalysis } from './types';
 
 interface RecordingLoaderDeps {
@@ -19,6 +21,7 @@ interface RecordingLoaderDeps {
   setCurrentRecordingDate: (date: string) => void;
   setCurrentRecordingFlags: (flags: number[]) => void;
   setCurrentRecordingFlagNotes: (notes: Record<string, string>) => void;
+  setCurrentTranscriptGaps: (recordingId: string | null, gaps: TranscriptGap[]) => void;
   setCurrentRecordingId: (id: string | null) => void;
   setAvailableErrorTypes: (types: string[]) => void;
   setActiveFilters: (filters: string[]) => void;
@@ -58,6 +61,7 @@ export function useRecordingLoader(deps: RecordingLoaderDeps) {
       deps.setCurrentRecordingDate(new Date().toISOString());
       deps.setCurrentRecordingFlags([]); // sample data has no device flags
       deps.setCurrentRecordingFlagNotes({});
+      deps.setCurrentTranscriptGaps(null, []);
       deps.setCurrentRecordingId(null); // Sample data, no recording ID
       
       // Get available error types for filtering
@@ -114,6 +118,8 @@ export function useRecordingLoader(deps: RecordingLoaderDeps) {
         deps.setCurrentRecordingDate(recordingData.createdAt);
         deps.setCurrentRecordingFlags(recordingData.flags || []);
         deps.setCurrentRecordingFlagNotes(recordingData.flagNotes || {});
+        // Untranscribed spans (AI error on part of a long take) — the report must say so.
+        deps.setCurrentTranscriptGaps(recordingId, readTranscriptGaps(recordingData.transcript));
         deps.setCurrentRecordingId(recordingId);
         
         // Get available error types for filtering

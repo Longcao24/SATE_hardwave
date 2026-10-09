@@ -1,6 +1,7 @@
 import type { TranscriptData, IssueCounts, ProcessingError } from './types';
 import { countErrors } from './errorCounter';
 import { MAX_UPLOAD_BYTES, MAX_UPLOAD_LABEL } from '@/config/uploadLimits';
+import { startWebJob } from './webJobTracker';
 
 // Helper function to categorize and format errors
 const categorizeError = (error: any, response?: Response): ProcessingError => {
@@ -182,7 +183,8 @@ export const processAudioFile = async (
   device: string = 'cuda',
   pauseThreshold: number = 0.25,
   onProgress?: (progress: number) => void,
-  onTimeoutWarning?: () => void
+  onTimeoutWarning?: () => void,
+  source: 'web-upload' | 'patient-upload' = 'web-upload'
 ): Promise<{ data: TranscriptData; errorCounts: IssueCounts }> => {
   try {
     // Validate file before sending
@@ -232,6 +234,9 @@ export const processAudioFile = async (
       throw validationError;
     }
 
+    // The AI call happens here, in the browser — record it so the admin Processing tab can see it.
+    const job = startWebJob(audioFile, source);
+    try {
     // Try with the specified device first
     let result;
     try {
@@ -268,7 +273,12 @@ export const processAudioFile = async (
       }
     }
 
+    job.finish();
     return result;
+    } catch (error) {
+      job.finish((error as any)?.errorDetails?.originalError || (error instanceof Error ? error.message : String(error)));
+      throw error;
+    }
 
   } catch (error) {
     console.error('API processing failed:', error);

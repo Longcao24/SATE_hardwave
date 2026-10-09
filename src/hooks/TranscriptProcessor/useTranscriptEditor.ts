@@ -9,10 +9,12 @@ import {
 import { detectTimestampOverlaps, fixTimestampOverlaps } from '@/lib/utils';
 import type { User } from '@supabase/supabase-js';
 import type { Segment, IssueCounts, SpeechAnalysis } from './types';
+import type { TranscriptGap } from '@/services/DataService/types';
 
 interface TranscriptEditorDeps {
   currentRecordingId: string | null;
   transcriptData: Segment[];
+  transcriptGaps: TranscriptGap[];
   setTranscriptData: (data: Segment[]) => void;
   setIssueCounts: (counts: IssueCounts) => void;
   setSpeechAnalysis: (analysis: SpeechAnalysis | null) => void;
@@ -65,7 +67,11 @@ export function useTranscriptEditor(user: User | null, deps: TranscriptEditorDep
     try {
       const result = await updateRecording(
         deps.currentRecordingId,
-        { segments: deps.transcriptData },
+        // save_transcript REPLACES the stored transcript, so the untranscribed spans must ride
+        // along — otherwise the first edit would erase the only record that minutes are missing.
+        deps.transcriptGaps.length
+          ? { segments: deps.transcriptData, gaps: deps.transcriptGaps }
+          : { segments: deps.transcriptData },
         user.id
       );
 

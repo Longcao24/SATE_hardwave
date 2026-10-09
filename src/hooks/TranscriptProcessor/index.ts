@@ -9,7 +9,9 @@ import { useTranscriptEditor } from './useTranscriptEditor';
 import { useFileUpload } from './useFileUpload';
 import { updateRecordingFlags } from '@/services/dataService';
 import type { RecordingMetadata } from './types';
-import type { FlagNotes } from '@/services/DataService/types';
+import type { FlagNotes, TranscriptGap } from '@/services/DataService/types';
+
+const NO_GAPS: TranscriptGap[] = [];
 
 /**
  * Main hook that orchestrates all transcript processing sub-hooks
@@ -25,6 +27,9 @@ export function useTranscriptProcessor() {
   const [currentRecordingFlags, setCurrentRecordingFlags] = useState<number[]>([]);
   // Notes keyed by ms offset (as string) — loaded alongside flags.
   const [currentRecordingFlagNotes, setCurrentRecordingFlagNotes] = useState<FlagNotes>({});
+  // Spans of the open recording the AI could not transcribe (`transcript.gaps`). Keyed by the
+  // recording they were loaded with, so an upload or another recording never inherits them.
+  const [gapsOf, setGapsOf] = useState<{ id: string; gaps: TranscriptGap[] } | null>(null);
   
   // Filter state
   const [activeFilters, setActiveFilters] = useState<string[]>([]);
@@ -36,11 +41,14 @@ export function useTranscriptProcessor() {
   const processingStateHook = useProcessingState();
   const errorNotificationHook = useErrorNotification();
   const recordingMetadataHook = useRecordingMetadata(user);
+  const currentTranscriptGaps =
+    gapsOf && gapsOf.id === recordingMetadataHook.currentRecordingId ? gapsOf.gaps : NO_GAPS;
   
   // Transcript editor needs dependencies
   const transcriptEditorHook = useTranscriptEditor(user, {
     currentRecordingId: recordingMetadataHook.currentRecordingId,
     transcriptData: transcriptDataHook.transcriptData,
+    transcriptGaps: currentTranscriptGaps,
     setTranscriptData: transcriptDataHook.setTranscriptData,
     setIssueCounts: transcriptDataHook.setIssueCounts,
     setSpeechAnalysis: transcriptDataHook.setSpeechAnalysis,
@@ -60,6 +68,7 @@ export function useTranscriptProcessor() {
     setCurrentRecordingDate,
     setCurrentRecordingFlags,
     setCurrentRecordingFlagNotes,
+    setCurrentTranscriptGaps: (id: string | null, gaps: TranscriptGap[]) => setGapsOf(id ? { id, gaps } : null),
     setCurrentRecordingId: recordingMetadataHook.setCurrentRecordingId,
     setAvailableErrorTypes,
     setActiveFilters,
@@ -145,6 +154,7 @@ export function useTranscriptProcessor() {
     setCurrentRecordingDate('');
     setCurrentRecordingFlags([]);
     setCurrentRecordingFlagNotes({});
+    setGapsOf(null);
     setAvailableErrorTypes([]);
     setActiveFilters([]);
     
@@ -187,6 +197,7 @@ export function useTranscriptProcessor() {
     currentRecordingDate,
     currentRecordingFlags,
     currentRecordingFlagNotes,
+    currentTranscriptGaps,
     currentRecordingId: recordingMetadataHook.currentRecordingId,
     isEditMode: transcriptEditorHook.isEditMode,
     

@@ -3,6 +3,7 @@ import { CreditCard, Calendar, AlertCircle, ExternalLink, Loader2, ArrowLeft, Do
 import { Button } from '@/components/ui/button';
 import { useStripe } from '@/contexts/StripeProvider';
 import { useNavigate } from 'react-router-dom';
+import { PlanUsageCard } from './PlanUsageCard';
 import {
   createCustomerPortalSession,
   getInvoiceHistory,
@@ -158,6 +159,8 @@ export const BillingPage: React.FC = () => {
             Manage your subscription and view payment history
           </p>
         </div>
+
+        <div className="mb-6"><PlanUsageCard /></div>
 
         {/* Current Subscription Card */}
         <div className="bg-white border border-gray-200 rounded-lg p-8 mb-6">

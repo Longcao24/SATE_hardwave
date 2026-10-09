@@ -1,5 +1,6 @@
 import type { Segment, IssueCounts } from '@/services/dataService';
 import type { StoredLsaReport } from '@/services/lsaReportService';
+import type { TranscriptGap } from '@/services/DataService/types';
 import type { EditingState, EditingActions } from '../../Recording/ConversationView/types';
 
 export interface MainContentProps {
@@ -20,6 +21,8 @@ export interface MainContentProps {
   categoryExpanded: {[key: string]: boolean};
   onApplyPreset: (preset: string) => void;
   transcriptData: Segment[];
+  // Spans the AI could not transcribe (`transcript.gaps`) — shown as a warning banner.
+  transcriptGaps?: TranscriptGap[];
   issueCounts: IssueCounts;
   audioRef?: React.RefObject<HTMLAudioElement | null>;
   onTimeUpdate?: (currentTime: number) => void;

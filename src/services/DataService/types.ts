@@ -54,8 +54,21 @@ export interface Segment {
   note?: string; // User note for this utterance
 }
 
+// A span of the take the AI could not transcribe (cf-processor `transcribe()`: a piece that
+// still answered 500 at the smallest split is SKIPPED and recorded here, in seconds on the
+// take's clock). The rest of the take is transcribed normally, so without these a partial
+// transcript reads as a complete one.
+export interface TranscriptGap {
+  start: number;
+  end: number;
+  reason?: string;
+}
+
 export interface TranscriptData {
   segments: Segment[];
+  // Untranscribed spans. Carried through every save: save_transcript replaces the whole
+  // transcript, so a save that sent only `segments` would erase the warning on first edit.
+  gaps?: TranscriptGap[];
 }
 
 export interface IssueCounts {

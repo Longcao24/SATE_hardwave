@@ -2,7 +2,7 @@
 // Uses the user's Supabase JWT for authentication, so device management
 // is fully integrated with the web app's auth system.
 
-import type { AdminProcessing, AdminRecorder, AdminUserDetail,
+import type { AdminProcessing, AdminRecorder, PlanUsage, AdminUserDetail,
   ManagedDevice,
   RemoteCommand,
   UploadedSession,
@@ -227,6 +227,8 @@ export const deviceApiService = {
     req<{ ok: true }>(`/admin/users/${id}/password`, { method: 'POST', body: JSON.stringify({ password }) }),
   adminSetDisabled: (id: string, disabled: boolean) =>
     req<{ ok: true; disabled: boolean }>(`/admin/users/${id}/disable`, { method: 'POST', body: JSON.stringify({ disabled }) }),
+  /** [v44] The caller's plan and this month's usage against the free limits. Shown only — nothing is enforced. */
+  getUsage: () => req<PlanUsage>('/account/usage'),
   /** [v38] Every queued/processing take, unresolved errors, window stats. */
   adminProcessing: (days: number) => req<AdminProcessing>(`/admin/processing?days=${days}`),
   adminRetrySessions: (ids: string[]) =>

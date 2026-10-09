@@ -19,6 +19,7 @@ import { mergeEdits, type StoredLsaReport } from '@/services/lsaReportService';
 import { metricsBySpeaker, metricsCsv } from '@/services/languageMetrics';
 import { oversightService, type OversightRecordingRow } from '@/services/oversightService';
 import { recordingLabel } from '@/services/recordingName';
+import { gapSeconds, readTranscriptGaps } from '@/services/transcriptGaps';
 
 const EMPTY_COUNTS: IssueCounts = {
   pause: 0, filler: 0, repetition: 0, mispronunciation: 0, morpheme: 0,
@@ -43,6 +44,8 @@ export function OversightReportView({ ownerId, ownerEmail, rec, patient, onBack,
     () => normalizeSegments(Array.isArray(rec.transcript?.segments) ? rec.transcript.segments : []),
     [rec],
   );
+  // Spans the AI could not transcribe: the same warning the owner sees (display only).
+  const transcriptGaps = useMemo(() => readTranscriptGaps(rec.transcript), [rec]);
   const availableErrorTypes = useMemo(() => getErrorAnnotations(segments), [segments]);
   const speechAnalysis = useMemo(
     () => (rec.analysis as any) || (segments.length ? calculateSpeechAnalysis({ segments } as any) : undefined),
@@ -125,6 +128,7 @@ export function OversightReportView({ ownerId, ownerEmail, rec, patient, onBack,
             categoryExpanded={sidebar.categoryExpanded}
             onApplyPreset={applyPreset}
             transcriptData={segments}
+            transcriptGaps={transcriptGaps}
             issueCounts={issueCounts}
             audioRef={audioPlayer.audioRef}
             onTimeUpdate={audioPlayer.setCurrentTime}
@@ -301,8 +305,14 @@ function ExportMenu({ ownerId, rec, patient, hasLsa }: {
           lsa_report: r.lsa_report,
           // The full transcript the report was made from (every utterance with its annotations),
           // so the file stands on its own. An older server sends none: fall back to what is on screen.
-          transcript: { segments: normalizeSegments(Array.isArray(r.transcript?.segments) ? r.transcript!.segments!
-            : Array.isArray(rec.transcript?.segments) ? rec.transcript.segments : []) },
+          // Carries any untranscribed spans too, like the transcript and metrics exports, so the
+          // report is not read as covering the whole recording.
+          transcript: (() => {
+            const segs = normalizeSegments(Array.isArray(r.transcript?.segments) ? r.transcript!.segments!
+              : Array.isArray(rec.transcript?.segments) ? rec.transcript.segments : []);
+            const gaps = readTranscriptGaps(r.transcript ?? rec.transcript);
+            return gaps.length ? { segments: segs, gaps } : { segments: segs };
+          })(),
         };
         saveBlob(JSON.stringify(doc, null, 2), 'application/json', `${base}_SATE-Report.json`);
       } else if (kind === 'transcript') {
@@ -316,8 +326,13 @@ function ExportMenu({ ownerId, rec, patient, hasLsa }: {
           issue_counts: r.error_counts ?? null,
           flags_ms: r.flags ?? [],
           flag_notes: r.flag_notes ?? {},
-          // Every utterance with its speaker, times, words and annotations, as stored.
-          transcript: { segments: segs },
+          // Every utterance with its speaker, times, words and annotations, as stored — plus
+          // any spans the AI could not transcribe, so the metrics above are not read as covering
+          // the whole recording.
+          transcript: (() => {
+            const gaps = readTranscriptGaps(r.transcript ?? rec.transcript);
+            return gaps.length ? { segments: segs, gaps } : { segments: segs };
+          })(),
         };
         saveBlob(JSON.stringify(doc, null, 2), 'application/json', `${base}_transcript.json`);
       } else {
@@ -327,6 +342,8 @@ function ExportMenu({ ownerId, rec, patient, hasLsa }: {
         const csv = metricsCsv(segs, {
           report: recordingLabel(r.recording.recording_name || r.recording.file_name) || r.recording.id,
           recorded: r.recording.created_at, length_s: r.recording.duration, patient,
+          // Spans the AI could not transcribe: the metrics cover the rest only, and say so.
+          untranscribed_s: gapSeconds(readTranscriptGaps(r.transcript ?? rec.transcript)),
         });
         saveBlob(csv, 'text/csv;charset=utf-8', `${base}_metrics.csv`);
       }

@@ -74,15 +74,22 @@ export function useTotalPendingSessions() {
  * uploaded as raw ASC-VI, ~7.8x smaller than its audio, and deriving the length
  * from its bytes showed a 66-minute take as "8m 28s".
  */
+export function sessionSeconds(
+  bytes: number,
+  sampleRate = 16000,
+  audioSeconds?: number | null
+): number {
+  return typeof audioSeconds === 'number' && Number.isFinite(audioSeconds)
+    ? Math.round(audioSeconds)
+    : Math.round(Math.max(0, bytes - 44) / (sampleRate * 2));
+}
+
 export function formatSessionDuration(
   bytes: number,
   sampleRate = 16000,
   audioSeconds?: number | null
 ): string {
-  const totalSeconds =
-    typeof audioSeconds === 'number' && Number.isFinite(audioSeconds)
-      ? Math.round(audioSeconds)
-      : Math.round(Math.max(0, bytes - 44) / (sampleRate * 2));
+  const totalSeconds = sessionSeconds(bytes, sampleRate, audioSeconds);
   if (totalSeconds < 60) return `${totalSeconds}s`;
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);

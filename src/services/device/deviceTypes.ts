@@ -224,9 +224,23 @@ export interface ProcErrorRow {
   id: string; email: string | null; device_serial: string; family: string; session_number: number | null;
   seconds: number; attempts: number; created_at: string; process_error: string | null;
 }
+export interface ProcWebRow {
+  id: string; email: string | null; source: string; file_name: string | null; bytes: number | null;
+  started_at: string; heartbeat_at: string; lost: boolean;
+}
+export interface ProcRecentRow {
+  id: string; kind: 'device' | 'web'; email: string | null; label: string | null; family: string;
+  seconds: number | null; status: 'done' | 'error'; no_text: boolean;
+  started_at: string | null; finished_at: string; error: string | null;
+}
 export interface AdminProcessing {
   generated_at: string; days: number;
-  live: ProcLiveRow[]; errors: ProcErrorRow[]; error_reasons: { reason: string; n: number }[];
+  live: ProcLiveRow[];
+  /** [v50] Web uploads the browser is transcribing right now (absent on an older device-api). */
+  web_live?: ProcWebRow[];
+  /** [v50] Device takes + web uploads finished in the last 30 min. */
+  recent?: ProcRecentRow[];
+  errors: ProcErrorRow[]; error_reasons: { reason: string; n: number }[];
   stats: {
     uploaded: number; done: number; error: number; queued: number; processing: number; stuck: number;
     no_text: number; success_rate: number | null; audio_seconds_done: number; queue_seconds: number;
@@ -243,4 +257,17 @@ export interface AdminRecorder {
   shared: boolean; uploads: number; last_activity: string | null;
   accounts: { user_id: string; email: string | null; uploads: number; last_upload: string | null;
     registered_at: string | null; released: boolean; holder: boolean }[];
+}
+
+/** [v44] GET /account/usage — this calendar month against the free plan (limits null on a paid plan). */
+export interface PlanUsage {
+  plan: 'free' | 'paid';
+  month_start: string;
+  recordings: number;
+  seconds: number;
+  limit_recordings: number | null;
+  limit_seconds: number | null;
+  over: boolean;
+  enforced: boolean;
+  unavailable?: boolean;
 }

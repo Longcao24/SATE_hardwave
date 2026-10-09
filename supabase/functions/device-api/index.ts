@@ -1,4 +1,4 @@
-// SATE Device API — Supabase Edge Function              [v43]
+// SATE Device API — Supabase Edge Function              [v50]
 // Replaces the mock-server's Express endpoints with a single Edge Function
 // that does internal path routing. Authenticated via Supabase JWT (users) or a
 // device key (the recorder).
@@ -52,6 +52,81 @@
 //      (and the gateway's 502 above it) simply does not apply. `storage_path` is
 //      confined to the caller's own `<user id>/` prefix and the byte count comes
 //      from Storage, never from the client.
+// v50: THE PROCESSING TAB SEES EVERYTHING THAT IS BEING TRANSCRIBED. (a) A file uploaded on the WEB is
+//      transcribed by the browser calling the AI directly, so it was never a session and never appeared;
+//      the browser now records the call in sate_web_jobs (migration 20261005_web_jobs) and
+//      /admin/processing returns those as `web_live` (lost = no heartbeat for 2 min, i.e. tab closed).
+//      (b) A take is processed in ~7 s, shorter than the tab's poll, so it was almost never caught live;
+//      `recent` lists everything (device + web) finished in the last 30 min.
+// v49: A RETRY STARTS WITH ITS RESTART PROTECTION BACK, AND A BUSY QUEUE IS NOT A STALLED ONE.
+//      (a) The owner's Retry and the admin's /admin/sessions/retry also reset `restart_refunds`
+//      (migration 20261003_processor_liveness): it counts container restarts refunded on THIS
+//      take and nothing ever cleared it, so a retried take inherited a spent budget — a deploy
+//      during the retry cost it an attempt and an orphan recovery could fail it naming restarts
+//      that happened before the Retry. Falls back to the old update if the column is missing.
+//      /admin/sessions/requeue-stuck does not reset attempts, so it leaves the counter alone too.
+//      (b) queue_stalled now ALWAYS needs the worker to have claimed or finished nothing in the
+//      window — on the queued_at path too — so five long takes draining steadily no longer page
+//      "Processing queue stalled" for the last one in line.
+// v48: v47's duplicate removal made safe to retry and to race. (a) A register that dedups writes a
+//      `register_dedup` tombstone (sate_session_audit, detail.storage_path) BEFORE removing the copy
+//      just PUT; the same register retried after a lost response (the phone re-sends the SAME slot)
+//      finds no object and is answered {idempotent} from the tombstone instead of a final 409 that
+//      re-transferred the whole take. A register that would INSERT a row on a tombstoned object gets
+//      409 (the object is being removed; the unit still holds the take). (b) findOwnTake prefers a
+//      good copy over one that never decoded, so an older good copy is deduped onto instead of the
+//      failed one being replaced into a second recording. (c) deleteSession's final row delete is
+//      conditional on the storage_path it swept; a register_replace landing mid-delete makes it
+//      re-read and sweep again (once), else 409 with the row intact — no orphaned object. Deleting
+//      also removes a tombstoned duplicate whose removal had failed.
+// v47: A RE-SENT TAKE LEAVES NOTHING BEHIND, AND A TAKE THE SERVER COULD NOT DECODE CAN BE SENT AGAIN.
+//      (a) POST /sessions/register that dedups onto this account's existing copy used to return
+//      {idempotent} and leave the object the phone had JUST PUT at a fresh upload-url slot — a second
+//      full copy of the clinical audio that no row pointed at and that deleting the session never
+//      reached (9 such L81x objects on prod, one a 115 MB hour-long take). That object is now removed —
+//      only when it is NOT the matched row's own path (a register retried on the SAME slot after a
+//      lost response must never delete the stored audio) and NO row references it. (b) A match that
+//      is status 'error' with a decode/container/conversion failure and whose storage_path is still
+//      the RAW .asc/.mp3 (it never decoded) is no longer answered with the failed copy: the fresh
+//      upload REPLACES it — same session id, row repointed at the new object, requeued with attempts
+//      reset (conditional on the row still being that failed, recording-less row), the old object
+//      removed AFTER the repoint, and `register_replace` written to sate_session_audit with the
+//      previous error. Web Retry re-decodes the same bad bytes; a re-transfer from the unit is the
+//      only real recovery, and register used to swallow it. (c) DELETE /sessions/:id removes every
+//      object the session owns: its storage_path, the .asc/.wav/.mp3 siblings of that path (the raw
+//      upload a decode left behind, or the decoded WAV of a raw path), and any previous object a
+//      register_replace could not remove — each only if under the caller's prefix and referenced
+//      by no other row.
+// v46: CROSS-ACCOUNT DUPLICATE TAKES ARE SEEN, AND A STALLED QUEUE PAGES SOMEONE. (a) Nothing is ever
+//      deleted from an L81x and a new phone/account starts with an empty "uploaded" ledger, so the whole
+//      card went up again under the second account (17 such pairs on prod, 2026-09-25/30) — another
+//      account's clinical audio, transcribed a second time, and nobody told. register + storeSessionRecord
+//      now look for the SAME TAKE under another account (session_number + bytes + the same unit: hw_serial,
+//      or every serial linked to it in sate_device_serial_units, else device_serial) and write a
+//      `cross_account_duplicate` row to sate_device_audit (service-only — the other account's ids never
+//      reach the uploader). CROSS_ACCOUNT_DUP_MODE = 'report' (default: the take is ACCEPTED, nothing is
+//      dropped) | 'refuse' (409 {code:'take_owned_elsewhere'}; needs the phone to handle that code
+//      first, and a CHUNK client must branch on the code before its 409-restart path). (b) The
+//      per-account dedup for an L81x no longer includes patient_id (a re-upload under a different
+//      selected patient returns the ORIGINAL session instead of filing a copy under the wrong patient),
+//      matches every serial of the unit, and prefers a match whose object EXISTS over a newer ghost.
+//      (c) /health/alerts: `queue_stalled` (oldest claimable take that has been QUEUED — since
+//      queued_at, migration 20261003_session_queued_at — longer than QUEUE_STALL_MIN, default 30),
+//      `queued_count`, `processor` (cf-processor's heartbeat rows, sate_processor_state, migration
+//      20261003_processor_liveness, classified as the Worker's /health does; only PROCESSOR_WORKER_IDS
+//      can be a problem; null until the processor writes one) and `cross_account_duplicates` (last
+//      24 h, ids only — no patient or other-account data).
+// v45: AN AUDIBLE TAKE THE AI RETURNED WITH NO WORDS IS NO LONGER A DEAD END. Every no_text row in 30
+//      days on prod had attempts=3 — decoded L81x audio sits above cf-processor's SILENT_RMS_MAX, so a
+//      25-min take ended as an empty 'done' row nobody could retry or was told about. POST
+//      /sessions/:id/retry now also accepts done + no_text + NO recording (nothing to duplicate), and
+//      /health/alerts carries `long_no_text` (no_text ≥ 60 s, last 24 h) and `gap_recordings`
+//      (transcripts with untranscribed `gaps`, last 24 h). cf-processor now FAILS a ≥30 s audible take
+//      that is still empty after its last attempt, instead of finalizing it no_text.
+// v44: PLAN USAGE, SHOWN ONLY. GET /account/usage → the caller's plan (free / paid = an active Stripe
+//      subscription) and this calendar month's recordings + audio against the free plan's 5 recordings /
+//      50 h. Computed in SQL (sate_quota(), migration 20261002_plan_quota). NOTHING is enforced: no take is
+//      held or refused — that is a later decision.
 // v43: A MANAGER (or admin) MAY GENERATE THE SATE REPORT of an assigned recording that has NONE —
 //      the one write oversight allows. POST /oversight/users/:uid/recordings/:rid/lsa-report {report}:
 //      same per-target check, audited (`generate_lsa`) BEFORE the write, and the write is conditional on
@@ -331,6 +406,12 @@ serve(async (req) => {
       const o = await externalOwner(supabase, user.id, u.searchParams.get('serial') || '', u.searchParams.get('hw') || '');
       return json(o);
     }
+    // [v44] The caller's plan and this month's usage.
+    if (subPath === '/account/usage' && method === 'GET') {
+      const { data, error } = await supabase.rpc('sate_quota', { p_user: user.id, p_seconds: 0 });
+      if (error) return json({ plan: 'free', enforced: false, unavailable: true });
+      return json(data);
+    }
     // [v40] The phone reports a unit on connect; answers the ONE name everyone shows for it.
     if (subPath === '/devices/seen' && method === 'POST') {
       return await deviceSeen(supabase, user.id, req);
@@ -505,7 +586,17 @@ serve(async (req) => {
       // behind, and it strands the recording on the device for ever. Confirm the
       // object AND take the byte count from Storage, never from the client.
       const bytes = await objectSize(supabase, 'device-sessions', storagePath);
-      if (bytes === null) return err('no object at storage_path — upload it first', 409);
+      if (bytes === null) {
+        // [v48] A register that dedups removes the copy just PUT (v47), so the SAME register
+        // retried after a lost response finds no object. Without this it got 409 — final for the
+        // phone — and the whole take was re-transferred from the unit only to be deduped again.
+        // The tombstone that removal left names the session it deduped onto; answer with it.
+        const prior = await dedupTombstone(supabase, user.id, storagePath);
+        if (prior && await sessionExists(supabase, user.id, prior)) {
+          return json({ id: prior, idempotent: true });
+        }
+        return err('no object at storage_path — upload it first', 409);
+      }
       if (bytes === 0) return err('uploaded object is empty', 400);
 
       const meta = {
@@ -517,28 +608,49 @@ serve(async (req) => {
         hw_serial: hwSerialOf(body.hw_serial),
       };
       // Same idempotency the byte-carrying routes have: a retried register must
-      // not create a second session, and a second AI run.
-      const { data: existing } = await supabase.from('sate_device_sessions')
-        .select('id, storage_path')
-        .eq('user_id', user.id)
-        .eq('device_serial', meta.device_serial)
-        .eq('patient_id', meta.patient_id)
-        .eq('session_number', meta.session_number)
-        .eq('bytes', bytes)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (existing) {
-        const real = existing.storage_path &&
-          await objectExists(supabase, 'device-sessions', existing.storage_path);
-        if (real) return json({ id: existing.id, idempotent: true });
-        await supabase.from('sate_device_sessions').delete().eq('id', existing.id);
+      // not create a second session, and a second AI run. [v46] For an L81x: any
+      // serial of the unit, and not keyed on the patient (see findOwnTake).
+      const unit = await unitIds(supabase, meta.device_serial, meta.hw_serial);
+      const own = await findOwnTake(supabase, user.id, meta, bytes, unit);
+      if (own.real) {
+        // [v47] A take the server could not decode is replaced by this fresh copy, not deduped
+        // onto the failed one (the re-transfer is the only real recovery from bad bytes).
+        if (own.real.storage_path !== storagePath && isUndecodedFailure(own.real)) {
+          const replaced = await replaceFailedTake(supabase, user.id, own.real, storagePath, bytes);
+          if (replaced) return replaced;
+        }
+        // [v47] Otherwise the take is already stored: drop the copy just PUT at a fresh slot, or it
+        // is a second, unreferenced copy of the audio that deleting the session never reaches.
+        await removeUnreferencedUpload(supabase, user.id, own.real.id, storagePath, own.real.storage_path);
+        return json({ id: own.real.id, idempotent: true });
       }
+      // [v48] This object was condemned by an earlier register that deduped it (it may be
+      // removed at any moment, or already be half-way there). Filing a row on it would point the
+      // take at audio that is about to vanish while the phone marks it uploaded — so refuse; the
+      // take is still on the unit and the next sweep sends it to a fresh slot.
+      if (await dedupTombstone(supabase, user.id, storagePath)) {
+        return err('this upload was already discarded as a duplicate — upload it again', 409);
+      }
+      if (own.ghost) await supabase.from('sate_device_sessions').delete().eq('id', own.ghost.id);
 
       const sessionId = String(body.session_id || '').match(/^s-[0-9a-f]{8}$/)
         ? String(body.session_id)
         : newSessionId();
-      return await insertSessionRow(supabase, user.id, meta, sessionId, storagePath, bytes);
+      // [v46] The same take under ANOTHER account. 'report' (default): accepted — no audio is
+      // ever dropped on a guess — and recorded for /health/alerts. 'refuse': 409, and the object
+      // just uploaded is removed (the unit still holds the take; the other account holds its copy).
+      // A match whose own object is gone (a ghost row) refuses nothing.
+      const mode = crossAccountDupMode();
+      const other = await findTakeElsewhere(supabase, user.id, meta, bytes, unit);
+      if (other && mode === 'refuse' && other.storage_path &&
+          await objectExists(supabase, 'device-sessions', other.storage_path)) {
+        await auditTakeElsewhere(supabase, user.id, meta, bytes, unit, other, mode, 'refused', null);
+        await supabase.storage.from('device-sessions').remove([storagePath]).catch(() => {});
+        return takeOwnedElsewhere();
+      }
+      const res = await insertSessionRow(supabase, user.id, meta, sessionId, storagePath, bytes);
+      if (other) await auditTakeElsewhere(supabase, user.id, meta, bytes, unit, other, mode, 'accepted', sessionId);
+      return res;
     }
 
     // [v26] CHUNKED upload for a signed-in user.
@@ -678,6 +790,248 @@ async function externalOwner(supabase: any, userId: string, serial: string, hw: 
   } catch { /* the refusal stands even if the name cannot be looked up */ }
   return { owner: 'other', owner_email: email, since, source };
 }
+
+// ---- [v46] One take, one unit, several accounts ---------------------------------------------
+
+/** 'report' (default) accepts a take another account already stored and only records it;
+ *  'refuse' answers 409 take_owned_elsewhere. Anything else reads as 'report' — a typo in the
+ *  env must never start refusing uploads. */
+function crossAccountDupMode(): 'report' | 'refuse' {
+  return (Deno.env.get('CROSS_ACCOUNT_DUP_MODE') || '').trim().toLowerCase() === 'refuse' ? 'refuse' : 'report';
+}
+
+type UnitIds = { hw: string | null; serials: string[] };
+
+/**
+ * Every serial one physical unit has uploaded under. An L81x's `device_serial` is per PHONE on
+ * iOS, so the serial alone splits one unit into several; the unit's own `hw_serial` — sent with the
+ * upload, or else found through the link a phone made on connect (the 0x01 read is best-effort and
+ * can time out) — joins them. Best effort throughout: a failed lookup narrows the match to the
+ * serial itself, it never fails an upload.
+ */
+async function unitIds(supabase: any, serial: string, hw?: string | null): Promise<UnitIds> {
+  const ok = (x: unknown): x is string => typeof x === 'string' && /^[A-Za-z0-9:_.-]{1,96}$/.test(x);
+  let unitHw = hw || null;
+  if (!unitHw && externalKind(serial) === 'l816') {
+    const { data, error } = await supabase.from('sate_device_serial_units')
+      .select('hw_serial').eq('serial', serial).maybeSingle();
+    if (error) console.warn(`unitIds link lookup: ${error.message}`);
+    unitHw = hwSerialOf(data?.hw_serial);
+  }
+  const serials = ok(serial) ? [serial] : [];
+  if (unitHw) {
+    const { data, error } = await supabase.from('sate_device_serial_units').select('serial').eq('hw_serial', unitHw);
+    if (error) console.warn(`unitIds serials lookup: ${error.message}`);
+    for (const r of data || []) if (ok(r.serial) && !serials.includes(r.serial)) serials.push(r.serial);
+  }
+  return { hw: unitHw, serials };
+}
+
+/** A PostgREST `or=` matching any of the unit's serials or its hw_serial (both character sets are
+ *  closed by the checks above: no comma, no parenthesis, no quote). Null when there is nothing to match on. */
+function unitOrFilter(u: UnitIds): string | null {
+  // Quoted, since both character sets allow '.' (and serials ':'), which or= reserves.
+  const parts = [...u.serials.map((s) => `device_serial.eq."${s}"`), ...(u.hw ? [`hw_serial.eq."${u.hw}"`] : [])];
+  return parts.length ? parts.join(',') : null;
+}
+
+/**
+ * The caller's OWN copy of this take, if they already stored it — the retry/lost-ACK dedup.
+ * For an L81x the key is (unit, session_number, bytes) WITHOUT patient_id: the phone sends the
+ * patient selected NOW, so a take re-sent after the selection changed missed the match and was
+ * filed a second time under the wrong patient. Returning the original session (under its original
+ * patient) is the right answer. Every other family keeps the old key unchanged.
+ * → `real`: a match whose object is stored (answer idempotently); else `ghost`: the newest match,
+ * object missing (drop it and store again); both null = a new take.
+ */
+type OwnTake = {
+  id: string; storage_path: string | null; status?: string | null; process_error?: string | null;
+  attempts?: number | null; recording_id?: string | null;
+};
+
+async function findOwnTake(
+  supabase: any, userId: string,
+  meta: { device_serial: string; patient_id: string; session_number: number },
+  bytes: number, unit: UnitIds,
+) {
+  // [v47] status/process_error/recording_id: register decides whether a failed decode is replaced.
+  let q = supabase.from('sate_device_sessions')
+    .select('id, storage_path, status, process_error, attempts, recording_id')
+    .eq('user_id', userId).eq('session_number', meta.session_number).eq('bytes', bytes);
+  const f = externalKind(meta.device_serial) === 'l816' ? unitOrFilter(unit) : null;
+  q = f ? q.or(f) : q.eq('device_serial', meta.device_serial).eq('patient_id', meta.patient_id);
+  // Several rows can match now that the key spans the unit and every patient: a ghost (row
+  // whose object never landed — the 413 class) may be the NEWEST while an older real copy
+  // exists. Answering with the ghost would delete it and store the take a second time (a
+  // duplicate session and a second AI run), so the first REAL copy wins and a ghost is
+  // returned for deletion only when none of them is real.
+  const { data } = await q.order('created_at', { ascending: false }).limit(5);
+  const rows = (data || []) as OwnTake[];
+  // [v48] A copy that never decoded is the LAST choice: register replaces such a match with the
+  // fresh upload, so answering with it while an older GOOD copy exists (the take was filed twice
+  // before v46, under another patient or serial) would transcribe the take into a second recording.
+  let failed: OwnTake | null = null;
+  for (const r of rows) {
+    if (r.storage_path && await objectExists(supabase, 'device-sessions', r.storage_path)) {
+      if (!isUndecodedFailure(r)) return { real: r, ghost: null };
+      failed ??= r;
+    }
+  }
+  if (failed) return { real: failed, ghost: null };
+  return { real: null, ghost: rows[0] ?? null };
+}
+
+/** [v47] A raw upload (.asc / .mp3) that never became a WAV because its decode/conversion failed
+ *  for good. `storage_path` still being the raw object is what proves it never decoded — after a
+ *  successful decode cf-processor repoints the row at `<id>.wav`. Errors that are not about the
+ *  bytes (download, AI, length) are not matched: Retry is their recovery, not a re-send. */
+const UNDECODED_ERROR_RE = /\bASC\b|decode|container|whole \d+-byte frames|MP3 conversion|MP3 take is empty/i;
+function isUndecodedFailure(r: OwnTake): boolean {
+  return r.status === 'error' && !r.recording_id && !!r.storage_path &&
+    /\.(asc|mp3)$/.test(r.storage_path) && UNDECODED_ERROR_RE.test(String(r.process_error || ''));
+}
+
+/** [v47] Repoint a failed, never-decoded session at a freshly uploaded copy of the same take and
+ *  requeue it. Same session id (its flags, patient and audit history stay with it). Conditional on
+ *  the row still being exactly the failed row that was read — a Retry or delete in between wins,
+ *  and the caller falls back to the idempotent answer. The old object goes only AFTER the repoint
+ *  (the row is its only pointer); a failed removal is recorded so deleteSession can finish it.
+ *  Returns null when nothing was replaced. */
+async function replaceFailedTake(
+  supabase: any, userId: string, row: OwnTake, storagePath: string, bytes: number,
+): Promise<Response | null> {
+  const oldPath = row.storage_path as string;
+  const { data: moved, error } = await supabase.from('sate_device_sessions')
+    .update({
+      storage_path: storagePath, status: 'queued', process_error: null, attempts: 0,
+      not_before: null, processing_started_at: null, no_text: false, processed: false,
+      processed_at: null,
+      audio_seconds: storagePath.endsWith('.asc') ? Math.floor(bytes / 82) * 0.02
+        : storagePath.endsWith('.mp3') ? bytes / 4000 : null,
+    })
+    .eq('id', row.id).eq('user_id', userId).eq('status', 'error')
+    .eq('storage_path', oldPath).is('recording_id', null)
+    .select('id');
+  if (error) { console.error(`register replace ${row.id} failed:`, error.message); return null; }
+  if (!moved || moved.length === 0) return null;
+
+  let previousObject: 'removed' | 'failed' | 'kept' = 'kept';
+  if (!(await pathReferenced(supabase, oldPath))) {
+    const { error: rmErr } = await supabase.storage.from('device-sessions').remove([oldPath]);
+    previousObject = rmErr && !/not found|does not exist|no such/i.test(rmErr.message) ? 'failed' : 'removed';
+    if (previousObject === 'failed') console.error(`register replace ${row.id}: old object ${oldPath} kept: ${rmErr.message}`);
+  }
+  await auditSession(supabase, row.id, userId, 'register_replace', {
+    previous_storage_path: oldPath, previous_object: previousObject,
+    previous_error: row.process_error, previous_attempts: row.attempts,
+    previous_status: row.status, storage_path: storagePath, bytes,
+  });
+  triggerProcessor(row.id);
+  return json({ id: row.id, replaced: true, status: 'queued' });
+}
+
+/** [v47] Does any session row point at this object? */
+async function pathReferenced(supabase: any, path: string): Promise<boolean> {
+  const { data, error } = await supabase.from('sate_device_sessions')
+    .select('id').eq('storage_path', path).limit(1);
+  // A failed lookup is "referenced": never delete on a guess.
+  if (error) { console.warn(`storage_path lookup failed: ${error.message}`); return true; }
+  return !!data && data.length > 0;
+}
+
+/** [v47] Remove an object a register did not keep (the take was already stored). Never the
+ *  matched row's own object (a same-slot retry), never one any row references. Best effort — the
+ *  idempotent answer stands either way — but a failure is logged, not swallowed. */
+async function removeUnreferencedUpload(
+  supabase: any, userId: string, keptId: string, storagePath: string, keptPath: string | null,
+) {
+  if (storagePath === keptPath) return;
+  if (await pathReferenced(supabase, storagePath)) return;
+  // [v48] Tombstone FIRST, then remove. The tombstone is what (a) lets the same register, retried
+  // after a lost response, still get its idempotent answer once this object is gone, and (b) stops
+  // a concurrent register from filing a NEW row on an object this one is about to delete. Written
+  // as an audit row on the session the take deduped onto (the audit table has no FK by design).
+  // If the tombstone cannot be written, nothing is removed: an orphan is recoverable, a row
+  // pointing at a deleted object is not.
+  const { error: tErr } = await supabase.from('sate_session_audit').insert({
+    session_id: keptId, user_id: userId, action: 'register_dedup', detail: { storage_path: storagePath },
+  });
+  if (tErr) { console.error(`register: dedup tombstone for ${storagePath} not written, object kept: ${tErr.message}`); return; }
+  // Re-check now that the tombstone is visible: a register that inserted in between wins.
+  if (await pathReferenced(supabase, storagePath)) return;
+  const { error } = await supabase.storage.from('device-sessions').remove([storagePath]);
+  if (error) { console.error(`register: duplicate upload ${storagePath} not removed: ${error.message}`); return; }
+  // Last line of defence for the remaining window — make it loud, never silent.
+  if (await pathReferenced(supabase, storagePath)) {
+    console.error(`register: removed duplicate ${storagePath} but a row now references it`);
+  }
+}
+
+/** [v48] The session a previous register deduped `storagePath` onto (its `register_dedup`
+ *  tombstone), or null. A failed lookup is null: the caller then behaves exactly as v47 did. */
+async function dedupTombstone(supabase: any, userId: string, storagePath: string): Promise<string | null> {
+  const { data, error } = await supabase.from('sate_session_audit')
+    .select('session_id').eq('user_id', userId).eq('action', 'register_dedup')
+    .eq('detail->>storage_path', storagePath)
+    .order('created_at', { ascending: false }).limit(1);
+  if (error) { console.warn(`dedup tombstone lookup failed: ${error.message}`); return null; }
+  return (data && data[0]?.session_id) || null;
+}
+
+async function sessionExists(supabase: any, userId: string, sessionId: string): Promise<boolean> {
+  const { data } = await supabase.from('sate_device_sessions')
+    .select('id').eq('id', sessionId).eq('user_id', userId).maybeSingle();
+  return !!data;
+}
+
+/**
+ * The same take already stored under ANOTHER account: same unit, same session_number, same stored
+ * byte count. Bluetooth hardware only (a SATE recorder belongs to one account by its device key, and
+ * its 1..99 take numbers would collide by chance). This is how a unit used from a second phone or
+ * account re-uploads the whole card: nothing is ever deleted from an L81x, and the new phone's
+ * "uploaded" ledger starts empty. A failed lookup is "no match" — never a failed upload.
+ */
+async function findTakeElsewhere(
+  supabase: any, userId: string,
+  meta: { device_serial: string; session_number: number }, bytes: number, unit: UnitIds,
+) {
+  if (!externalKind(meta.device_serial) || !meta.session_number) return null;
+  const f = unitOrFilter(unit);
+  if (!f) return null;
+  const { data, error } = await supabase.from('sate_device_sessions')
+    .select('id, user_id, device_serial, hw_serial, storage_path, status, created_at')
+    .neq('user_id', userId).eq('session_number', meta.session_number).eq('bytes', bytes).or(f)
+    .order('created_at', { ascending: true }).limit(1);
+  if (error) { console.warn(`cross-account dup probe: ${error.message}`); return null; }
+  return (data?.[0] ?? null) as any;
+}
+
+/** The record of a cross-account duplicate. sate_device_audit is service-only (no RLS policies), so
+ *  the OTHER account's ids are never readable by the uploader — sate_session_audit is read-own and
+ *  would hand them over. Best effort, like every audit write here, but never silently skipped. */
+async function auditTakeElsewhere(
+  supabase: any, userId: string,
+  meta: { device_serial: string; patient_id: string; session_number: number },
+  bytes: number, unit: UnitIds, other: any, mode: string, outcome: 'accepted' | 'refused',
+  sessionId: string | null,
+) {
+  const { error } = await supabase.from('sate_device_audit').insert({
+    serial: meta.device_serial, hw_serial: unit.hw, action: 'cross_account_duplicate', by_user: userId,
+    detail: {
+      mode, outcome, session_id: sessionId, session_number: meta.session_number, bytes,
+      patient_id: meta.patient_id,
+      other_session_id: other.id, other_user_id: other.user_id, other_device_serial: other.device_serial,
+      other_status: other.status, other_created_at: other.created_at,
+    },
+  });
+  if (error) console.error(`audit cross_account_duplicate ${meta.device_serial}#${meta.session_number} failed:`, error.message);
+}
+
+/** The 409 in 'refuse' mode. The code is what the phone keys on: it must park the file in a
+ *  "not mine" set — NOT mark it uploaded, and NOT treat it as a link failure that ends the sweep. */
+const takeOwnedElsewhere = () => json({
+  error: 'This recording was already uploaded by another account', code: 'take_owned_elsewhere',
+}, 409);
 
 // ============================================================================
 // [v34] OVERSIGHT — read-only cross-account viewing
@@ -1563,6 +1917,141 @@ async function healthAlerts(supabase: any) {
   const { data: offline } = await supabase.from('sate_devices')
     .select('serial, last_seen, fw').eq('online', false)
     .order('last_seen', { ascending: false }).limit(25);
+  // [v45] A take finalized `no_text` is 'done', so neither query above sees it — and on prod
+  // EVERY no_text row had spent its 3 attempts on audible audio (the L81x noise floor beats the
+  // RMS gate). One that is a minute or longer is very unlikely to really hold no words, so it
+  // is an alert: it can now be retried (retrySession). Length: audio_seconds, else WAV bytes.
+  const dayAgo = new Date(now - 24 * 3600 * 1000).toISOString();
+  const { data: noTextRows } = await supabase.from('sate_device_sessions')
+    .select('id, device_serial, session_number, attempts, bytes, audio_seconds, processed_at')
+    .eq('status', 'done').eq('no_text', true).is('recording_id', null)
+    .gte('processed_at', dayAgo).order('processed_at', { ascending: false }).limit(200);
+  const longNoText = (noTextRows || [])
+    .map((r: any) => ({ id: r.id, device_serial: r.device_serial, session_number: r.session_number,
+      attempts: r.attempts, processed_at: r.processed_at, seconds: Math.round(takeSeconds(r)) }))
+    .filter((r: any) => r.seconds >= 60).slice(0, 25);
+  // [v45] A long take the AI kept 500-ing on is transcribed AROUND the bad span and the span is
+  // recorded in transcript.gaps — a recording that looks complete but is missing minutes.
+  const { data: gapRows } = await supabase.from('recordings')
+    .select('id, user_id, file_name, created_at, gaps:transcript->gaps')
+    .not('transcript->gaps', 'is', null).gte('created_at', dayAgo)
+    .order('created_at', { ascending: false }).limit(25);
+  const gapRecordings = (gapRows || []).map((r: any) => {
+    const g = Array.isArray(r.gaps) ? r.gaps : [];
+    return { id: r.id, user_id: r.user_id, file_name: r.file_name, created_at: r.created_at,
+      gap_count: g.length,
+      gap_seconds: Math.round(g.reduce((t: number, x: any) => t + Math.max((x?.end ?? 0) - (x?.start ?? 0), 0), 0)) };
+  }).filter((r: any) => r.gap_count > 0);
+  // [v46] A queue that has STOPPED DRAINING. An AI outage refunds the attempt and pauses
+  // claiming; a container that never boots, or waits forever for a missing secret, claims
+  // nothing — in every case the takes stay 'queued', so neither the error count nor the stuck
+  // list ever moves and nobody was told. Only CLAIMABLE rows count (not_before null or past —
+  // a row backing off until a future not_before is waiting on purpose). 30 min by default:
+  // the measured normal queue wait is a 55-93 s median and one worker clears a 70-min take in
+  // ~400 s, so 15 would cry wolf.
+  // The wait is measured from when the row last ENTERED 'queued' (queued_at, set by a trigger
+  // on every transition — migration 20261003_session_queued_at), never from the upload: a
+  // Retry, an admin requeue, a deploy's release_session and an AIUnavailable refund all requeue
+  // with not_before NULL, so a days-old take read as "waiting days" the moment it was queued
+  // again and paged whenever the worker happened to be busy. Before that migration the column
+  // is missing and the age falls back to greatest(created_at, not_before).
+  // [v49] On BOTH paths a stall also needs the worker to have claimed and finished NOTHING for
+  // the whole window — that is what "stopped draining" means. A long wait alone is not it: a
+  // few long takes queued together leave the last one waiting past 30 min while the one worker
+  // drains steadily (cf-processor restarts processing_started_at per piece, so a long take
+  // being worked on counts as activity).
+  const QUEUE_STALL_MS = Math.max(Number(Deno.env.get('QUEUE_STALL_MIN') || '30') || 30, 5) * 60 * 1000;
+  const nowIso = new Date(now).toISOString();
+  // Quoted: an ISO time carries ':' and '.', which PostgREST's or= grammar reserves.
+  const claimable = `not_before.is.null,not_before.lte."${nowIso}"`;
+  const { count: queuedCount } = await supabase.from('sate_device_sessions')
+    .select('id', { count: 'exact', head: true }).eq('status', 'queued').or(claimable);
+  const queuedSelect = (withQueuedAt: boolean) => supabase.from('sate_device_sessions')
+    .select(`id, device_serial, session_number, attempts, created_at, not_before${withQueuedAt ? ', queued_at' : ''}`)
+    .eq('status', 'queued').or(claimable)
+    .order(withQueuedAt ? 'queued_at' : 'created_at', { ascending: true, nullsFirst: false }).limit(200);
+  let queuedExact = true;
+  let { data: queuedRows, error: queuedErr } = await queuedSelect(true);
+  if (queuedErr) {
+    queuedExact = false;
+    ({ data: queuedRows } = await queuedSelect(false));
+  }
+  const queuedAged = (queuedRows || []).map((r: any) => {
+    const since = Math.max(
+      Date.parse((queuedExact && r.queued_at) || r.created_at) || now,
+      r.not_before ? Date.parse(r.not_before) || 0 : 0);
+    return { id: r.id, device_serial: r.device_serial, session_number: r.session_number,
+      attempts: r.attempts, created_at: r.created_at, waiting_s: Math.round((now - since) / 1000) };
+  }).sort((a: any, b: any) => b.waiting_s - a.waiting_s);
+  let drainedRecently = false;
+  if (queuedAged.some((r: any) => r.waiting_s * 1000 >= QUEUE_STALL_MS)) {
+    const windowStart = new Date(now - QUEUE_STALL_MS).toISOString();
+    const { count: active } = await supabase.from('sate_device_sessions')
+      .select('id', { count: 'exact', head: true })
+      .or(`processing_started_at.gte."${windowStart}",processed_at.gte."${windowStart}"`);
+    drainedRecently = (active || 0) > 0;
+  }
+  const queueStalled = drainedRecently ? []
+    : queuedAged.filter((r: any) => r.waiting_s * 1000 >= QUEUE_STALL_MS).slice(0, 25);
+  // [v46] cf-processor's own heartbeat (sate_processor_state, one row per worker — migration
+  // 20261003_processor_liveness). It sees what no session row can: a process that is gone, a
+  // loop wedged on one call, or one stuck "waiting for config". Classified EXACTLY as the
+  // cf-processor Worker's /health does (src/index.ts processorHealth) so the two never disagree:
+  // last_loop_at (the side thread's ~30 s beat) past HEARTBEAT_STALE_MINUTES (5) = 'stale';
+  // detail.progress_age_s + the beat's age past LOOP_STALE_MINUTES (100, beyond its own 90-min
+  // wedge watchdog) = 'wedged'; then waiting_for_config, stopping, ai_paused. 'stopping' (a
+  // deploy / shutdown in progress) and 'ai_paused' are not problems here and the Worker's
+  // /health answers 200 for both (cf-processor ≥2026-10-05). 'ai_paused' is
+  // reported but is not a problem by itself — the AI is down, not the worker, and the queue
+  // check above is what pages for it. No table / no row = null (unknown), no alert.
+  // Only the EXPECTED workers can be a problem (PROCESSOR_WORKER_IDS, comma-separated, default
+  // the one the Worker's /health reads, 'cf-container-1'). A row left by a renamed or test
+  // worker only ever gets older; classified 'stale' it would page forever for a process that
+  // no longer exists, and disagree with the Worker. It is listed as 'retired', problem:false.
+  const expectedWorkers = (Deno.env.get('PROCESSOR_WORKER_IDS') || 'cf-container-1')
+    .split(',').map((x) => x.trim()).filter(Boolean);
+  const beatStaleS = (Number(Deno.env.get('HEARTBEAT_STALE_MINUTES') || '5') || 5) * 60;
+  const loopStaleS = (Number(Deno.env.get('LOOP_STALE_MINUTES') || '100') || 100) * 60;
+  let processor: any[] | null = null;
+  {
+    const { data: hb, error: hbErr } = await supabase.from('sate_processor_state')
+      .select('worker_id, last_loop_at, ai_paused_since, waiting_for_config, codec_ok, detail');
+    if (!hbErr && hb && hb.length) {
+      processor = hb.map((r: any) => {
+        const d = r.detail ?? {};
+        const beatAge = typeof r.last_loop_at === 'string' ? Math.round((now - Date.parse(r.last_loop_at)) / 1000) : null;
+        const loopAge = typeof d.progress_age_s === 'number' && beatAge !== null ? d.progress_age_s + beatAge : null;
+        let status = 'up';
+        if (!expectedWorkers.includes(r.worker_id)) status = 'retired';
+        else if (beatAge === null || beatAge > beatStaleS) status = 'stale';
+        else if (loopAge !== null && loopAge > loopStaleS) status = 'wedged';
+        else if (r.waiting_for_config === true) status = 'no_config';
+        else if (d.state === 'stopping') status = 'stopping';
+        else if (r.ai_paused_since) status = 'ai_paused';
+        // Only the liveness fields: detail names sessions and carries the last error text.
+        return { worker_id: r.worker_id, status, beat_age_s: beatAge, loop_age_s: loopAge,
+          state: d.state ?? null, ai_paused_since: r.ai_paused_since ?? null, codec_ok: r.codec_ok ?? null,
+          problem: status === 'stale' || status === 'wedged' || status === 'no_config' };
+      });
+    }
+  }
+  const processorProblems = (processor || []).filter((p: any) => p.problem);
+  // [v46] The same take stored under more than one account (written by register /
+  // storeSessionRecord — see findTakeElsewhere). Report-only by default, so this is the ONLY
+  // place it surfaces. Missing table = nothing to report.
+  const { data: dupRows } = await supabase.from('sate_device_audit')
+    .select('id, serial, hw_serial, detail, created_at')
+    .eq('action', 'cross_account_duplicate').gte('created_at', dayAgo)
+    .order('created_at', { ascending: false }).limit(25);
+  // A FIXED projection, not the raw detail: detail carries the uploader's patient_id and the
+  // other account's user id, and this list is what the status Worker mails. Patient data stays
+  // in the (service-only) audit table; the ids here are enough to look the pair up.
+  const crossDups = (dupRows || []).map((r: any) => {
+    const d = r.detail ?? {};
+    return { id: r.id, serial: r.serial, hw_serial: r.hw_serial, created_at: r.created_at,
+      outcome: d.outcome ?? null, session_number: d.session_number ?? null,
+      session_id: d.session_id ?? null, other_session_id: d.other_session_id ?? null };
+  });
   const errors = recentErrors || [];
   const stuckList = stuck || [];
   const offlineList = offline || [];
@@ -1572,12 +2061,32 @@ async function healthAlerts(supabase: any) {
     signature: JSON.stringify({
       e: errors.map((r: any) => `${r.device_serial}#${r.session_number}`).sort(),
       s: stuckList.map((r: any) => r.id).sort(),
+      n: longNoText.map((r: any) => r.id).sort(),
+      g: gapRecordings.map((r: any) => r.id).sort(),
+      // [v46] The OLDEST stalled take only: every new take joining a stalled queue would
+      // otherwise change the signature and mail again every 5 minutes for one outage.
+      q: queueStalled.length ? queueStalled[0].id : null,
+      p: processorProblems.map((p: any) => `${p.worker_id}:${p.status}`).sort(),
+      x: crossDups.map((r: any) => r.id).sort(),
     }),
     error_count: errorCount || 0,
     stuck_count: stuckList.length,
     recent_errors: errors,
     stuck_list: stuckList,
     offline_devices: offlineList,
+    long_no_text_count: longNoText.length,
+    long_no_text: longNoText,
+    gap_recording_count: gapRecordings.length,
+    gap_recordings: gapRecordings,
+    queued_count: queuedCount || 0,
+    queued_oldest_wait_s: queuedAged.length ? queuedAged[0].waiting_s : null,
+    queue_stall_min: QUEUE_STALL_MS / 60000,
+    queue_stalled_count: queueStalled.length,
+    queue_stalled: queueStalled,
+    processor,
+    processor_problem_count: processorProblems.length,
+    cross_account_duplicate_count: crossDups.length,
+    cross_account_duplicates: crossDups,
   });
 }
 
@@ -1665,6 +2174,8 @@ const familyOf = (serial?: string | null) => {
 const errorReason = (e?: string | null) => String(e || 'unknown')
   .replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, '<id>').replace(/\d+(\.\d+)?/g, 'N').trim().slice(0, 120);
 
+const WEB_JOB_LOST_MS = 2 * 60_000;   // the browser beats every 30 s
+const RECENT_MS = 30 * 60_000;
 async function adminProcessing(supabase: any, url: URL) {
   const days = Math.min(Math.max(parseInt(url.searchParams.get('days') || '7', 10) || 7, 1), 30);
   const now = Date.now();
@@ -1693,6 +2204,40 @@ async function adminProcessing(supabase: any, url: URL) {
       stuck: r.status === 'processing' && !!r.processing_started_at && now - Date.parse(r.processing_started_at) > PROC_STUCK_MS,
     });
   }
+
+  // [v50] Web uploads: the BROWSER calls the AI, so they are not sessions. sate_web_jobs is the
+  // browser's own record of the call (best-effort; a closed tab stops its heartbeat, it never
+  // closes the row). A row silent past WEB_JOB_LOST_MS is shown as lost, and dropped after a day.
+  const { data: web } = await supabase.from('sate_web_jobs')
+    .select('id, user_id, file_name, bytes, source, started_at, heartbeat_at')
+    .eq('status', 'processing').gte('heartbeat_at', new Date(now - 86400_000).toISOString())
+    .order('started_at', { ascending: true }).limit(200);
+  const webRows = [];
+  for (const w of web || []) {
+    webRows.push({ id: w.id, email: await email(w.user_id), source: w.source, file_name: w.file_name, bytes: w.bytes,
+      started_at: w.started_at, heartbeat_at: w.heartbeat_at,
+      lost: now - Date.parse(w.heartbeat_at) > WEB_JOB_LOST_MS });
+  }
+
+  // [v50] Recently finished. Processing itself takes seconds (median ~7 s), shorter than any poll,
+  // so a take that was never caught "processing" must still be visible as having just gone through.
+  const recentSince = new Date(now - RECENT_MS).toISOString();
+  const { data: recentDev } = await supabase.from('sate_device_sessions').select(cols)
+    .in('status', ['done', 'error']).gte('processed_at', recentSince).order('processed_at', { ascending: false }).limit(50);
+  const { data: recentWeb } = await supabase.from('sate_web_jobs')
+    .select('id, user_id, file_name, bytes, source, status, started_at, finished_at, error')
+    .in('status', ['done', 'error']).gte('finished_at', recentSince).order('finished_at', { ascending: false }).limit(50);
+  const recentRows = [];
+  for (const r of recentDev || []) {
+    recentRows.push({ id: r.id, kind: 'device', email: await email(r.user_id), label: r.device_serial, family: familyOf(r.device_serial),
+      seconds: takeSeconds(r), status: r.status, no_text: !!r.no_text,
+      started_at: r.processing_started_at, finished_at: r.processed_at, error: r.status === 'error' ? r.process_error : null });
+  }
+  for (const w of recentWeb || []) {
+    recentRows.push({ id: w.id, kind: 'web', email: await email(w.user_id), label: w.file_name, family: w.source,
+      seconds: null, status: w.status, no_text: false, started_at: w.started_at, finished_at: w.finished_at, error: w.error });
+  }
+  recentRows.sort((a: any, b: any) => Date.parse(b.finished_at) - Date.parse(a.finished_at));
 
   // Unresolved errors (any age — an error never clears by itself).
   const { data: errs, error: e2 } = await supabase.from('sate_device_sessions').select(cols)
@@ -1743,6 +2288,8 @@ async function adminProcessing(supabase: any, url: URL) {
     generated_at: new Date(now).toISOString(),
     days,
     live: liveRows,
+    web_live: webRows,
+    recent: recentRows.slice(0, 50),
     errors: errorRows,
     error_reasons: [...reasons.entries()].map(([reason, n]) => ({ reason, n })).sort((a, b) => b.n - a.n),
     stats: {
@@ -1872,6 +2419,18 @@ async function adminIds(req: Request): Promise<string[] | null> {
   return ids.length && ids.length <= 100 ? [...new Set<string>(ids)] : null;
 }
 
+// [v49] Resetting `restart_refunds` alongside `attempts`. The column comes from migration
+// 20261003_processor_liveness; until that is applied PostgREST rejects the unknown column
+// (PGRST204 / 42703), and a Retry must never break on that — so the update is re-run without it.
+async function updateResettingRefunds(run: (fields: Record<string, unknown>) => any, fields: Record<string, unknown>) {
+  const res = await run({ ...fields, restart_refunds: 0 });
+  if (res?.error && (res.error.code === 'PGRST204' || res.error.code === '42703'
+      || /restart_refunds/.test(res.error.message || ''))) {
+    return await run(fields);
+  }
+  return res;
+}
+
 // Same effect as the owner's Retry (retrySession): only a FAILED take, attempts reset, and the
 // failure being retried is written to sate_session_audit first — with who pressed the button.
 async function adminRetrySessions(supabase: any, admin: any, req: Request) {
@@ -1888,9 +2447,9 @@ async function adminRetrySessions(supabase: any, admin: any, req: Request) {
       by_admin: admin.email ?? admin.id,
     });
     // `.eq('status','error')` again: a row that changed under us is left alone.
-    const { data: upd, error } = await supabase.from('sate_device_sessions')
-      .update({ status: 'queued', process_error: null, attempts: 0, not_before: null, processing_started_at: null })
-      .eq('id', id).eq('status', 'error').select('id');
+    const { data: upd, error } = await updateResettingRefunds((f) => supabase.from('sate_device_sessions')
+      .update(f).eq('id', id).eq('status', 'error').select('id'),
+      { status: 'queued', process_error: null, attempts: 0, not_before: null, processing_started_at: null });
     if (error) throw new Error(error.message);
     if (upd?.length) retried.push(id); else skipped.push({ id, reason: 'changed meanwhile' });
   }
@@ -2341,6 +2900,29 @@ async function handleSessionUpload(
       }
     }
 
+    // [v46] 'refuse' mode: the same take under ANOTHER account is refused HERE, before a single
+    // part is listed or downloaded — storeSessionRecord would refuse it too, but only after this
+    // function stitched the whole take in memory. The answer is 409 {code:'take_owned_elsewhere'},
+    // and a chunk client must branch on that CODE before its 409 = "restart from offset 0" path
+    // (offset gap / size mismatch / changed part), or it re-sends the whole take forever. The
+    // firmware never gets here: a SATE recorder is not Bluetooth hardware (findTakeElsewhere).
+    if (isFinal && declaredTotal > 0 && crossAccountDupMode() === 'refuse' && externalKind(serial)) {
+      const meta = { device_serial: serial, patient_id: url.searchParams.get('patient_id') || 'PT',
+        session_number: sessionNumber };
+      const unit = await unitIds(supabase, serial, null);
+      const other = await findTakeElsewhere(supabase, userId, meta, declaredTotal, unit);
+      if (other && other.storage_path &&
+          await objectExists(supabase, 'device-sessions', other.storage_path)) {
+        await auditTakeElsewhere(supabase, userId, meta, declaredTotal, unit, other, 'refuse', 'refused', null);
+        const { data: left } = await supabase.storage.from('device-sessions').list(partDir, { limit: 10000 });
+        if (left?.length) {
+          await supabase.storage.from('device-sessions')
+            .remove(left.map((f: any) => `${partDir}/${f.name}`)).catch(() => {});
+        }
+        return takeOwnedElsewhere();
+      }
+    }
+
     // offset 0 = the device is (re)starting this session, so whatever is in the
     // part dir is from an abandoned attempt and must go. Without this, stale parts
     // with a HIGHER offset survive and get stitched onto the new upload: sessions
@@ -2590,21 +3172,20 @@ async function storeSessionRecord(
   // (a row alone isn't proof - the 413 bug left ghost rows). If it's genuinely
   // there, return that id; if it's a ghost, drop it and re-store below. Mirrors the
   // /sessions/chunk final-slice probe, which the streaming path already has.
-  const { data: existing } = await supabase.from('sate_device_sessions')
-    .select('id, storage_path')
-    .eq('user_id', userId)
-    .eq('device_serial', meta.device_serial)
-    .eq('patient_id', meta.patient_id)
-    .eq('session_number', meta.session_number)
-    .eq('bytes', wavBytes.length)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (existing) {
-    const stored = existing.storage_path &&
-      await objectExists(supabase, 'device-sessions', existing.storage_path);
-    if (stored) return json({ id: existing.id, idempotent: true });
-    await supabase.from('sate_device_sessions').delete().eq('id', existing.id);
+  // [v46] For an L81x: any serial of the unit, and not keyed on the patient (see findOwnTake).
+  const unit = await unitIds(supabase, meta.device_serial, meta.hw_serial);
+  const own = await findOwnTake(supabase, userId, meta, wavBytes.length, unit);
+  if (own.real) return json({ id: own.real.id, idempotent: true });
+  if (own.ghost) await supabase.from('sate_device_sessions').delete().eq('id', own.ghost.id);
+
+  // [v46] The same take under ANOTHER account (Bluetooth hardware only — findTakeElsewhere).
+  // Checked BEFORE the upload, so a refusal stores nothing; 'report' (default) stores as ever.
+  const dupMode = crossAccountDupMode();
+  const other = await findTakeElsewhere(supabase, userId, meta, wavBytes.length, unit);
+  if (other && dupMode === 'refuse' && other.storage_path &&
+      await objectExists(supabase, 'device-sessions', other.storage_path)) {
+    await auditTakeElsewhere(supabase, userId, meta, wavBytes.length, unit, other, dupMode, 'refused', null);
+    return takeOwnedElsewhere();
   }
 
   const sessionId = newSessionId();
@@ -2633,7 +3214,9 @@ async function storeSessionRecord(
     );
   }
 
-  return await insertSessionRow(supabase, userId, meta, sessionId, storagePath, wavBytes.length);
+  const res = await insertSessionRow(supabase, userId, meta, sessionId, storagePath, wavBytes.length);
+  if (other) await auditTakeElsewhere(supabase, userId, meta, wavBytes.length, unit, other, dupMode, 'accepted', sessionId);
+  return res;
 }
 
 /** `s-1a2b3c4d`. */
@@ -2758,22 +3341,38 @@ async function listSessions(
 // Re-queue an errored session for the async container. Scoped to the caller's own
 // sessions; only an 'error' session may be retried. Resets attempts so the watchdog
 // gives the fresh try its full stall budget again.
+// [v45] ...or a 'done' session the AI returned with NO WORDS and that has NO recording: on
+// prod every such row had spent its 3 attempts on audible audio, and with no way to retry it
+// a 25-min take simply read as "captured nothing". recording_id null is what makes this safe
+// — there is no recordings row a second pass could duplicate. finalize-session's success path
+// does not touch no_text, so it is cleared HERE, or a recovered take would keep the flag.
 async function retrySession(supabase: any, userId: string, sessionId: string) {
   const { data: row } = await supabase.from('sate_device_sessions')
-    .select('id, status, process_error, attempts').eq('id', sessionId).eq('user_id', userId).maybeSingle();
+    .select('id, status, process_error, attempts, no_text, recording_id').eq('id', sessionId).eq('user_id', userId).maybeSingle();
   if (!row) return err('Session not found', 404);
-  if (row.status !== 'error') return err('Only a failed session can be retried', 409);
+  const emptyDone = row.status === 'done' && row.no_text === true && !row.recording_id;
+  if (row.status !== 'error' && !emptyDone) return err('Only a failed or empty session can be retried', 409);
+  // Conditional on the state just checked, so a session that moved on meanwhile (finalized,
+  // or already requeued by a second tap) is not requeued underneath it.
+  // [v49] restart_refunds reset too — see updateResettingRefunds.
+  const { data: moved, error } = await updateResettingRefunds((f) => {
+    let q = supabase.from('sate_device_sessions')
+      .update(f).eq('id', sessionId).eq('user_id', userId).eq('status', row.status);
+    if (emptyDone) q = q.eq('no_text', true).is('recording_id', null);
+    return q.select('id');
+  }, { status: 'queued', process_error: null, attempts: 0, not_before: null,
+    no_text: false, processed: false, processed_at: null });
+  if (error) throw new Error(error.message);
+  if (!moved || moved.length === 0) return err('Session changed while retrying; refresh and try again', 409);
   // [v22] Clearing process_error/attempts is what lets the retry start clean, but it also
-  // erased every trace of the failure being retried. Record it first, so "previous failure
-  // remains traceable" is actually true.
+  // erased every trace of the failure being retried, so it is recorded here — from the row
+  // read BEFORE the update, so the values are the failure's own. Written only once the
+  // requeue really happened: a 409 (double tap, or the session moved on) is no retry, and
+  // auditing it first left a trail claiming two retries for one requeue.
   await auditSession(supabase, sessionId, userId, 'retry', {
     previous_error: row.process_error, previous_attempts: row.attempts,
-    previous_status: row.status,
+    previous_status: row.status, previous_no_text: row.no_text === true,
   });
-  const { error } = await supabase.from('sate_device_sessions')
-    .update({ status: 'queued', process_error: null, attempts: 0 })
-    .eq('id', sessionId).eq('user_id', userId);
-  if (error) throw new Error(error.message);
   return json({ id: sessionId, status: 'queued' });
 }
 
@@ -2786,7 +3385,7 @@ async function retrySession(supabase: any, userId: string, sessionId: string) {
 // app and the audio was still downloadable, so "delete" did not delete the clinical data.
 // Now the derived record goes too, and the deletion is written to the audit trail (which
 // deliberately outlives the row).
-async function deleteSession(supabase: any, userId: string, sessionId: string) {
+async function deleteSession(supabase: any, userId: string, sessionId: string, pass = 0): Promise<Response> {
   const { data: row } = await supabase.from('sate_device_sessions')
     .select('storage_path, recording_id, device_serial, session_number, patient_id, bytes')
     .eq('id', sessionId).eq('user_id', userId).maybeSingle();
@@ -2808,6 +3407,18 @@ async function deleteSession(supabase: any, userId: string, sessionId: string) {
     const { error } = await supabase.storage.from('device-sessions').remove([row.storage_path]);
     if (!error || gone(error.message)) sessionObject = 'removed';
     else { sessionObject = 'failed'; failures.push(`device-sessions object: ${error.message}`); }
+  }
+
+  // [v47] Every OTHER object this session owns: the raw/decoded siblings of its path (a decode
+  // that repointed the row at `<id>.wav` but could not delete `<id>.asc`, or the WAV a raw path
+  // decoded into) and any previous object a register_replace could not remove. Each confined to
+  // the caller's prefix and skipped if another row points at it.
+  const extra = await ownedExtraObjects(supabase, userId, sessionId, row.storage_path);
+  const extraRemoved: string[] = [];
+  if (extra.length) {
+    const { data: rmd, error } = await supabase.storage.from('device-sessions').remove(extra);
+    if (error && !gone(error.message)) failures.push(`device-sessions extra objects: ${error.message}`);
+    else for (const o of (rmd || []) as any[]) if (o?.name) extraRemoved.push(o.name);
   }
 
   let removedRecording: string | null = null;
@@ -2847,17 +3458,67 @@ async function deleteSession(supabase: any, userId: string, sessionId: string) {
       `the delete can be retried — nothing was left orphaned.`, 500);
   }
 
-  const { error } = await supabase.from('sate_device_sessions')
-    .delete().eq('id', sessionId).eq('user_id', userId);
+  // [v48] Conditional on the row still pointing where it did when the sweep above began. A
+  // register_replace landing in between repoints the row at a NEW object (and requeues it); an
+  // unconditional delete would then drop the row and leave that object orphaned — the exact thing
+  // v47 set out to remove. So: nothing matched → re-read and sweep again (once), and if it keeps
+  // moving, 409 with the row intact (everything already removed was the session's own, and the
+  // previous path is still reachable through its register_replace trail).
+  let del = supabase.from('sate_device_sessions').delete().eq('id', sessionId).eq('user_id', userId);
+  del = row.storage_path ? del.eq('storage_path', row.storage_path) : del.is('storage_path', null);
+  const { data: deleted, error } = await del.select('id');
   if (error) throw new Error(error.message);
+  if (!deleted || deleted.length === 0) {
+    const { data: still } = await supabase.from('sate_device_sessions')
+      .select('id').eq('id', sessionId).eq('user_id', userId).maybeSingle();
+    if (!still) return noContent();  // a concurrent delete finished it (and wrote its own audit)
+    if (pass < 1) return await deleteSession(supabase, userId, sessionId, pass + 1);
+    return err('This session changed while it was being deleted — please try again.', 409);
+  }
 
   await auditSession(supabase, sessionId, userId, 'delete', {
     device_serial: row.device_serial, session_number: row.session_number,
     patient_id: row.patient_id, bytes: row.bytes,
     storage_path: row.storage_path, session_object: sessionObject,
     recording_object: recordingObject, removed_recording: removedRecording,
+    extra_objects: extraRemoved,
   });
   return noContent();
+}
+
+/** [v47] Objects a session owns beyond its storage_path (see deleteSession). Candidates only — a
+ *  path that does not exist is a no-op for Storage's remove. */
+async function ownedExtraObjects(
+  supabase: any, userId: string, sessionId: string, storagePath: string | null,
+): Promise<string[]> {
+  const out = new Set<string>();
+  const m = storagePath ? storagePath.match(/^(.*)\.(wav|asc|mp3)$/) : null;
+  if (m) for (const ext of ['wav', 'asc', 'mp3']) out.add(`${m[1]}.${ext}`);
+  // [v48] + register_dedup tombstones: a duplicate upload whose removal failed at register time.
+  const { data: trail } = await supabase.from('sate_session_audit')
+    .select('action, detail').eq('session_id', sessionId).eq('user_id', userId)
+    .in('action', ['register_replace', 'register_dedup']);
+  for (const t of (trail || []) as any[]) {
+    if (t?.action === 'register_dedup') {
+      if (typeof t?.detail?.storage_path === 'string') out.add(t.detail.storage_path);
+      continue;
+    }
+    const prev = t?.detail?.previous_storage_path;
+    if (typeof prev === 'string') {
+      out.add(prev);
+      const pm = prev.match(/^(.*)\.(wav|asc|mp3)$/);
+      if (pm) for (const ext of ['wav', 'asc', 'mp3']) out.add(`${pm[1]}.${ext}`);
+    }
+  }
+  if (storagePath) out.delete(storagePath);
+  const paths = [...out].filter((x) => x.startsWith(`${userId}/`) && !x.includes('..'));
+  if (!paths.length) return [];
+  // Never remove an object another row points at. A failed lookup removes nothing extra.
+  const { data: refs, error } = await supabase.from('sate_device_sessions')
+    .select('storage_path').in('storage_path', paths).neq('id', sessionId);
+  if (error) { console.warn(`delete ${sessionId}: extra-object lookup failed: ${error.message}`); return []; }
+  const taken = new Set(((refs || []) as any[]).map((r) => r.storage_path));
+  return paths.filter((x) => !taken.has(x));
 }
 
 // Append-only trail. Best effort: an audit write must never fail the user's action, but

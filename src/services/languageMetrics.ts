@@ -200,12 +200,14 @@ const csvCell = (v: unknown) => {
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 
-/** One row per speaker, one column per metric, preceded by the recording's identity. */
-export function metricsCsv(transcript: Segment[], meta: { report: string; recorded: string; length_s?: number | null; patient?: string }): string {
-  const head = ['Report', 'Recorded', 'Length (s)', 'Patient', ...COLUMNS.map((c) => c[1])];
+/** One row per speaker, one column per metric, preceded by the recording's identity.
+ *  `untranscribed_s` = seconds the AI could not transcribe (`transcript.gaps`): every metric
+ *  covers only the transcribed part, so a CSV read on its own must say how much is missing. */
+export function metricsCsv(transcript: Segment[], meta: { report: string; recorded: string; length_s?: number | null; untranscribed_s?: number; patient?: string }): string {
+  const head = ['Report', 'Recorded', 'Length (s)', 'Untranscribed (s)', 'Patient', ...COLUMNS.map((c) => c[1])];
   const rows = speakersOf(transcript).map((sp) => {
     const m = computeSpeakerMetrics(transcript, sp);
-    return [meta.report, meta.recorded, meta.length_s ?? '', meta.patient ?? '',
+    return [meta.report, meta.recorded, meta.length_s ?? '', Math.round(meta.untranscribed_s ?? 0), meta.patient ?? '',
       ...COLUMNS.map(([k, , d]) => (typeof m[k] === 'number' && d !== undefined ? (m[k] as number).toFixed(d) : m[k]))];
   });
   // BOM so Excel opens UTF-8 names correctly.
