@@ -1,7 +1,7 @@
 import React from 'react';
 import {
   X, FileText, FileType, Sparkles, Loader2, AlertTriangle,
-  Pencil, Undo2, Plus, Trash2, Check,
+  Pencil, Undo2, Check,
 } from 'lucide-react';
 import { type Segment } from '@/services/dataService';
 import { segmentsToSalt } from '@/services/saltService';
@@ -41,8 +41,8 @@ import { buildNormedMetrics, NoNormsError } from '@/services/lsaMetricsService';
 // values, which is what makes the service return z-scores; without it the report has the
 // transcript counts and no normative comparison.
 //
-// The prose the model drafted can be corrected before the report is used — the footer
-// says an SLP must review it, so the reviewer needs somewhere to put the review. Edits
+// The prose the model drafted can be corrected before the report is used — an SLP must
+// review it, so the reviewer needs somewhere to put the review. Edits
 // are kept beside the response, never over it, so every field can still be reverted to
 // what the model actually wrote.
 //
@@ -59,8 +59,10 @@ const esc = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 // The service writes **emphasis** in its prose; render it rather than printing asterisks.
+// A line break the reviewer typed prints as one; richFromDom() reads all three back.
 const escRich = (s: string) =>
-  esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/(?<!\w)\*(.+?)\*(?!\w)/g, '<i>$1</i>');
+  esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/(?<!\w)\*(.+?)\*(?!\w)/g, '<i>$1</i>')
+    .replace(/\n/g, '<br>');
 
 // --- SALT speaker labels ---------------------------------------------------
 // SALT attributes every line carrying the same prefix to one speaker, so each speaker
@@ -247,7 +249,18 @@ function normsNoteHtml(n?: LsaNormsContext | null): string {
   );
 }
 
-function buildReportBody(stored: StoredLsaReport): string {
+// overflow-wrap:anywhere lets a long unbroken token (a URL, a run of codes) break instead
+// of pushing the page wider than its border.
+const ROOT_STYLE = `font-family:Georgia,'Times New Roman',serif;color:${INK};max-width:720px;margin:0 auto;`
+  + `overflow-wrap:anywhere;word-break:break-word;`;
+
+/**
+ * The report. With `edit` (the reviewer's draft) it is the SAME document with the drafted
+ * prose made editable in place — same markup, same styles — so editing looks exactly like
+ * the report it produces. Only the attributes differ: `contenteditable` + `data-field` on
+ * the prose, and the status pill becomes a <select> drawn as that pill.
+ */
+function buildReportBody(stored: StoredLsaReport, edit?: ReportDraft): string {
   const r = stored.response;
   const meta = {
     speaker: stored.sample.speaker,
@@ -269,8 +282,10 @@ function buildReportBody(stored: StoredLsaReport): string {
     { label: 'Date', value: meta.date },
   ];
   const headerLine = header
-    .map((h) => `<span style="margin-right:16px;white-space:nowrap;"><b>${esc(h.label)}:</b> ${esc(h.value)}</span>`)
-    .join('');
+    // Inline-blocks joined by a space: each item may break between items (and wrap inside
+    // a long value), so the line can never be wider than the page.
+    .map((h) => `<span style="display:inline-block;max-width:100%;margin:0 16px 0 0;"><b>${esc(h.label)}:</b> ${esc(h.value)}</span>`)
+    .join(' ');
 
   const numbered = transcriptLines
     .map((line, i) => `<span style="color:#94a3b8;">${String(i + 1).padStart(2, ' ')}</span>  ${esc(line)}`)
@@ -278,7 +293,7 @@ function buildReportBody(stored: StoredLsaReport): string {
   const transcript =
     `<div style="border:1px solid ${HAIR};border-radius:8px;background:#fbfcfd;padding:12px 14px;` +
     `font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:12px;line-height:1.7;color:${INK};` +
-    `white-space:pre-wrap;">${numbered}</div>` +
+    `white-space:pre-wrap;overflow-wrap:anywhere;">${numbered}</div>` +
     `<p style="font-size:11.5px;color:${MUT};margin:6px 0 0;font-style:italic;">` +
     `Codes: /3s /ed /ing bound morpheme · /*3s omitted bound morpheme · *word omitted word · ` +
     `[EW:x] error code (target x) · ( ) maze (excluded from counts) · X unintelligible. ` +
@@ -292,49 +307,47 @@ function buildReportBody(stored: StoredLsaReport): string {
       + h3('Transcript counts') + countsTableHtml(c, false)
     : countsTableHtml(c, true);
 
-  const assessmentRows = merged.domains.map((d) => `
+  const editable = (field: string) => (edit ? ` contenteditable="true" data-field="${field}"` : '');
+  const domains = merged.domains.map((d, i) => (edit?.domains[i] ? { ...d, ...edit.domains[i] } : d));
+  // One line, in the report and in the editor alike (a <select> cannot wrap, so a pill that
+// did would make the two differ). The Status column is sized for the longest verdict.
+const PILL = 'display:inline-block;padding:2px 8px;border-radius:5px;font-size:11px;font-weight:600;white-space:nowrap;';
+  const statusCell = (status: string, i: number) => {
+    if (!edit) return `<span style="${PILL}background:${DOMAIN_BG[status] || '#eceff2'};color:${INK};">${esc(status)}</span>`;
+    const options = [...DOMAIN_STATUSES, ...(DOMAIN_STATUSES.includes(status as typeof DOMAIN_STATUSES[number]) ? [] : [status])]
+      .filter(Boolean)
+      .map((v) => `<option value="${esc(v)}"${v === status ? ' selected' : ''}>${esc(v)}</option>`).join('');
+    return `<select data-field="status-${i}" aria-label="Status" style="${PILL}max-width:100%;border:0;margin:0;` +
+      `font-family:inherit;line-height:inherit;appearance:none;-webkit-appearance:none;cursor:pointer;field-sizing:content;` +
+      `background:${DOMAIN_BG[status] || '#eceff2'};color:${INK};">${options}</select>`;
+  };
+  const assessmentRows = domains.map((d, i) => `
     <tr>
-      <td style="padding:9px 10px;border-bottom:1px solid ${HAIR};font-weight:700;vertical-align:top;width:18%;">${esc(d.domain)}</td>
-      <td style="padding:9px 10px;border-bottom:1px solid ${HAIR};vertical-align:top;line-height:1.5;">${escRich(d.observation)}</td>
-      <td style="padding:9px 10px;border-bottom:1px solid ${HAIR};vertical-align:top;width:15%;">` +
-        `<span style="display:inline-block;padding:2px 8px;border-radius:5px;font-size:11px;font-weight:600;` +
-        `background:${DOMAIN_BG[d.status] || '#eceff2'};color:${INK};">${esc(d.status)}</span></td>
+      <td style="padding:9px 10px;border-bottom:1px solid ${HAIR};font-weight:700;vertical-align:top;width:16%;">${esc(d.domain)}</td>
+      <td${editable(`obs-${i}`)} style="padding:9px 10px;border-bottom:1px solid ${HAIR};vertical-align:top;line-height:1.5;">${escRich(d.observation)}</td>
+      <td style="padding:9px 10px;border-bottom:1px solid ${HAIR};vertical-align:top;width:23%;">${statusCell(d.status, i)}</td>
     </tr>`).join('');
   const assessmentTable =
-    `<table style="width:100%;border-collapse:collapse;font-size:12.5px;color:${INK};">` +
+    `<table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:12.5px;color:${INK};">` +
     `<thead><tr style="text-align:left;">` +
-    `<th style="padding:6px 10px;border-bottom:2px solid ${HAIR};">Domain</th>` +
+    `<th style="padding:6px 10px;border-bottom:2px solid ${HAIR};width:16%;">Domain</th>` +
     `<th style="padding:6px 10px;border-bottom:2px solid ${HAIR};">Key observation</th>` +
-    `<th style="padding:6px 10px;border-bottom:2px solid ${HAIR};">Status</th>` +
+    `<th style="padding:6px 10px;border-bottom:2px solid ${HAIR};width:23%;">Status</th>` +
     `</tr></thead><tbody>${assessmentRows}</tbody></table>`;
 
-  const limitationItems = merged.limitations;
+  // Editing, the list is always there (one empty point if there are none) so there is
+  // somewhere to type; Enter / Backspace add and remove points like any document's list.
+  const limitationItems = edit ? (edit.limitations.length ? edit.limitations : ['']) : merged.limitations;
   const limitations = limitationItems.length
-    ? `<ul style="margin:4px 0 0;padding-left:20px;font-size:12.5px;color:${INK};line-height:1.6;">` +
-      limitationItems.map((l) => `<li style="margin:0 0 5px;">${escRich(l)}</li>`).join('') + `</ul>`
+    ? `<ul${editable('limitations')} style="margin:4px 0 0;padding-left:20px;font-size:12.5px;color:${INK};line-height:1.6;">` +
+      limitationItems.map((l) => `<li style="margin:0 0 5px;">${escRich(l) || '<br>'}</li>`).join('') + `</ul>`
     : `<p style="font-size:12.5px;color:${MUT};margin:4px 0 0;">None reported.</p>`;
 
   const summary =
-    `<p style="font-size:12.5px;color:${INK};line-height:1.6;margin:4px 0 0;">${escRich(merged.summary)}</p>`;
-
-  const model = [r.llm?.provider, r.llm?.model].filter(Boolean).join(' / ');
-  // A reviewed report and an untouched one must not look the same: the footer's promise
-  // is that the prose is the model's until a clinician says otherwise, so a report that
-  // carries the clinician's own words says so, and says how many sections it applies to.
-  const reviewed = merged.editedCount > 0
-    ? ` ${merged.editedCount} section${merged.editedCount === 1 ? '' : 's'} of this report `
-      + `${merged.editedCount === 1 ? 'was' : 'were'} edited by the reviewing clinician`
-      + `${stored.edited_at ? ` on ${esc(stored.edited_at.slice(0, 10))}` : ''}.`
-    : '';
-  const footer =
-    `<p style="font-size:10.5px;color:${MUT};line-height:1.5;margin:26px 0 0;padding-top:8px;` +
-    `border-top:1px solid ${HAIR};">Generated by SATE from this recording's transcript (SALT). ` +
-    `The counts and any z-scores are computed from the transcript; the observations, limitations ` +
-    `and summary were drafted with AI assistance${model ? ` (${esc(model)})` : ''} and must be reviewed ` +
-    `by a licensed speech-language pathologist before clinical use.${reviewed}</p>`;
+    `<p${editable('summary')} style="font-size:12.5px;color:${INK};line-height:1.6;margin:4px 0 0;">${escRich(edit ? edit.summary : merged.summary) || (edit ? '<br>' : '')}</p>`;
 
   return (
-    `<div style="font-family:Georgia,'Times New Roman',serif;color:${INK};max-width:720px;margin:0 auto;">` +
+    `<div style="${ROOT_STYLE}">` +
       `<div style="text-align:center;border-bottom:2px solid ${H};padding-bottom:10px;margin-bottom:14px;">` +
         `<h1 style="font-size:20px;color:${H};margin:0;font-family:Georgia,'Times New Roman',serif;">SATE Report</h1>` +
       `</div>` +
@@ -344,7 +357,6 @@ function buildReportBody(stored: StoredLsaReport): string {
       h2(3, 'Language Ability Assessment') + assessmentTable +
       h2(4, 'Limitations') + limitations +
       h2(5, 'Summary') + summary +
-      footer +
     `</div>`
   );
 }
@@ -413,7 +425,7 @@ const draftFromModel = (stored: StoredLsaReport): ReportDraft => {
 /**
  * Only what actually differs from the model's text is stored. A draft that was opened and
  * closed untouched must produce NO edits at all — otherwise every report would be marked
- * "edited by the reviewing clinician" for having been looked at, and the footer's claim
+ * "edited by the reviewing clinician" for having been looked at, and that claim
  * would stop meaning anything.
  */
 function draftToEdits(stored: StoredLsaReport, draft: ReportDraft): LsaReportEdits | undefined {
@@ -442,144 +454,60 @@ function draftToEdits(stored: StoredLsaReport, draft: ReportDraft): LsaReportEdi
   return Object.keys(edits).length ? edits : undefined;
 }
 
-const EDIT_FIELD = 'w-full px-2.5 py-2 text-sm border border-gray-300 rounded-md '
-  + 'focus:ring-2 focus:ring-teal-500 focus:border-transparent focus:outline-none';
+/** Rich text back out of an edited element, in the notation escRich() renders:
+ *  <b>/<strong> → **x**, <i>/<em> → *x*, <br> or a new block → a line break. */
+function richFromDom(node: Node): string {
+  // Spaces stay OUTSIDE the markers: "** word**" would not render as bold.
+  const wrap = (t: string, m: string) => {
+    const [, lead, core, trail] = /^(\s*)([\s\S]*?)(\s*)$/.exec(t) || ['', '', t, ''];
+    return core ? `${lead}${m}${core}${m}${trail}` : t;
+  };
+  let out = '';
+  node.childNodes.forEach((n) => {
+    if (n.nodeType === Node.TEXT_NODE) { out += (n.textContent || '').replace(/\u00a0/g, ' '); return; }
+    if (!(n instanceof HTMLElement)) return;
+    const inner = richFromDom(n);
+    switch (n.tagName) {
+      case 'BR': out += '\n'; break;
+      case 'B': case 'STRONG': out += wrap(inner, '**'); break;
+      case 'I': case 'EM': out += wrap(inner, '*'); break;
+      case 'DIV': case 'P': out += (out && !out.endsWith('\n') ? '\n' : '') + inner; break;
+      default: out += inner;
+    }
+  });
+  return out;
+}
 
-const ReportEditor: React.FC<{
-  stored: StoredLsaReport;
-  draft: ReportDraft;
-  onChange: (next: ReportDraft) => void;
-}> = ({ stored, draft, onChange }) => {
-  const model = draftFromModel(stored);
-  const set = (patch: Partial<ReportDraft>) => onChange({ ...draft, ...patch });
+const clean = (s: string) => s.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 
-  const revertBtn = (onClick: () => void, changed: boolean) => changed ? (
-    <button
-      onClick={onClick}
-      className="inline-flex items-center gap-1 text-[11px] font-medium text-gray-500 hover:text-teal-700"
-      title="Restore the text the language model wrote"
-    >
-      <Undo2 className="w-3 h-3" /> Revert to AI text
-    </button>
-  ) : null;
+/** The reviewer's draft, read off the editable report. */
+function draftFromDom(root: HTMLElement, stored: StoredLsaReport): ReportDraft {
+  const field = (name: string) => root.querySelector<HTMLElement>(`[data-field="${name}"]`);
+  const list = field('limitations');
+  const items = list
+    ? (list.querySelector('li')
+      ? Array.from(list.querySelectorAll('li')).map((li) => clean(richFromDom(li)))
+      : clean(richFromDom(list)).split('\n'))
+    : [];
+  return {
+    domains: (stored.response.analysis?.domains || []).map((d, i) => ({
+      observation: clean(richFromDom(field(`obs-${i}`) || document.createElement('div'))),
+      status: (field(`status-${i}`) as HTMLSelectElement | null)?.value || d.status || '',
+    })),
+    limitations: items.map((l) => l.trim()).filter(Boolean),
+    summary: clean(richFromDom(field('summary') || document.createElement('div'))),
+  };
+}
 
-  return (
-    <div className="bg-white shadow-sm mx-auto p-6 space-y-6" style={{ maxWidth: 760 }}>
-      <p className="text-xs text-gray-500 leading-relaxed">
-        Only the drafted prose is editable. The transcript, the counts and the z-scores are
-        computed from this recording and are not opinions to correct; regenerating the report
-        replaces the drafted text and discards what you write here.
-      </p>
-
-      <section>
-        <h3 className="text-sm font-semibold text-gray-900 mb-2">Language Ability Assessment</h3>
-        <div className="space-y-3">
-          {draft.domains.map((d, i) => {
-            const orig = model.domains[i] || { observation: '', status: '' };
-            const changed = d.observation.trim() !== orig.observation.trim() || d.status !== orig.status;
-            return (
-              <div key={i} className={`p-3 rounded-lg border ${changed ? 'border-teal-300 bg-teal-50/40' : 'border-gray-200'}`}>
-                <div className="flex items-center justify-between gap-3 mb-2">
-                  <span className="text-xs font-semibold text-gray-800">
-                    {stored.response.analysis?.domains?.[i]?.domain || `Domain ${i + 1}`}
-                  </span>
-                  <div className="flex items-center gap-3">
-                    {revertBtn(() => {
-                      const domains = [...draft.domains];
-                      domains[i] = { ...orig };
-                      set({ domains });
-                    }, changed)}
-                    <select
-                      value={d.status}
-                      onChange={(e) => {
-                        const domains = [...draft.domains];
-                        domains[i] = { ...d, status: e.target.value };
-                        set({ domains });
-                      }}
-                      className="px-2 py-1 text-xs border border-gray-300 rounded-md bg-white focus:ring-2 focus:ring-teal-500 focus:outline-none"
-                    >
-                      {[...DOMAIN_STATUSES, ...(DOMAIN_STATUSES.includes(d.status as typeof DOMAIN_STATUSES[number]) ? [] : [d.status])]
-                        .filter(Boolean)
-                        .map((v) => <option key={v} value={v}>{v}</option>)}
-                    </select>
-                  </div>
-                </div>
-                <textarea
-                  value={d.observation}
-                  rows={3}
-                  onChange={(e) => {
-                    const domains = [...draft.domains];
-                    domains[i] = { ...d, observation: e.target.value };
-                    set({ domains });
-                  }}
-                  className={EDIT_FIELD}
-                />
-              </div>
-            );
-          })}
-        </div>
-      </section>
-
-      <section>
-        <div className="flex items-center justify-between mb-2">
-          <h3 className="text-sm font-semibold text-gray-900">Limitations</h3>
-          {revertBtn(
-            () => set({ limitations: [...model.limitations] }),
-            draft.limitations.length !== model.limitations.length
-              || draft.limitations.some((l, i) => l.trim() !== (model.limitations[i] || '').trim()),
-          )}
-        </div>
-        <div className="space-y-2">
-          {draft.limitations.map((l, i) => (
-            <div key={i} className="flex items-start gap-2">
-              <textarea
-                value={l}
-                rows={2}
-                onChange={(e) => {
-                  const limitations = [...draft.limitations];
-                  limitations[i] = e.target.value;
-                  set({ limitations });
-                }}
-                className={EDIT_FIELD}
-              />
-              <button
-                onClick={() => set({ limitations: draft.limitations.filter((_, j) => j !== i) })}
-                className="mt-1 p-1.5 text-gray-400 hover:text-red-600 rounded-md hover:bg-red-50"
-                title="Remove this limitation"
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
-            </div>
-          ))}
-          {draft.limitations.length === 0 && (
-            <p className="text-xs text-gray-500 italic">
-              No limitations — the report will say "None reported."
-            </p>
-          )}
-          <button
-            onClick={() => set({ limitations: [...draft.limitations, ''] })}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-teal-700 border border-teal-200 rounded-md hover:bg-teal-50"
-          >
-            <Plus className="w-3.5 h-3.5" /> Add a limitation
-          </button>
-        </div>
-      </section>
-
-      <section>
-        <div className="flex items-center justify-between mb-2">
-          <h3 className="text-sm font-semibold text-gray-900">Summary</h3>
-          {revertBtn(() => set({ summary: model.summary }), draft.summary.trim() !== model.summary.trim())}
-        </div>
-        <textarea
-          value={draft.summary}
-          rows={6}
-          onChange={(e) => set({ summary: e.target.value })}
-          className={EDIT_FIELD}
-        />
-      </section>
-    </div>
-  );
-};
+// Edit mode adds NOTHING to the layout: outlines take no space, so the page reads exactly
+// as it prints. A dashed hint on hover shows what can be edited, a solid one where you type.
+const EDIT_CSS = `
+.sate-report-edit [contenteditable="true"] { outline: 1px dashed #99d5cf; outline-offset: 2px; border-radius: 2px; cursor: text; transition: outline-color .15s, background-color .15s; }
+.sate-report-edit td[contenteditable="true"] { outline-offset: -3px; }
+.sate-report-edit [contenteditable="true"]:hover { outline-color: #14b8a6; }
+.sate-report-edit [contenteditable="true"]:focus { outline: 2px solid #14b8a6; background-color: #f0fdfa; }
+.sate-report-edit select[data-field]:hover, .sate-report-edit select[data-field]:focus { outline: 2px solid #14b8a6; outline-offset: 1px; }
+`;
 
 interface SateReportPopupProps {
   isOpen: boolean;
@@ -616,6 +544,14 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
   const [draft, setDraft] = React.useState<ReportDraft | null>(null);
   const [savingEdits, setSavingEdits] = React.useState(false);
   const [confirmRegen, setConfirmRegen] = React.useState(false);
+  // The editable report's markup is built ONCE per edit session: the browser owns the text
+  // while the reviewer types, and re-rendering it would throw the cursor away.
+  const [editHtml, setEditHtml] = React.useState('');
+  const [editKey, setEditKey] = React.useState(0);
+  const [draftStart, setDraftStart] = React.useState('');
+  const editorRef = React.useRef<HTMLDivElement | null>(null);
+  const [confirmDiscard, setConfirmDiscard] = React.useState<null | 'cancel' | 'close'>(null);
+  const [justSaved, setJustSaved] = React.useState(false);
 
   // Speakers present in the sample, in the order they first appear.
   const speakers = React.useMemo(() => {
@@ -663,6 +599,8 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
     setEditing(false);
     setDraft(null);
     setConfirmRegen(false);
+    setConfirmDiscard(null);
+    setJustSaved(false);
 
     const apply = (saved: StoredLsaReport) => {
       setReport(saved);
@@ -728,21 +666,99 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
 
   // --- review ---------------------------------------------------------------
 
-  const startEditing = () => {
+  const openEditor = (start: ReportDraft) => {
     if (!report) return;
-    setDraft(draftFromReport(report));
+    setEditHtml(buildReportBody(report, start));
+    setEditKey((k) => k + 1);
+    setDraft(start);
+    setDraftStart('');
+  };
+
+  const startEditing = () => {
+    if (!report || readOnly) return;
+    openEditor(draftFromReport(report));
+    setConfirmDiscard(null);
+    setJustSaved(false);
     setEditing(true);
   };
+
+  // The baseline is what the page READS BACK right after it renders, so an untouched
+  // report is never "changed" by a whitespace difference in the round trip.
+  // Written imperatively, ONCE per edit session: with dangerouslySetInnerHTML React
+  // re-applies the markup on a re-render (every keystroke updates the draft), which wiped
+  // what had just been typed and dropped the cursor. React renders this div empty and never
+  // touches its children; the browser owns the text until Save reads it back.
+  React.useLayoutEffect(() => {
+    if (!editing || !report || !editorRef.current) return;
+    editorRef.current.innerHTML = editHtml;
+    const start = draftFromDom(editorRef.current, report);
+    setDraft(start);
+    setDraftStart(JSON.stringify(start));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing, editKey]);
+
+  const readDraft = () => (report && editorRef.current ? draftFromDom(editorRef.current, report) : draft);
+
+  // Native listeners, not React's onInput/onChange: React does not synthesise a change
+  // event for a <select> it did not render, so a status change went unnoticed.
+  const readDraftRef = React.useRef(readDraft);
+  readDraftRef.current = readDraft;
+  React.useEffect(() => {
+    const root = editorRef.current;
+    if (!editing || !root) return;
+    const onEdit = (e: Event) => {
+      // The status <select> is drawn as the pill, so its colour follows the choice.
+      if (e.target instanceof HTMLSelectElement) e.target.style.background = DOMAIN_BG[e.target.value] || '#eceff2';
+      setDraft(readDraftRef.current());
+    };
+    root.addEventListener('input', onEdit);
+    root.addEventListener('change', onEdit);
+    return () => {
+      root.removeEventListener('input', onEdit);
+      root.removeEventListener('change', onEdit);
+    };
+  }, [editing, editKey]);
+
+  const onEditorKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const field = (e.target as HTMLElement).closest('[data-field]')?.getAttribute('data-field') || '';
+    // In a paragraph Enter is a line break, not a new <div> (which would read back as a
+    // second paragraph the reviewer never meant). In the list, Enter is a new point.
+    if (e.key === 'Enter' && field !== 'limitations' && !e.nativeEvent.isComposing) {
+      e.preventDefault();
+      document.execCommand('insertLineBreak');
+    }
+  };
+
+  // Pasted text arrives as text: fonts, colours and links copied from elsewhere would
+  // otherwise land in a clinical document and silently vanish on save.
+  const onEditorPaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    document.execCommand('insertText', false, e.clipboardData.getData('text/plain'));
+  };
+
+  const revertAll = () => {
+    if (!report) return;
+    openEditor(draftFromModel(report));
+  };
+
+  const dirty = editing && draft != null && JSON.stringify(draft) !== draftStart;
 
   const cancelEditing = () => {
     setEditing(false);
     setDraft(null);
+    setConfirmDiscard(null);
   };
+
+  // Cancel / close never silently throw away a review: with unsaved changes they ask first,
+  // in the save bar rather than a browser dialog.
+  const requestCancel = () => (dirty ? setConfirmDiscard('cancel') : cancelEditing());
+  const requestClose = () => (dirty ? setConfirmDiscard('close') : onClose());
 
   const saveEdits = async () => {
     if (readOnly) return;
-    if (!report || !draft) return;
-    const edits = draftToEdits(report, draft);
+    const current = readDraft();
+    if (!report || !current) return;
+    const edits = draftToEdits(report, current);
     const next: StoredLsaReport = {
       ...report,
       edits,
@@ -764,8 +780,36 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
       setReport(next);
       setEditing(false);
       setDraft(null);
+      setConfirmDiscard(null);
+      setJustSaved(true);
     }
   };
+
+  React.useEffect(() => {
+    if (!justSaved) return;
+    const id = window.setTimeout(() => setJustSaved(false), 3000);
+    return () => window.clearTimeout(id);
+  }, [justSaved]);
+
+  // ⌘/Ctrl+S saves, Esc cancels, while editing.
+  const saveRef = React.useRef(saveEdits);
+  saveRef.current = saveEdits;
+  const cancelRef = React.useRef(requestCancel);
+  cancelRef.current = requestCancel;
+  React.useEffect(() => {
+    if (!editing) return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (!savingEdits) saveRef.current();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        cancelRef.current();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [editing, savingEdits]);
 
   const speakerCode = labels[targetSpeaker] || 'C';
   const targetUtterances = React.useMemo(
@@ -933,7 +977,7 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={requestClose}>
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col"
            onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
@@ -948,24 +992,18 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
             )}
           </div>
           <div className="flex items-center gap-2">
+            {justSaved && (
+              <span className="inline-flex items-center gap-1 text-xs font-medium text-teal-700" role="status">
+                <Check className="w-4 h-4" /> {saveWarning ? 'Applied' : 'Saved'}
+              </span>
+            )}
             {readOnly ? null : editing ? (
-              <>
-                <button onClick={saveEdits} disabled={savingEdits}
-                  className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800 disabled:bg-gray-300 transition-colors">
-                  {savingEdits
-                    ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving…</>
-                    : <><Check className="w-4 h-4" /> Save changes</>}
-                </button>
-                <button onClick={cancelEditing} disabled={savingEdits}
-                  className="px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
-                  Cancel
-                </button>
-              </>
+              <span className="px-2 py-1 text-xs font-medium text-teal-800 bg-teal-50 rounded-md">Editing</span>
             ) : (
-              <button onClick={startEditing} disabled={!report}
+              <button onClick={() => startEditing()} disabled={!report}
                 className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:text-gray-400 disabled:border-gray-200 disabled:cursor-not-allowed transition-colors"
                 title="Correct the drafted observations, limitations and summary">
-                <Pencil className="w-4 h-4" /> Edit
+                <Pencil className="w-4 h-4" /> Edit report
               </button>
             )}
             <button onClick={exportPdf} disabled={!report || editing}
@@ -976,7 +1014,7 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
               className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-700 bg-white border border-blue-300 rounded-lg hover:bg-blue-50 disabled:text-gray-400 disabled:border-gray-200 disabled:hover:bg-white disabled:cursor-not-allowed transition-colors">
               <FileType className="w-4 h-4" /> Export Word
             </button>
-            <button onClick={onClose} className="p-1.5 text-gray-500 hover:text-gray-800 rounded-lg hover:bg-gray-100">
+            <button onClick={requestClose} className="p-1.5 text-gray-500 hover:text-gray-800 rounded-lg hover:bg-gray-100" aria-label="Close">
               <X className="w-5 h-5" />
             </button>
           </div>
@@ -1097,7 +1135,7 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
         </div>
         )}
 
-        <div className="overflow-y-auto p-6 bg-gray-100">
+        <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-6 bg-gray-100">
           {confirmRegen && (
             <div className="mx-auto max-w-[760px] mb-4 flex items-start gap-2 p-3 text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-lg">
               <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
@@ -1153,10 +1191,21 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
             </div>
           )}
 
-          {report && editing && draft ? (
-            <ReportEditor stored={report} draft={draft} onChange={setDraft} />
+          {report && editing ? (
+            <>
+              <style>{EDIT_CSS}</style>
+              <p className="mx-auto mb-2 flex items-center gap-1.5 text-xs text-teal-800" style={{ maxWidth: 760 }}>
+                <Pencil className="w-3.5 h-3.5 flex-shrink-0" />
+                Type straight into the outlined text. Transcript and metrics are computed and stay as they are.
+              </p>
+              <div key={editKey} ref={editorRef}
+                   className="sate-report-edit bg-white shadow-sm mx-auto p-8 min-w-0"
+                   style={{ maxWidth: 760 }}
+                   onKeyDown={onEditorKeyDown}
+                   onPaste={onEditorPaste} />
+            </>
           ) : report ? (
-            <div className="bg-white shadow-sm mx-auto p-8" style={{ maxWidth: 760 }}
+            <div className="bg-white shadow-sm mx-auto p-8 min-w-0" style={{ maxWidth: 760 }}
                  dangerouslySetInnerHTML={{ __html: body }} />
           ) : (
             <div className="bg-white shadow-sm mx-auto p-8 text-sm text-gray-600" style={{ maxWidth: 760 }}>
@@ -1198,6 +1247,55 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
             </div>
           )}
         </div>
+
+        {/* Always visible while editing, so Save never scrolls out of reach. */}
+        {editing && !readOnly && (
+          <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 border-t border-gray-200 bg-white rounded-b-xl">
+            {confirmDiscard ? (
+              <>
+                <span className="flex items-center gap-2 text-sm text-amber-900">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                  Discard your unsaved changes?
+                </span>
+                <div className="flex gap-2">
+                  <button onClick={() => setConfirmDiscard(null)}
+                    className="px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50">
+                    Keep editing
+                  </button>
+                  <button
+                    onClick={() => { const closing = confirmDiscard === 'close'; cancelEditing(); if (closing) onClose(); }}
+                    className="px-3 py-1.5 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700">
+                    Discard
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <span className="text-xs text-gray-500">
+                  {dirty ? <span className="font-medium text-amber-700">Unsaved changes</span> : 'No changes yet'}
+                  <span className="hidden sm:inline"> · ⌘/Ctrl+S to save · Esc to cancel</span>
+                </span>
+                <div className="flex gap-2">
+                  <button onClick={revertAll} disabled={savingEdits}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-gray-600 rounded-lg hover:bg-gray-100 transition-colors"
+                    title="Put back everything the language model wrote (not saved until you press Save)">
+                    <Undo2 className="w-4 h-4" /> Revert to AI text
+                  </button>
+                  <button onClick={requestCancel} disabled={savingEdits}
+                    className="px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
+                    Cancel
+                  </button>
+                  <button onClick={saveEdits} disabled={savingEdits || !dirty}
+                    className="inline-flex items-center gap-2 px-4 py-1.5 text-sm font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors">
+                    {savingEdits
+                      ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving…</>
+                      : <><Check className="w-4 h-4" /> Save report</>}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
