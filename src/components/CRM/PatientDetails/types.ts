@@ -22,6 +22,7 @@ declare global {
     latestProcessingResults?: {
       transcriptData: any;
       errorCounts: import('@/services/dataService').IssueCounts;
+      recordingId?: string;
       timestamp: number;
     };
   }

@@ -3,7 +3,6 @@ import { queryClient } from '@/lib/react-query';
 import type { TranscriptData, IssueCounts, SpeechAnalysis, FlagNotes } from './types';
 import { countErrors } from './errorCounter';
 import { calculateSpeechAnalysis } from './speechAnalysis';
-import { storedPathOf, forgetStoredAudio, storageSafeName } from './uploadedAudio';
 
 // Save recording with audio file and comprehensive analysis to Supabase
 export const saveRecording = async (
@@ -15,11 +14,9 @@ export const saveRecording = async (
   metadata?: { name?: string; protocol?: string; note?: string } // Add optional metadata
 ): Promise<{ success: boolean; recordingId?: string; error?: string }> => {
   try {
-    // 1. Upload audio file to storage — unless processing already stored it (uploadedAudio.ts),
-    // in which case that object becomes the recording's audio and nothing is uploaded twice.
-    const prestored = storedPathOf(audioFile);
-    const path = prestored ?? `${userId}/${Date.now()}_${storageSafeName(audioFile.name)}`;
-    let uploadError = prestored ? null : (await supabase.storage
+    // 1. Upload audio file to storage
+    const path = `${userId}/${Date.now()}_${audioFile.name}`;
+    let uploadError = (await supabase.storage
       .from('recordings')
       .upload(path, audioFile, { upsert: true, cacheControl: '3600' })).error;
 
@@ -67,12 +64,10 @@ export const saveRecording = async (
       .single();
 
     if (insertError) {
-      // Clean up a file uploaded here; a pre-stored one is KEPT — it may be the only copy of
-      // a take the clinician has already waited on, and Save can be retried against it.
-      if (!prestored) await supabase.storage.from('recordings').remove([path]);
+      // Clean up uploaded file if DB insert fails
+      await supabase.storage.from('recordings').remove([path]);
       return { success: false, error: `Database insert failed: ${insertError.message}` };
     }
-    forgetStoredAudio(audioFile);
 
     // 3. Refresh recordings list in React Query cache
     queryClient.invalidateQueries({ queryKey: ['recordings', userId] });

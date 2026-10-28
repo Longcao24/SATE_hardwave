@@ -1,4 +1,4 @@
-import { saveRecording } from './dataService';
+import { saveRecording, updateRecordingMetadata, updateRecordingPatient } from './dataService';
 import { type IssueCounts } from './dataService';
 import { type User } from '@supabase/supabase-js';
 
@@ -17,6 +17,10 @@ export interface PendingRecordingData {
   isProcessingComplete?: boolean;
   /** Processing ended in an error, so no transcript exists and Save cannot succeed. */
   processingFailed?: boolean;
+  /** The backend session processing this upload (set as soon as it owns the file). */
+  sessionId?: string;
+  /** The recording the backend created; Save names it instead of inserting a new one. */
+  recordingId?: string;
 }
 
 export class RecordingMetadataService {
@@ -49,6 +53,26 @@ export class RecordingMetadataService {
     }
 
     try {
+      // A web upload is processed by the backend, which already CREATED the recording (with the
+      // audio, transcript and patient). Save only names it — and clears needs_review, the flag
+      // that would otherwise ask for a name the next time it is opened.
+      if (pendingRecordingData.recordingId) {
+        const id = pendingRecordingData.recordingId;
+        const meta = await updateRecordingMetadata(id, user.id, {
+          name: metadata.name, protocol: metadata.protocol, note: metadata.note,
+        });
+        if (!meta.success) {
+          const error = meta.error || 'Failed to save the recording details';
+          onError?.(error);
+          return { success: false, error };
+        }
+        if (pendingRecordingData.patientId) {
+          await updateRecordingPatient(id, pendingRecordingData.patientId, user.id);
+        }
+        onSuccess?.(id);
+        return { success: true, recordingId: id };
+      }
+
       // Save to Supabase with metadata
       const result = await saveRecording(
         pendingRecordingData.audioFile,
