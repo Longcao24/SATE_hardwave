@@ -1,6 +1,7 @@
 import type { TranscriptData, IssueCounts, ProcessingError } from './types';
 import { countErrors } from './errorCounter';
 import { MAX_UPLOAD_BYTES, MAX_UPLOAD_LABEL } from '@/config/uploadLimits';
+import { storeUploadedAudio, UploadCancelledError } from './uploadedAudio';
 
 // Helper function to categorize and format errors
 const categorizeError = (error: any, response?: Response): ProcessingError => {
@@ -232,6 +233,30 @@ export const processAudioFile = async (
       throw validationError;
     }
 
+    // Save the file BEFORE the AI call, so a failed transcription still leaves the audio in
+    // Storage (and Retry/Save reuse that copy). If even this fails, stop here: processing a
+    // file we could not keep is exactly what lost recordings before.
+    try {
+      await storeUploadedAudio(audioFile);
+    } catch (e) {
+      // The clinician cancelled: pass it through bare, so no error popup follows their own click.
+      if (e instanceof UploadCancelledError) throw e;
+      const why = e instanceof Error ? e.message : String(e);
+      // Only a transport failure is worth retrying; a refused key, a size limit, a policy
+      // refusal or a lost session fails the same way every time and must say what it is.
+      const permanent = /not signed in|invalid key|too large|exceeded|payload|unauthori[sz]ed|row-level security|jwt|403/i.test(why);
+      const storeError = new Error(`Could not save the file before processing: ${why}`);
+      (storeError as any).errorDetails = {
+        type: permanent ? 'validation' : 'network',
+        message: permanent
+          ? `Could not save the audio file to your account before processing: ${why}`
+          : 'Could not save the audio file to your account before processing. Please check your connection and try again.',
+        originalError: why,
+        retryable: !permanent
+      };
+      throw storeError;
+    }
+
     // Try with the specified device first
     let result;
     try {
@@ -271,6 +296,7 @@ export const processAudioFile = async (
     return result;
 
   } catch (error) {
+    if (error instanceof UploadCancelledError) throw error;
     console.error('API processing failed:', error);
     
     // If the error already has errorDetails, preserve them

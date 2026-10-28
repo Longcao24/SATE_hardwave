@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { discardStoredAudio } from '@/services/DataService/uploadedAudio';
 import { useNavigate } from 'react-router-dom';
 import { recordingMetadataService } from '@/services/recordingMetadataService';
 import { audioStorageService } from '@/services/audioStorageService';
@@ -188,8 +189,10 @@ export function useRecordingMetadata(user: User | null) {
     if (pendingRecordingData?.audioFile) {
       console.log('🗑️ Cleaning up cached audio file on cancel...');
       audioStorageService.clearCachedAudio(pendingRecordingData.audioFile);
+      // A cancelled upload is deleted from Storage too; a FAILED one is kept (uploadedAudio.ts).
+      if (!pendingRecordingData.processingFailed) discardStoredAudio(pendingRecordingData.audioFile);
     }
-    
+
     setShowMetadataForm(false);
     setPendingRecordingData(null);
     setFormMetadata(null);

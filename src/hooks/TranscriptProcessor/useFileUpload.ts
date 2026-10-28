@@ -162,7 +162,9 @@ export function useFileUpload(deps: FileUploadDeps) {
         return cachedUrl; // Return the cached URL
 
       } catch (error) {
-        
+        // Cancelled by the clinician mid-upload (uploadedAudio.ts): nothing to report.
+        if ((error as any)?.cancelled) return null;
+
         // Check if this is a categorized error
         const errorDetails = (error as any).errorDetails as ProcessingError;
         if (errorDetails) {

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { discardStoredAudio } from '@/services/DataService/uploadedAudio';
 import { useParams, useNavigate } from 'react-router-dom';
 import { processAudioFile, deleteRecording, updateRecordingPatient, type IssueCounts, type ProcessingError } from '@/services/dataService';
 import { recordingMetadataService, type PendingRecordingData, type RecordingMetadata } from '@/services/recordingMetadataService';
@@ -309,6 +310,8 @@ const PatientDetails: React.FC = () => {
     if (pendingRecordingData?.audioFile) {
       // console.log('🗑️ Cleaning up cached audio file on cancel...');
       audioStorageService.clearCachedAudio(pendingRecordingData.audioFile);
+      // A cancelled upload is deleted from Storage too; a FAILED one is kept (uploadedAudio.ts).
+      if (!pendingRecordingData.processingFailed) discardStoredAudio(pendingRecordingData.audioFile);
     }
 
     setShowMetadataForm(false);
@@ -428,6 +431,8 @@ const PatientDetails: React.FC = () => {
         // }
 
       } catch (error) {
+        // Cancelled by the clinician mid-upload (uploadedAudio.ts): nothing to report.
+        if ((error as any)?.cancelled) return;
         console.error('Failed to process and save audio:', error);
         
         // Check if this is a categorized error
