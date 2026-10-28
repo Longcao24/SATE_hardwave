@@ -6,7 +6,8 @@
 // with Retry). Retry is the owner's own Retry, done by an admin and written to the audit trail.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Clock, Loader2, RefreshCw, RotateCcw, Timer, Zap } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Clock, ExternalLink, Loader2, RefreshCw, RotateCcw, Timer, XCircle, Zap } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { deviceApiService } from '@/services/device/deviceApiService';
 import type { AdminProcessing } from '@/services/device/deviceTypes';
 
@@ -35,6 +36,8 @@ export function ProcessingPanel() {
   const [reason, setReason] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const [recentFilter, setRecentFilter] = useState<'all' | 'done' | 'failed'>('all');
+  const navigate = useNavigate();
 
   const load = useCallback(() => {
     setLoading(true);
@@ -52,6 +55,8 @@ export function ProcessingPanel() {
 
   const reasonOf = (e?: string | null) => String(e || 'unknown')
     .replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, '<id>').replace(/\d+(\.\d+)?/g, 'N').trim().slice(0, 120);
+  const recent = useMemo(() => (d?.recent || []).filter((r) =>
+    recentFilter === 'all' ? true : recentFilter === 'failed' ? (r.status === 'error' || r.no_text) : (r.status === 'done' && !r.no_text)), [d, recentFilter]);
   const errors = useMemo(() => (d?.errors || []).filter((e) => !reason || reasonOf(e.process_error) === reason), [d, reason]);
 
   const act = async (fn: () => Promise<{ skipped: { id: string; reason: string }[] } & Record<string, any>>, verb: string) => {
@@ -110,6 +115,33 @@ export function ProcessingPanel() {
             </div>
           )}
 
+          {/* Now processing — the one job the worker holds, at a glance */}
+          {(() => {
+            const cur = d!.live.filter((x) => x.status === 'processing');
+            const next = d!.live.find((x) => x.status === 'queued');
+            return (
+              <div className={`rounded-xl border p-4 ${cur.length ? 'border-violet-300 bg-violet-50' : 'border-gray-200 bg-white'}`}>
+                <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+                  {cur.length ? <Loader2 className="w-4 h-4 animate-spin text-violet-600" /> : <CheckCircle2 className="w-4 h-4 text-gray-400" />}
+                  {cur.length ? 'Now processing' : 'The worker is idle'}
+                </div>
+                {cur.map((r) => (
+                  <div key={r.id} className="mt-2 grid grid-cols-2 md:grid-cols-5 gap-2 text-sm">
+                    <div><div className="text-[11px] text-gray-500">Account</div><div className="truncate">{r.email || '—'}</div></div>
+                    <div><div className="text-[11px] text-gray-500">Source</div><div>{r.family}</div></div>
+                    <div><div className="text-[11px] text-gray-500">Length</div><div className="tabular-nums">{r.seconds ? len(r.seconds) : '—'}</div></div>
+                    <div><div className="text-[11px] text-gray-500">Running for</div><div className={`tabular-nums ${r.stuck ? 'text-red-700 font-semibold' : ''}`}>{ago(r.processing_started_at)}{r.stuck ? ' · stuck' : ''}</div></div>
+                    <div><div className="text-[11px] text-gray-500">Attempt · waited</div><div className="tabular-nums">{r.attempts} · {r.processing_started_at ? len((Date.parse(r.processing_started_at) - Date.parse(r.created_at)) / 1000) : '—'}</div></div>
+                  </div>
+                ))}
+                <div className="mt-2 text-xs text-gray-500">
+                  {st.queued ? `${st.queued} waiting${next ? ` · next: ${next.email || '—'} (${next.family}, ${next.seconds ? len(next.seconds) : '—'})` : ''}` : 'Nothing waiting.'}
+                  {' · '}last finished {ago(st.worker_last_finished_at)} ago
+                </div>
+              </div>
+            );
+          })()}
+
           {/* KPIs */}
           <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3">
             <Kpi icon={<Zap className="w-4 h-4 text-violet-600" />} label="Processing now" value={st.processing}
@@ -161,6 +193,55 @@ export function ProcessingPanel() {
               })}
             </Table>
           </Section>
+
+          {/* Recently processed */}
+          {d!.recent && (
+            <Section title={`Recently processed — ${d!.recent.length}`}
+              hint="Every take that finished in this window, newest first: done, no speech, or failed. Waited = upload to start; Took = processing time.">
+              <div className="inline-flex rounded-lg border bg-white p-0.5 mb-2">
+                {(['all', 'done', 'failed'] as const).map((f) => (
+                  <button key={f} onClick={() => setRecentFilter(f)}
+                    className={`px-3 py-1 text-xs rounded-md ${recentFilter === f ? 'bg-violet-600 text-white' : 'text-gray-600 hover:bg-gray-50'}`}>
+                    {f === 'all' ? 'All' : f === 'done' ? 'Done' : 'Failed / no speech'}
+                  </button>
+                ))}
+              </div>
+              <Table head={['Finished', 'Outcome', 'Account', 'Source', 'Length', 'Waited', 'Took', 'Tries', '']}>
+                {recent.length === 0 && <Empty cols={9} text="Nothing finished in this window." />}
+                {recent.map((r) => (
+                  <tr key={r.key} className="border-t align-top">
+                    <td className="px-3 py-2 text-gray-500 whitespace-nowrap" title={new Date(r.finished_at).toLocaleString()}>{ago(r.finished_at)} ago</td>
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      {r.status === 'error'
+                        ? <span className="inline-flex items-center gap-1 text-red-700"><XCircle className="w-3.5 h-3.5" /> Failed</span>
+                        : r.no_text
+                          ? <span className="inline-flex items-center gap-1 text-amber-700"><AlertTriangle className="w-3.5 h-3.5" /> No speech</span>
+                          : <span className="inline-flex items-center gap-1 text-green-700"><CheckCircle2 className="w-3.5 h-3.5" /> Done</span>}
+                      {r.process_error && <div className="text-[11px] text-red-700 max-w-[320px] break-words mt-0.5">{r.process_error}</div>}
+                    </td>
+                    <td className="px-3 py-2 truncate max-w-[200px]">{r.email || '—'}</td>
+                    <td className="px-3 py-2"><div>{r.family}</div><div className="text-[11px] text-gray-400 font-mono">{r.device_serial}</div></td>
+                    <td className="px-3 py-2 tabular-nums">{r.seconds ? len(r.seconds) : '—'}</td>
+                    <td className="px-3 py-2 tabular-nums">{r.wait_s == null ? '—' : len(r.wait_s)}</td>
+                    <td className="px-3 py-2 tabular-nums">{r.processing_s == null ? '—' : len(r.processing_s)}</td>
+                    <td className="px-3 py-2 tabular-nums">{r.attempts}</td>
+                    <td className="px-3 py-2 text-right whitespace-nowrap">
+                      {r.recording_id && (
+                        <button onClick={() => navigate(`/oversight/${r.user_id}/${r.recording_id}`)} title="Open (read-only)"
+                          className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-md border hover:bg-gray-50">
+                          <ExternalLink className="w-3.5 h-3.5" /> Open
+                        </button>
+                      )}
+                      {r.status === 'error' && (
+                        <button disabled={busy} onClick={() => retry([r.id])}
+                          className="ml-1 text-xs px-2 py-1 rounded-md border hover:bg-gray-50 disabled:opacity-40">Retry</button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </Table>
+            </Section>
+          )}
 
           {/* Trend */}
           <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">

@@ -224,8 +224,17 @@ export interface ProcErrorRow {
   id: string; email: string | null; device_serial: string; family: string; session_number: number | null;
   seconds: number; attempts: number; created_at: string; process_error: string | null;
 }
+/** [device-api v43.2-jobs] A take that finished (done, no speech, or failed). */
+export interface ProcRecentRow {
+  key: string; id: string; user_id: string; email: string | null; device_serial: string; family: string;
+  session_number: number | null; seconds: number; status: 'done' | 'error'; no_text: boolean; attempts: number;
+  created_at: string; processing_started_at: string | null; finished_at: string;
+  wait_s: number | null; processing_s: number | null; recording_id: string | null; process_error: string | null;
+}
 export interface AdminProcessing {
   generated_at: string; days: number;
+  /** Absent from a device-api older than v43.2-jobs. */
+  recent?: ProcRecentRow[];
   live: ProcLiveRow[]; errors: ProcErrorRow[]; error_reasons: { reason: string; n: number }[];
   stats: {
     uploaded: number; done: number; error: number; queued: number; processing: number; stuck: number;
