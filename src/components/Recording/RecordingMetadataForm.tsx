@@ -85,7 +85,7 @@ const RecordingMetadataForm: React.FC<RecordingMetadataFormProps> = ({
   const currentStep = isProcessing && processingProgress < 100 ? 3 : isLoading ? 4 : 3;
 
   return (
-    <div 
+    <div data-usage-mask 
       className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center"
       style={{ zIndex }}
     >

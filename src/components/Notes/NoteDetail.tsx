@@ -116,7 +116,7 @@ export function NoteDetail({ note, onDeleted }: { note: Note; onDeleted?: () => 
   const hasContent = Boolean(summary) || segments.length > 0;
 
   return (
-    <div className="flex-1 min-h-0 flex flex-col">
+    <div data-usage-mask className="flex-1 min-h-0 flex flex-col">
       {/* Top bar: where you are, and the actions on this note. Fixed, like the app's own. */}
       <header className="h-14 px-6 border-b border-gray-200 flex items-center gap-2 flex-shrink-0">
         <span className="text-sm text-gray-400">Meeting notes</span>
@@ -185,6 +185,7 @@ export function NoteDetail({ note, onDeleted }: { note: Note; onDeleted?: () => 
       </div>
 
       <audio
+        data-usage-block
         ref={audioRef}
         src={notesApiService.audioUrl(note)}
         onPlay={() => setPlaying(true)}

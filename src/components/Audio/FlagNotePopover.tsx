@@ -62,7 +62,7 @@ const FlagNotePopover: React.FC<FlagNotePopoverProps> = ({
   // The popup lives inside a fixed inset-0 backdrop. The backdrop is the
   // containing block for the absolute popup, so left/top = clientX/clientY. ✓
   return (
-    <div className="fixed inset-0 z-40" onClick={onClose}>
+    <div data-usage-mask className="fixed inset-0 z-40" onClick={onClose}>
       <div
         ref={popupRef}
         className={`absolute z-50 w-72 bg-white border border-amber-200 rounded-lg shadow-xl p-4 transition-opacity duration-100 ${visible ? 'opacity-100' : 'opacity-0'}`}

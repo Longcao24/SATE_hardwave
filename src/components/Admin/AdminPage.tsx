@@ -1,6 +1,6 @@
 // AdminPage — system-wide management for SATE admins (users in sate_admins).
 //
-// One page, five tabs, so each job has room instead of one long scroll:
+// One page, several tabs, so each job has room instead of one long scroll:
 //   Accounts   — every account with its numbers; create one; open an account to see its stats,
 //                view it read-only, set a password, disable or delete it, and turn per-account
 //                features on (AccountModal). The Meeting notes switch is in that popup: it is how
@@ -9,11 +9,14 @@
 //   Managers   — who may view (read-only) which accounts (ManagersCard).
 //   Recorders  — every recorder across all accounts.
 //   Firmware   — publish and manage releases.
+//   Usage      — how each account uses the web app: time, pages, actions, visits, screen
+//                recordings (Usage/UsagePanel, read from the analytics Worker on Cloudflare).
 //   Monitoring — links to the ops surfaces.
+// The tab is in the URL (?tab=…) so Usage can deep-link to one account or one recording.
 // Non-admins are bounced.
 
 import { useEffect, useMemo, useState, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { deviceApiService } from '@/services/device/deviceApiService';
 import type { AdminDevice, AdminFirmware, AdminUser } from '@/services/device/deviceTypes';
 import { notesApiService, type NotesGrant } from '@/services/notesApiService';
@@ -21,11 +24,12 @@ import { FirmwarePublishCard } from '@/components/Device/FirmwarePublishCard';
 import { ManagersCard } from '@/components/Admin/ManagersCard';
 import { ProcessingPanel } from '@/components/Admin/ProcessingPanel';
 import { AllRecordersPanel } from '@/components/Admin/AllRecordersPanel';
+import { UsagePanel } from '@/components/Admin/Usage/UsagePanel';
 import { AccountModal, Badge, fmtHours } from '@/components/Admin/AccountModal';
 import { Button } from '@/components/ui/button';
 import {
   ArrowLeft, ShieldCheck, Trash2, RefreshCw, Cpu, HardDrive, Loader2,
-  Activity, ExternalLink, Users, Search, UserPlus, Eye, FileAudio, Clock, UserCog, X, Zap,
+  Activity, ExternalLink, Users, Search, UserPlus, Eye, FileAudio, Clock, UserCog, X, Zap, BarChart3,
 } from 'lucide-react';
 
 // Ops surfaces linked from the admin page (open in a new tab).
@@ -35,7 +39,8 @@ const MONITORING_LINKS = [
   { title: 'Docs', desc: 'Engineering documentation', href: 'https://sate-docs.pages.dev' },
 ];
 
-type Tab = 'accounts' | 'managers' | 'processing' | 'recorders' | 'firmware' | 'monitoring';
+const TAB_IDS = ['accounts', 'managers', 'processing', 'usage', 'recorders', 'firmware', 'monitoring'] as const;
+type Tab = typeof TAB_IDS[number];
 
 function timeAgo(iso?: string | null): string {
   if (!iso) return '—';
@@ -58,7 +63,10 @@ function batteryClass(pct?: number | null): string {
 export function AdminPage() {
   const navigate = useNavigate();
   const [allowed, setAllowed] = useState<boolean | null>(null);
-  const [tab, setTab] = useState<Tab>('accounts');
+  const [params, setParams] = useSearchParams();
+  const tab: Tab = (TAB_IDS as readonly string[]).includes(params.get('tab') || '') ? params.get('tab') as Tab : 'accounts';
+  // Switching tab drops the Usage sub-state (user/replay/view) — it belongs to that tab only.
+  const setTab = (t: Tab) => setParams(t === 'accounts' ? {} : { tab: t });
   const [devices, setDevices] = useState<AdminDevice[]>([]);
   const [firmware, setFirmware] = useState<AdminFirmware[]>([]);
   const [users, setUsers] = useState<AdminUser[]>([]);
@@ -175,6 +183,7 @@ export function AdminPage() {
     { id: 'accounts', label: 'Accounts', icon: <Users className="w-4 h-4" />, count: users.length },
     { id: 'managers', label: 'Managers', icon: <UserCog className="w-4 h-4" /> },
     { id: 'processing', label: 'Processing', icon: <Zap className="w-4 h-4" /> },
+    { id: 'usage', label: 'Usage', icon: <BarChart3 className="w-4 h-4" /> },
     { id: 'recorders', label: 'Recorders', icon: <Cpu className="w-4 h-4" />, count: devices.length },
     { id: 'firmware', label: 'Firmware', icon: <HardDrive className="w-4 h-4" />, count: firmware.length },
     { id: 'monitoring', label: 'Monitoring', icon: <Activity className="w-4 h-4" /> },
@@ -279,7 +288,9 @@ export function AdminPage() {
                         <td className="px-3 py-2.5 text-right tabular-nums">{u.audio_seconds != null ? fmtHours(u.audio_seconds) : '—'}</td>
                         <td className="px-3 py-2.5 text-right tabular-nums">{u.devices}</td>
                         <td className="px-3 py-2.5 text-right text-gray-500 whitespace-nowrap">{u.last_sign_in_at ? timeAgo(u.last_sign_in_at) : 'never'}</td>
-                        <td className="px-3 py-2.5 text-right">
+                        <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                          <button onClick={() => setParams({ tab: 'usage', user: u.id })} title="How this account uses the web app"
+                            className="text-xs px-2.5 py-1 rounded-md border hover:bg-white mr-1.5">Usage</button>
                           <button onClick={() => setOpenUser(u.id)} className="text-xs px-2.5 py-1 rounded-md border hover:bg-white">Manage</button>
                         </td>
                       </tr>
@@ -296,6 +307,9 @@ export function AdminPage() {
 
         {/* ---------------- Processing ---------------- */}
         {tab === 'processing' && <ProcessingPanel />}
+
+        {/* ---------------- Usage ---------------- */}
+        {tab === 'usage' && <UsagePanel users={users} />}
 
         {/* ---------------- Recorders ---------------- */}
         {tab === 'recorders' && <AllRecordersPanel />}

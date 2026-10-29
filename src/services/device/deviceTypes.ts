@@ -214,25 +214,44 @@ export interface DeviceUser {
 }
 
 // ---- [v38] processing monitor + all recorders -------------------------------------------
-export interface ProcLiveRow {
+/** [device-api v43.4-problems / v52] Where a take came from, and a web upload's original file name
+ *  (admin page only). Absent from an older device-api. */
+export interface ProcSource { source?: 'web' | 'device'; file_name?: string | null; bytes?: number | null; user_id?: string | null }
+export interface ProcLiveRow extends ProcSource {
   id: string; email: string | null; device_serial: string; family: string; session_number: number | null;
   seconds: number; status: 'queued' | 'processing'; attempts: number; created_at: string;
   processing_started_at: string | null; heartbeat_at: string | null; not_before: string | null;
   worker_id: string | null; stuck: boolean;
 }
-export interface ProcErrorRow {
+export interface ProcErrorRow extends ProcSource {
   id: string; email: string | null; device_serial: string; family: string; session_number: number | null;
   seconds: number; attempts: number; created_at: string; process_error: string | null;
 }
 /** [device-api v43.2-jobs] A take that finished (done, no speech, or failed). */
-export interface ProcRecentRow {
+export interface ProcRecentRow extends ProcSource {
   key: string; id: string; user_id: string; email: string | null; device_serial: string; family: string;
   session_number: number | null; seconds: number; status: 'done' | 'error'; no_text: boolean; attempts: number;
   created_at: string; processing_started_at: string | null; finished_at: string;
   wait_s: number | null; processing_s: number | null; recording_id: string | null; process_error: string | null;
 }
+/** [device-api v43.4-problems / v52] One way a recording failed to become a processed recording. */
+export type ProcProblemKind = 'failed' | 'stuck' | 'queued_long' | 'no_speech' | 'never_reached_server'
+  | 'withdrawn' | 'empty_transcript' | 'orphan_upload';
+export interface ProcProblem {
+  key: string; kind: ProcProblemKind;
+  /** The session, when there is one (none for never_reached_server / orphan_upload). */
+  id: string | null; recording_id?: string; user_id: string | null; email: string | null;
+  device_serial: string | null; family: string; source: 'web' | 'device'; file_name: string | null;
+  seconds: number | null; bytes: number | null; attempts: number | null; created_at: string;
+  storage_path?: string; reason: string;
+  action: 'retry' | 'requeue' | 'register' | 'reupload' | null;
+}
 export interface AdminProcessing {
   generated_at: string; days: number;
+  /** Absent from a device-api older than v43.4-problems. */
+  problems?: ProcProblem[];
+  problem_counts?: Partial<Record<ProcProblemKind, number>>;
+  storage_scan?: { folders?: number; orphans?: number; duplicates?: number; error?: string } | null;
   /** Absent from a device-api older than v43.2-jobs. */
   recent?: ProcRecentRow[];
   live: ProcLiveRow[]; errors: ProcErrorRow[]; error_reasons: { reason: string; n: number }[];
@@ -240,7 +259,7 @@ export interface AdminProcessing {
     uploaded: number; done: number; error: number; queued: number; processing: number; stuck: number;
     no_text: number; success_rate: number | null; audio_seconds_done: number; queue_seconds: number;
     oldest_queued_at: string | null; turnaround_p50_s: number | null; turnaround_p90_s: number | null;
-    worker_last_finished_at: string | null; unresolved_errors: number;
+    worker_last_finished_at: string | null; unresolved_errors: number; problems?: number;
   };
   per_day: { day: string; done: number; error: number; no_text: number; seconds: number }[];
   per_family: { family: string; done: number; error: number; pending: number; seconds: number; success_rate: number | null }[];

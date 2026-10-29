@@ -208,7 +208,7 @@ const PatientList: React.FC<PatientListProps> = ({ onSelectPatient }) => {
             )}
           </Card>
         ) : (
-          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+          <div data-usage-mask className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
             {filteredPatients.map((patient) => (
               <Card
                 key={patient.id}

@@ -739,8 +739,12 @@ const RightSidebar: React.FC<RightSidebarProps> = ({
     // { id: 'annotations', label: 'Filters', icon: Filter, color: 'purple' }
   ];
 
+  // data-usage-mask on the whole panel: it shows speaker names a clinician can rename to anything
+  // (often the child's name, in an <option> rrweb records verbatim) and figures derived from the
+  // transcript. Usage analytics only needs WHICH control was used, which data-track labels give.
   return (
     <div 
+      data-usage-mask
       style={{ width: `${actualWidth}px` }}
       className={`bg-white border-l border-gray-200 flex flex-col h-full transition-all duration-200 overflow-hidden ${
         visible ? 'translate-x-0' : 'translate-x-full'
@@ -753,6 +757,7 @@ const RightSidebar: React.FC<RightSidebarProps> = ({
             <>
               <button
                 onClick={onToggle}
+                data-track="Collapse analysis sidebar"
                 className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
                 title="Collapse sidebar"
               >
@@ -770,6 +775,7 @@ const RightSidebar: React.FC<RightSidebarProps> = ({
           {collapsed && (
             <div 
               className="relative cursor-pointer"
+              data-track="Expand analysis sidebar"
               onClick={onToggle}
               onMouseEnter={() => setChartHovered(true)}
               onMouseLeave={() => setChartHovered(false)}
@@ -796,6 +802,7 @@ const RightSidebar: React.FC<RightSidebarProps> = ({
             return (
               <button
                 key={tab.id}
+                data-track={`Analysis tab: ${tab.label}`}
                 onClick={() => {
                   onTabChange(tab.id);
                   onToggle(); // Expand the sidebar
@@ -877,6 +884,7 @@ const RightSidebar: React.FC<RightSidebarProps> = ({
             return (
               <button
                 key={tab.id}
+                data-track={`Analysis tab: ${tab.label}`}
                 onClick={() => onTabChange(tab.id)}
                 className={`flex-1 px-3 py-3 text-xs font-medium border-b-2 transition-all duration-200 flex flex-col items-center gap-1 ${getTabColors(tab.color, isActive)}`}
               >
@@ -960,6 +968,7 @@ const RightSidebar: React.FC<RightSidebarProps> = ({
                   Range = ± months around the age. Ignored when Month is empty (whole-year window).
                 </p>
                 <button
+                  data-track="Compare to norms"
                   onClick={runNormComparison}
                   disabled={normLoading || normYear.trim() === ''}
                   className="w-full px-3 py-2 text-sm font-medium bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
@@ -1391,7 +1400,7 @@ const RightSidebar: React.FC<RightSidebarProps> = ({
                         Lemmas for non-irregular morphemes, words for others
                       </span> */}
                     </div>
-                    <div className="max-h-60 overflow-y-auto bg-gray-50 rounded-lg p-3 border border-gray-200">
+                    <div data-usage-mask className="max-h-60 overflow-y-auto bg-gray-50 rounded-lg p-3 border border-gray-200">
                       {differentWordsList.length > 0 ? (
                         <div className="grid grid-cols-2 gap-x-4 gap-y-1">
                           {differentWordsList.map((word, index) => (

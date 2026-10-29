@@ -362,6 +362,7 @@ export function MainApp() {
     <div className="min-h-screen bg-white">
       {/* Audio element */}
       <audio 
+        data-usage-block
         ref={audioPlayer.audioRef} 
         preload="metadata"
       />

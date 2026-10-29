@@ -76,7 +76,7 @@ export const RecordingsList: React.FC<RecordingsListProps> = ({
   }
   
   return (
-    <div className="flex-1 border-t border-gray-200 min-h-0 flex flex-col">
+    <div data-usage-mask className="flex-1 border-t border-gray-200 min-h-0 flex flex-col">
       <div className="p-6 pb-4 flex-shrink-0">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
@@ -85,7 +85,7 @@ export const RecordingsList: React.FC<RecordingsListProps> = ({
           </h3>
           {onCreateRecording && (
             <button
-              onClick={onCreateRecording}
+              data-track="New recording" onClick={onCreateRecording}
               className="p-1.5 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors"
               title="Create new recording"
             >
@@ -121,7 +121,7 @@ export const RecordingsList: React.FC<RecordingsListProps> = ({
             <li key={r.id} className="group relative">
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => onRecordingClick(r)}
+                  data-track="Open recording" onClick={() => onRecordingClick(r)}
                   className={`flex-1 text-left text-sm p-2 rounded-lg flex justify-between items-start transition-colors ${
                     isOpen
                       ? 'bg-blue-50 text-blue-900 font-semibold'
@@ -151,7 +151,7 @@ export const RecordingsList: React.FC<RecordingsListProps> = ({
                 
                 <div className="relative">
                   <button
-                    onClick={(e) => onMenuToggle(r.id, e)}
+                    data-track="Recording menu" onClick={(e) => onMenuToggle(r.id, e)}
                     data-recording-menu-button
                     className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-gray-700 transition-all duration-200"
                     title="More options"
@@ -167,14 +167,14 @@ export const RecordingsList: React.FC<RecordingsListProps> = ({
                     >
                       <div className="p-1">
                         <button
-                          onClick={(e) => onRenameClick(r, e)}
+                          data-track="Rename recording" onClick={(e) => onRenameClick(r, e)}
                           className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded-md transition-colors"
                         >
                           <Edit className="w-4 h-4" />
                           Rename
                         </button>
                         <button
-                          onClick={(e) => onAssignPatientClick(r.id, e)}
+                          data-track="Assign patient" onClick={(e) => onAssignPatientClick(r.id, e)}
                           className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded-md transition-colors"
                         >
                           <UserPlus className="w-4 h-4" />
@@ -182,7 +182,7 @@ export const RecordingsList: React.FC<RecordingsListProps> = ({
                         </button>
                         {r.patient_id && (
                           <button
-                            onClick={(e) => onMoveToStandaloneClick(r, e)}
+                            data-track="Move to standalone" onClick={(e) => onMoveToStandaloneClick(r, e)}
                             disabled={isMovingToStandalone === r.id}
                             className="w-full flex items-center gap-2 px-3 py-2 text-xs text-orange-600 hover:bg-orange-50 rounded-md transition-colors disabled:opacity-50"
                           >
@@ -192,7 +192,7 @@ export const RecordingsList: React.FC<RecordingsListProps> = ({
                         )}
                         <div className="border-t border-gray-200 my-1"></div>
                         <button
-                          onClick={(e) => onDeleteClick(r.id, r.recording_name || r.file_name || r.file_path.split('/').pop() || 'Unknown', e)}
+                          data-track="Delete recording" onClick={(e) => onDeleteClick(r.id, r.recording_name || r.file_name || r.file_path.split('/').pop() || 'Unknown', e)}
                           disabled={isDeleting === r.id}
                           className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 rounded-md transition-colors disabled:opacity-50"
                         >

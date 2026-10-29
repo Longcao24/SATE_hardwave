@@ -182,7 +182,7 @@ const MainContent: React.FC<MainContentProps> = ({
       {showControls && (
         <div className="p-6 border-b border-gray-200">
           <div className="flex items-start justify-between group">
-            <div className="flex-1 flex flex-col">
+            <div data-usage-mask className="flex-1 flex flex-col">
               <ReportHeader
                 recordingName={recordingName}
                 createdDate={createdDate}
@@ -222,6 +222,7 @@ const MainContent: React.FC<MainContentProps> = ({
                 lsaReport={lsaReport}
                 lsaAllowGenerate={lsaAllowGenerate}
                 onSaveLsaReport={onSaveLsaReport}
+                audioDuration={duration}
               />
               
               {/* Second Row - Display Mode Toggle */}
@@ -236,7 +237,7 @@ const MainContent: React.FC<MainContentProps> = ({
       )}
 
       {/* Main Content Area */}
-      <div className="flex-1 overflow-hidden">
+      <div data-usage-mask className="flex-1 overflow-hidden">
           <ConversationView
             currentTime={currentTime}
             onSeek={onSeek}

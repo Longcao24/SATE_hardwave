@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Undo, Redo, Download, Save, X, Edit2, FileText } from 'lucide-react';
+import { Undo, Redo, Download, Save, X, Edit2, FileText, ClipboardList } from 'lucide-react';
 import { SaltExportPopup } from '@/components/Modals/SaltExportPopup';
 import { SateReportPopup } from '@/components/Modals/SateReportPopup';
+import { SoapNotePopup } from '@/components/Modals/SoapNotePopup';
 import type { Segment } from '@/services/dataService';
 import type { UndoRedoReturn } from '@/hooks/useUndoRedo';
 import type { StoredLsaReport } from '@/services/lsaReportService';
@@ -19,6 +20,8 @@ interface ActionButtonsPanelProps {
   lsaReport?: StoredLsaReport | null;
   lsaAllowGenerate?: boolean;
   onSaveLsaReport?: (stored: StoredLsaReport) => Promise<StoredLsaReport | void>;
+  /** The audio's length in seconds — prefills the SOAP note's session duration. */
+  audioDuration?: number;
 }
 
 export const ActionButtonsPanel: React.FC<ActionButtonsPanelProps> = ({
@@ -34,13 +37,16 @@ export const ActionButtonsPanel: React.FC<ActionButtonsPanelProps> = ({
   lsaReport,
   lsaAllowGenerate,
   onSaveLsaReport,
+  audioDuration,
 }) => {
   const [showSaltExportPopup, setShowSaltExportPopup] = useState(false);
   const [showSateReportPopup, setShowSateReportPopup] = useState(false);
+  const [showSoapNotePopup, setShowSoapNotePopup] = useState(false);
 
   return (
     <>
-      <div className="flex items-center gap-3">
+      {/* Wraps as a row of whole buttons; a label never breaks across lines (four buttons since SOAP Note). */}
+      <div className="flex flex-wrap items-center justify-end gap-2">
         {/* Undo/Redo Buttons - Only show in edit mode */}
         {isEditable && (
           <div className="flex items-center gap-1">
@@ -76,7 +82,7 @@ export const ActionButtonsPanel: React.FC<ActionButtonsPanelProps> = ({
         {/* Export SALT Button */}
         <button
           onClick={() => setShowSaltExportPopup(true)}
-          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-green-700 bg-white border border-green-300 rounded-lg hover:bg-green-50 focus:ring-2 focus:ring-green-500 focus:ring-offset-2 focus:outline-none transition-all duration-200 shadow-sm"
+          className="inline-flex items-center gap-2 whitespace-nowrap px-4 py-2 text-sm font-medium text-green-700 bg-white border border-green-300 rounded-lg hover:bg-green-50 focus:ring-2 focus:ring-green-500 focus:ring-offset-2 focus:outline-none transition-all duration-200 shadow-sm"
           title="Export transcript to SALT format"
         >
           <Download className="w-4 h-4" />
@@ -86,12 +92,24 @@ export const ActionButtonsPanel: React.FC<ActionButtonsPanelProps> = ({
         {/* Generate SATE Report */}
         <button
           onClick={() => setShowSateReportPopup(true)}
-          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-teal-700 bg-white border border-teal-300 rounded-lg hover:bg-teal-50 focus:ring-2 focus:ring-teal-500 focus:ring-offset-2 focus:outline-none transition-all duration-200 shadow-sm"
+          className="inline-flex items-center gap-2 whitespace-nowrap px-4 py-2 text-sm font-medium text-teal-700 bg-white border border-teal-300 rounded-lg hover:bg-teal-50 focus:ring-2 focus:ring-teal-500 focus:ring-offset-2 focus:outline-none transition-all duration-200 shadow-sm"
           title="Generate a SATE clinical report (PDF / Word)"
         >
           <FileText className="w-4 h-4" />
           SATE Report
         </button>
+
+        {/* SOAP Note — writes a stored draft, so it is hidden on oversight (readOnly). */}
+        {!readOnly && (
+          <button
+            onClick={() => setShowSoapNotePopup(true)}
+            className="inline-flex items-center gap-2 whitespace-nowrap px-4 py-2 text-sm font-medium text-indigo-700 bg-white border border-indigo-300 rounded-lg hover:bg-indigo-50 focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:outline-none transition-all duration-200 shadow-sm"
+            title="Draft a SOAP note for this session, for SLP review"
+          >
+            <ClipboardList className="w-4 h-4" />
+            SOAP Note
+          </button>
+        )}
 
       {/* Edit Mode Toggle */}
       {readOnly ? null : isEditable ? (
@@ -108,7 +126,7 @@ export const ActionButtonsPanel: React.FC<ActionButtonsPanelProps> = ({
               // Clear history after successful save
               undoRedo.clearHistory();
             }}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 focus:ring-2 focus:ring-green-500 focus:ring-offset-2 focus:outline-none transition-all duration-200 shadow-sm"
+            className="inline-flex items-center gap-2 whitespace-nowrap px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 focus:ring-2 focus:ring-green-500 focus:ring-offset-2 focus:outline-none transition-all duration-200 shadow-sm"
             title="Save changes"
           >
             <Save className="w-4 h-4" />
@@ -125,7 +143,7 @@ export const ActionButtonsPanel: React.FC<ActionButtonsPanelProps> = ({
                 onCancelEdit?.();
               }
             }}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 focus:outline-none transition-all duration-200 shadow-sm"
+            className="inline-flex items-center gap-2 whitespace-nowrap px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 focus:outline-none transition-all duration-200 shadow-sm"
             title="Cancel editing"
           >
             <X className="w-4 h-4" />
@@ -136,7 +154,7 @@ export const ActionButtonsPanel: React.FC<ActionButtonsPanelProps> = ({
         <button
           onClick={() => onTranscriptChange && onTranscriptChange(transcriptData)}
           data-umami-event="edit_button_click"
-          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none transition-all duration-200 shadow-sm"
+          className="inline-flex items-center gap-2 whitespace-nowrap px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none transition-all duration-200 shadow-sm"
           title="Enable edit mode"
         >
           <Edit2 className="w-4 h-4" />
@@ -163,6 +181,17 @@ export const ActionButtonsPanel: React.FC<ActionButtonsPanelProps> = ({
         allowGenerate={lsaAllowGenerate}
         saveReport={onSaveLsaReport}
       />
+
+      {/* SOAP Note Popup */}
+      {!readOnly && (
+        <SoapNotePopup
+          isOpen={showSoapNotePopup}
+          onClose={() => setShowSoapNotePopup(false)}
+          recordingId={recordingId}
+          transcriptData={transcriptData}
+          audioDuration={audioDuration}
+        />
+      )}
     </>
   );
 };

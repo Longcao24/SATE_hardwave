@@ -1,6 +1,7 @@
 import { supabase } from '@/lib/supabase';
 import type { TranscriptData, IssueCounts } from './types';
 import { countErrors } from './errorCounter';
+import { trackAction } from '@/services/usage/tracker';
 
 // A web upload is PROCESSED BY THE BACKEND, exactly like a device take (2026-10-28).
 //
@@ -109,8 +110,30 @@ export function reportClientError(context: string, file: File | null, message: s
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Usage analytics: how a watched upload ended. Fixed labels only — never the file's name, which
+ * is often a child's. "Still processing" after the watch limit is not an outcome, so it says nothing.
+ */
+async function trackOutcome(p: Promise<ServerProcessingResult>): Promise<ServerProcessingResult> {
+  try {
+    const r = await p;
+    trackAction('upload:done');
+    return r;
+  } catch (e) {
+    if (e instanceof UploadCancelledError) trackAction('upload:cancel');
+    else if (e instanceof ServerProcessingError && e.original === 'no_text') trackAction('upload:no-speech');
+    else if (!(e instanceof ServerProcessingError && /watch limit/.test(e.original))) trackAction('upload:failed');
+    throw e;
+  }
+}
+
 /** Upload `file` for backend processing and wait for its recording. */
-export async function processOnServer(file: File, opts: ServerProcessingOptions = {}): Promise<ServerProcessingResult> {
+export function processOnServer(file: File, opts: ServerProcessingOptions = {}): Promise<ServerProcessingResult> {
+  trackAction('upload:start');
+  return trackOutcome(handOverAndWatch(file, opts));
+}
+
+async function handOverAndWatch(file: File, opts: ServerProcessingOptions): Promise<ServerProcessingResult> {
   const { onProgress, onSession } = opts;
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) throw new ServerProcessingError('You are signed out. Please sign in again and re-upload.', null, false, 'Not signed in');
@@ -174,13 +197,19 @@ export async function processOnServer(file: File, opts: ServerProcessingOptions 
   }
   // Cancelled while register was in flight: the backend owns it now, so withdraw it.
   if (cancelled.has(file)) { void withdrawUpload(sessionId); throw new UploadCancelledError(); }
+  trackAction('upload:handed-over');
   onSession?.(sessionId);
   onProgress?.(42);
   return watch(sessionId, opts, file);
 }
 
 /** Put an errored upload back in the queue and wait again. */
-export async function retryOnServer(file: File, sessionId: string, opts: ServerProcessingOptions = {}): Promise<ServerProcessingResult> {
+export function retryOnServer(file: File, sessionId: string, opts: ServerProcessingOptions = {}): Promise<ServerProcessingResult> {
+  trackAction('upload:retry');
+  return trackOutcome(requeueAndWatch(file, sessionId, opts));
+}
+
+async function requeueAndWatch(file: File, sessionId: string, opts: ServerProcessingOptions): Promise<ServerProcessingResult> {
   cancelled.delete(file);
   try {
     await api(`/sessions/${encodeURIComponent(sessionId)}/retry`, {});

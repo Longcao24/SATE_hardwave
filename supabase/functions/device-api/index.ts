@@ -1,4 +1,4 @@
-// SATE Device API — Supabase Edge Function              [v51]
+// SATE Device API — Supabase Edge Function              [v52]
 // Replaces the mock-server's Express endpoints with a single Edge Function
 // that does internal path routing. Authenticated via Supabase JWT (users) or a
 // device key (the recorder).
@@ -52,6 +52,16 @@
 //      (and the gateway's 502 above it) simply does not apply. `storage_path` is
 //      confined to the caller's own `<user id>/` prefix and the byte count comes
 //      from Storage, never from the client.
+// v52 (2026-10-29): ADMIN → PROCESSING SEES EVERY FAILURE, NOT ONLY status='error'. The Failed list
+//      read "No failed takes" while uploads were being lost: production had ZERO error rows, because the
+//      failures were elsewhere — a web upload that failed in the BROWSER (old flow: never a session),
+//      a take that ended `done` + no_text (no recording), a stuck job, a withdrawn web upload, an empty
+//      transcript, an object in Storage with no session. /admin/processing now returns `problems`
+//      (+ `problem_counts`, `storage_scan`) covering all of them, labels every row `source` web|device
+//      with the web upload's original `file_name` (admin page only — /health/jobs strips it),
+//      /admin/sessions/retry also re-runs a no-speech take that made no recording, and
+//      POST /admin/sessions/register-orphan {paths} registers an unregistered upload so it is processed
+//      (audited `register_orphan`). Existing response fields are unchanged.
 // v51 (2026-10-28) = v50 + what was DEPLOYED to production that day as v43.1-web / v43.2-jobs (on
 //      top of v43; production had never run v44–v50): web uploads through the backend queue
 //      (upload-url `format:'web'`, register `web_meta`, web-aware health digest + deleteSession) and
@@ -498,6 +508,10 @@ serve(async (req) => {
       }
       if (subPath === '/admin/sessions/requeue-stuck' && method === 'POST') {
         return await adminRequeueStuck(supabase, user, req);
+      }
+      // [v52] An upload that reached Storage but was never registered: create its session.
+      if (subPath === '/admin/sessions/register-orphan' && method === 'POST') {
+        return await adminRegisterOrphans(supabase, user, req);
       }
       if (subPath === '/admin/devices' && method === 'GET') {
         return await adminListDevices(supabase);
@@ -2272,7 +2286,8 @@ async function adminProcessing(supabase: any, url: URL) {
   const since = new Date(now - days * 86400_000).toISOString();
   const emails = new Map<string, string | null>();
   const email = async (id: string) => { if (!emails.has(id)) emails.set(id, await emailOf(supabase, id)); return emails.get(id); };
-  const cols = 'id, user_id, device_serial, session_number, bytes, audio_seconds, status, attempts, created_at, processing_started_at, heartbeat_at, not_before, processed_at, process_error, no_text, worker_id';
+  // [v52] web_meta: a web upload's original file name (this page is admin-only; mail never carries it).
+  const cols = 'id, user_id, device_serial, session_number, bytes, audio_seconds, status, attempts, created_at, processing_started_at, heartbeat_at, not_before, processed_at, process_error, no_text, worker_id, web_meta';
 
   // Live: everything not finished, in the order claim_next_session would take it.
   const { data: live, error: e1 } = await supabase.from('sate_device_sessions').select(cols)
@@ -2287,7 +2302,8 @@ async function adminProcessing(supabase: any, url: URL) {
   for (const r of (live || []).sort((a: any, b: any) =>
     (a.status === b.status ? rank(a) - rank(b) : a.status === 'processing' ? -1 : 1))) {
     liveRows.push({
-      id: r.id, email: await email(r.user_id), device_serial: r.device_serial, family: familyOf(r.device_serial),
+      id: r.id, user_id: r.user_id, email: await email(r.user_id), device_serial: r.device_serial, family: familyOf(r.device_serial),
+      source: sourceOf(r.device_serial), file_name: webFileName(r), bytes: r.bytes,
       session_number: r.session_number, seconds: takeSeconds(r), status: r.status, attempts: r.attempts,
       created_at: r.created_at, processing_started_at: r.processing_started_at, heartbeat_at: r.heartbeat_at,
       not_before: r.not_before, worker_id: r.worker_id,
@@ -2304,7 +2320,8 @@ async function adminProcessing(supabase: any, url: URL) {
   for (const r of errs || []) {
     const k = errorReason(r.process_error);
     reasons.set(k, (reasons.get(k) || 0) + 1);
-    errorRows.push({ id: r.id, email: await email(r.user_id), device_serial: r.device_serial, family: familyOf(r.device_serial),
+    errorRows.push({ id: r.id, user_id: r.user_id, email: await email(r.user_id), device_serial: r.device_serial, family: familyOf(r.device_serial),
+      source: sourceOf(r.device_serial), file_name: webFileName(r), bytes: r.bytes,
       session_number: r.session_number, seconds: takeSeconds(r), attempts: r.attempts, created_at: r.created_at,
       process_error: r.process_error });
   }
@@ -2344,12 +2361,15 @@ async function adminProcessing(supabase: any, url: URL) {
   for (const r of await finishedJobs(supabase, since, 100)) {
     recent.push({ ...r, email: await email(r.user_id) });
   }
+  // [v52] Every failure class in one list, not only status='error' (see adminProblems).
+  const problems = await adminProblems(supabase, since, now, email, liveRows, errorRows);
 
   return json({
     generated_at: new Date(now).toISOString(),
     days,
     live: liveRows,
     recent,
+    ...problems,
     errors: errorRows,
     error_reasons: [...reasons.entries()].map(([reason, n]) => ({ reason, n })).sort((a, b) => b.n - a.n),
     stats: {
@@ -2365,6 +2385,7 @@ async function adminProcessing(supabase: any, url: URL) {
       turnaround_p50_s: pct(0.5), turnaround_p90_s: pct(0.9),
       worker_last_finished_at: last?.[0]?.processed_at ?? null,
       unresolved_errors: errorRows.length,
+      problems: problems.problems.length,
     },
     per_day: [...perDay.entries()].map(([day, v]) => ({ day, ...v })),
     per_family: [...perFamily.entries()].map(([family, v]) => ({ family, ...v,
@@ -2374,7 +2395,7 @@ async function adminProcessing(supabase: any, url: URL) {
 
 /** [v43.2-jobs] Takes that FINISHED since `since` (done, incl. no speech, or error), newest first. */
 async function finishedJobs(supabase: any, since: string, limit: number) {
-  const cols = 'id, user_id, device_serial, session_number, bytes, audio_seconds, status, attempts, created_at, processing_started_at, heartbeat_at, processed_at, process_error, no_text, recording_id';
+  const cols = 'id, user_id, device_serial, session_number, bytes, audio_seconds, status, attempts, created_at, processing_started_at, heartbeat_at, processed_at, process_error, no_text, recording_id, web_meta';
   const { data: done, error: e1 } = await supabase.from('sate_device_sessions').select(cols)
     .eq('status', 'done').gte('processed_at', since).order('processed_at', { ascending: false }).limit(limit);
   if (e1) throw new Error(e1.message);
@@ -2388,6 +2409,7 @@ async function finishedJobs(supabase: any, since: string, limit: number) {
     return {
       key: r.status === 'done' ? `${r.id}:done` : `${r.id}:error:${r.processing_started_at || r.created_at}`,
       id: r.id, user_id: r.user_id, device_serial: r.device_serial, family: familyOf(r.device_serial),
+      source: sourceOf(r.device_serial), file_name: webFileName(r), bytes: r.bytes,
       session_number: r.session_number, seconds: takeSeconds(r), status: r.status, no_text: !!r.no_text,
       attempts: r.attempts, created_at: r.created_at, processing_started_at: r.processing_started_at,
       finished_at, wait_s: sec(r.created_at, r.processing_started_at), processing_s: sec(r.processing_started_at, r.processed_at),
@@ -2405,8 +2427,282 @@ async function healthJobs(supabase: any) {
     if (!emails.has(j.user_id)) emails.set(j.user_id, await emailOf(supabase, j.user_id));
     (j as any).email = emails.get(j.user_id);
     delete (j as any).user_id;
+    // [v52] Never a file name in mail: clinicians name files after the child.
+    delete (j as any).file_name;
   }
   return json({ generated_at: new Date().toISOString(), jobs });
+}
+
+// [v52] PROBLEMS: every way a recording can fail to become a processed recording, in ONE list.
+// The Failed list (`errors`) is status='error' only, and that is not where most failures end up:
+// a take the AI returned with no words ends `done` + no_text (no recording), a job can sit stuck,
+// a web upload can fail in the browser BEFORE it is a session (sate_client_errors), a clinician can
+// withdraw a web upload that was taking too long (sate_session_audit delete), a recording can be
+// saved with an empty transcript, and an object can land in Storage with no session row because
+// its register call never arrived. None of those were on the admin page. `kind` says which, and
+// `action` what an admin can do about it: retry (re-run from the audio on the server), requeue (a
+// stuck job), register (an orphan upload: create its session so it is processed), reupload (the
+// file never reached the server — only the user has it), or null (informational).
+const NO_TEXT_AUDIBLE_S = 5;           // a no-speech take at least this long is worth a look
+const QUEUED_LONG_MS = 30 * 60 * 1000; // claimable and still waiting after this = the worker is not draining
+const isWebSerial = (serial?: string | null) => String(serial || '').startsWith('web-');
+const webFileName = (r: any): string | null => {
+  const wm = r?.web_meta;
+  return wm && typeof wm === 'object' && wm.file_name ? String(wm.file_name).slice(0, 255) : null;
+};
+const sourceOf = (serial?: string | null) => (isWebSerial(serial) ? 'web' : 'device');
+const ORPHAN_NAME = /^s-[0-9a-f]{8}\.(wav|asc|mp3|web)$/;
+const ORPHAN_PATH = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/([A-Za-z0-9._-]{1,80})\/(s-[0-9a-f]{8})\.(wav|asc|mp3|web)$/;
+
+async function inPool<T>(items: T[], n: number, fn: (x: T) => Promise<void>) {
+  let i = 0;
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => {
+    while (i < items.length) { const x = items[i++]; await fn(x); }
+  }));
+}
+
+/** Objects in device-sessions created since `sinceMs` that NO session row points at (and that are not
+ *  the leftover copy of a take that was deduped or deleted). Read-only: lists Storage, changes nothing. */
+async function scanOrphanUploads(supabase: any, sinceMs: number) {
+  const bucket = supabase.storage.from('device-sessions');
+  const list = async (prefix: string) => {
+    const out: any[] = [];
+    for (let off = 0; ; off += 1000) {
+      const { data, error } = await bucket.list(prefix, { limit: 1000, offset: off, sortBy: { column: 'name', order: 'asc' } });
+      if (error) throw new Error(`storage list ${prefix || '/'}: ${error.message}`);
+      out.push(...(data || []));
+      if (!data || data.length < 1000 || out.length >= 20000) break;
+    }
+    return out;
+  };
+  // <user id>/<serial>/s-xxxxxxxx.<ext> — folders come back with id null.
+  const users = (await list('')).filter((e) => !e.id && /^[0-9a-f-]{36}$/.test(e.name)).map((e) => e.name);
+  const dirs: string[] = [];
+  await inPool(users, 8, async (u) => {
+    for (const e of await list(u)) if (!e.id && e.name !== '_tmp') dirs.push(`${u}/${e.name}`);
+  });
+  const objs: { path: string; user_id: string; serial: string; id: string; created_at: string; bytes: number }[] = [];
+  await inPool(dirs, 8, async (d) => {
+    for (const e of await list(d)) {
+      if (!e.id || !ORPHAN_NAME.test(e.name) || !e.created_at || Date.parse(e.created_at) < sinceMs) continue;
+      const [user_id, serial] = d.split('/');
+      objs.push({ path: `${d}/${e.name}`, user_id, serial, id: e.name.replace(/\.[a-z0-9]+$/, ''),
+        created_at: e.created_at, bytes: Number(e.metadata?.size ?? 0) });
+    }
+  });
+  if (!objs.length) return { scanned: dirs.length, orphans: [], duplicates: 0 };
+
+  // A session with that id exists (incl. a .web already converted to .wav, whose leftover .web is harmless).
+  const ids = [...new Set(objs.map((o) => o.id))];
+  const known = new Set<string>();
+  for (let i = 0; i < ids.length; i += 100) {
+    const { data, error } = await supabase.from('sate_device_sessions').select('id').in('id', ids.slice(i, i + 100));
+    if (error) throw new Error(error.message);
+    for (const r of data || []) known.add(r.id);
+  }
+  // Same take already stored under another id (a re-upload the register deduped), or a copy of a take
+  // its owner deleted: not a failure, only a stray copy.
+  const uids = [...new Set(objs.map((o) => o.user_id))];
+  const sameTake = new Set<string>();
+  const audited = new Set<string>();
+  // [v52] Only rows that CAN match a candidate (its id, or its byte count): PostgREST caps every
+  // response at max_rows (1000), so "all of these accounts' sessions" silently lost the rest once one
+  // account passed 1000 sessions, and its deduped copies came back as orphans.
+  const cand = objs.filter((o) => !known.has(o.id));
+  const candIds = cand.map((o) => o.id);
+  const candBytes = [...new Set(cand.map((o) => o.bytes))];
+  for (let i = 0; i < candBytes.length; i += 100) {
+    const chunk = candBytes.slice(i, i + 100);
+    const { data: sess, error: sErr } = await supabase.from('sate_device_sessions').select('user_id, device_serial, bytes')
+      .in('user_id', uids).in('bytes', chunk);
+    if (sErr) throw new Error(sErr.message);
+    for (const s of sess || []) sameTake.add(`${s.user_id}|${s.device_serial}|${s.bytes}`);
+    const { data: aud, error: aErr } = await supabase.from('sate_session_audit').select('user_id, detail')
+      .in('user_id', uids).in('detail->>bytes', chunk.map(String));
+    if (aErr) throw new Error(aErr.message);
+    for (const a of aud || []) {
+      const d = a.detail || {};
+      if (d.device_serial && d.bytes != null) sameTake.add(`${a.user_id}|${d.device_serial}|${d.bytes}`);
+    }
+  }
+  for (let i = 0; i < candIds.length; i += 100) {
+    const { data: aud, error: aErr } = await supabase.from('sate_session_audit').select('session_id')
+      .in('session_id', candIds.slice(i, i + 100));
+    if (aErr) throw new Error(aErr.message);
+    for (const a of aud || []) audited.add(a.session_id);
+  }
+  let duplicates = 0;
+  const orphans = [];
+  for (const o of objs) {
+    if (known.has(o.id) || audited.has(o.id)) continue;
+    // [v52] Never for a WEB upload: its register sends session_number = upload time, so it is never
+    // deduped, and the usual way to land here is re-uploading the SAME file after a withdrawn/failed try —
+    // matching on serial+bytes would hide exactly that orphan.
+    if (!isWebSerial(o.serial) && sameTake.has(`${o.user_id}|${o.serial}|${o.bytes}`)) { duplicates++; continue; }
+    orphans.push(o);
+  }
+  return { scanned: dirs.length, orphans, duplicates };
+}
+
+const orphanScanCache = new Map<string, { at: number; scan: Awaited<ReturnType<typeof scanOrphanUploads>> }>();
+
+async function adminProblems(supabase: any, since: string, now: number, email: (id: string) => Promise<string | null | undefined>,
+  live: any[], errorRows: any[]) {
+  const out: any[] = [];
+  const base = (r: any) => ({
+    id: r.id, user_id: r.user_id ?? null, device_serial: r.device_serial ?? null, family: familyOf(r.device_serial),
+    source: sourceOf(r.device_serial), file_name: r.file_name ?? webFileName(r), seconds: r.seconds ?? takeSeconds(r),
+    bytes: r.bytes ?? null, attempts: r.attempts ?? null, created_at: r.created_at,
+  });
+  // 1. Failed (status 'error') — the existing list, any age.
+  for (const e of errorRows) {
+    out.push({ ...base(e), key: `error:${e.id}`, kind: 'failed', email: e.email, reason: e.process_error || 'processing error', action: 'retry' });
+  }
+  // 2. Stuck processing / waiting far too long in the queue.
+  for (const r of live) {
+    const claimable = !r.not_before || Date.parse(r.not_before) <= now;
+    if (r.stuck) {
+      out.push({ ...base(r), key: `stuck:${r.id}`, kind: 'stuck', email: r.email,
+        reason: `processing for ${Math.round((now - Date.parse(r.processing_started_at)) / 60000)} min (watchdog cutoff ${PROC_STUCK_MS / 60000} min)`, action: 'requeue' });
+    } else if (r.status === 'queued' && claimable && now - Date.parse(r.created_at) > QUEUED_LONG_MS) {
+      out.push({ ...base(r), key: `queued:${r.id}`, kind: 'queued_long', email: r.email,
+        reason: `waiting in the queue for ${Math.round((now - Date.parse(r.created_at)) / 60000)} min — is the worker / AI up?`, action: null });
+    }
+  }
+  // 3. Finished with NO SPEECH: no recording was made. Every web one (a clinician uploaded a real file and
+  //    got nothing), and every device one long enough to have had speech in it.
+  const { data: nt, error: ntErr } = await supabase.from('sate_device_sessions')
+    .select('id, user_id, device_serial, bytes, audio_seconds, attempts, created_at, processed_at, recording_id, web_meta')
+    .eq('status', 'done').eq('no_text', true).gte('created_at', since).order('created_at', { ascending: false }).limit(300);
+  if (ntErr) throw new Error(ntErr.message);
+  for (const r of nt || []) {
+    const sec = takeSeconds(r);
+    if (!isWebSerial(r.device_serial) && sec < NO_TEXT_AUDIBLE_S) continue;
+    out.push({ ...base(r), key: `notext:${r.id}`, kind: 'no_speech', email: await email(r.user_id),
+      reason: `finished with no speech detected (${Math.round(sec)} s of audio) — no recording was created`,
+      action: r.recording_id ? null : 'retry' });
+  }
+  // 4. A web upload that never reached the server: nothing to retry, only the user has the file.
+  const { data: ce, error: ceErr } = await supabase.from('sate_client_errors')
+    .select('id, user_id, context, file_name, bytes, message, created_at').gte('created_at', since)
+    .order('created_at', { ascending: false }).limit(300);
+  if (!ceErr) {
+    for (const c of ce || []) {
+      out.push({ key: `client:${c.id}`, kind: 'never_reached_server', id: null, user_id: c.user_id, email: c.user_id ? await email(c.user_id) : null,
+        device_serial: null, family: 'Web upload', source: 'web', file_name: c.file_name, seconds: null, bytes: c.bytes,
+        attempts: null, created_at: c.created_at,
+        reason: `${c.context || 'web upload'} failed in the browser: ${String(c.message || '').slice(0, 300)}`, action: 'reupload' });
+    }
+  }
+  // 5. A web upload withdrawn before it produced a recording (Cancel / closed form — often "it took too long").
+  const { data: wd, error: wdErr } = await supabase.from('sate_session_audit')
+    .select('session_id, user_id, created_at, detail').eq('action', 'delete').gte('created_at', since)
+    .like('detail->>device_serial', 'web-%').order('created_at', { ascending: false }).limit(300);
+  if (!wdErr) {
+    for (const a of wd || []) {
+      const d = a.detail || {};
+      if (d.removed_recording) continue; // it had finished; deleting a finished recording is not a failure
+      out.push({ key: `withdrawn:${a.session_id}`, kind: 'withdrawn', id: a.session_id, user_id: a.user_id,
+        email: a.user_id ? await email(a.user_id) : null, device_serial: d.device_serial ?? null, family: 'Web upload', source: 'web',
+        file_name: d.file_name ?? null, seconds: null, bytes: d.bytes ?? null, attempts: null, created_at: a.created_at,
+        reason: 'web upload withdrawn by the user before it finished (the session and its audio were removed)', action: 'reupload' });
+    }
+  }
+  // 6. A recording saved with an EMPTY transcript (looks processed, has nothing in it).
+  const { data: recs, error: rErr } = await supabase.from('recordings')
+    .select('id, user_id, created_at, file_name, file_size, duration, source_session_id, first:transcript->segments->0')
+    // [v52] Filtered in the database: PostgREST caps a response at 1000 rows, so filtering here meant
+    // only the newest 1000 recordings of the window were ever checked.
+    .gte('created_at', since).is('transcript->segments->0', null).order('created_at', { ascending: false }).limit(300);
+  if (!rErr) {
+    // [v52] A web upload goes through the queue now, so it has a session too: label it from the
+    // session's serial, not from whether a session exists.
+    const sids = [...new Set((recs || []).map((r: any) => r.source_session_id).filter(Boolean))] as string[];
+    const serialOf = new Map<string, string>();
+    for (let i = 0; i < sids.length; i += 100) {
+      const { data } = await supabase.from('sate_device_sessions').select('id, device_serial').in('id', sids.slice(i, i + 100));
+      for (const x of data || []) serialOf.set(x.id, x.device_serial);
+    }
+    for (const r of recs || []) {
+      if (r.first != null) continue;
+      const serial = r.source_session_id ? serialOf.get(r.source_session_id) ?? null : null;
+      const web = r.source_session_id ? isWebSerial(serial) : true;
+      out.push({ key: `empty:${r.id}`, kind: 'empty_transcript', id: r.source_session_id, recording_id: r.id, user_id: r.user_id,
+        email: await email(r.user_id), device_serial: serial, family: web ? 'Web upload' : (serial ? familyOf(serial) : 'Device take'),
+        source: web ? 'web' : 'device', file_name: r.file_name, seconds: r.duration ?? null, bytes: r.file_size ?? null,
+        attempts: null, created_at: r.created_at, reason: 'recording saved with an empty transcript', action: null });
+    }
+  }
+  // 7. Audio in Storage that no session points at: uploaded, never registered. Can be registered + processed.
+  let storage_scan: any = null;
+  try {
+    // The page polls every few seconds; the scan lists every upload folder, so it is reused for 5 min.
+    const cached = orphanScanCache.get(since.slice(0, 13));
+    const scan = cached && now - cached.at < 5 * 60_000 ? cached.scan : await scanOrphanUploads(supabase, Date.parse(since));
+    if (!cached || cached.scan !== scan) orphanScanCache.set(since.slice(0, 13), { at: now, scan });
+    storage_scan = { folders: scan.scanned, orphans: scan.orphans.length, duplicates: scan.duplicates };
+    for (const o of scan.orphans) {
+      out.push({ key: `orphan:${o.path}`, kind: 'orphan_upload', id: null, user_id: o.user_id, email: await email(o.user_id),
+        device_serial: o.serial, family: familyOf(o.serial), source: sourceOf(o.serial), file_name: null,
+        seconds: o.path.endsWith('.wav') ? Math.max(o.bytes - 44, 0) / 32000 : o.path.endsWith('.asc') ? Math.floor(o.bytes / 82) * 0.02 : null,
+        bytes: o.bytes, attempts: null, created_at: o.created_at, storage_path: o.path,
+        reason: 'the audio reached Storage but no session was registered for it, so it was never processed', action: 'register' });
+    }
+  } catch (e) {
+    storage_scan = { error: String((e as Error)?.message || e).slice(0, 300) };
+  }
+  out.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+  const counts: Record<string, number> = {};
+  for (const p of out) counts[p.kind] = (counts[p.kind] || 0) + 1;
+  return { problems: out, problem_counts: counts, storage_scan };
+}
+
+// Admin "Register & process": create the session row an upload never got, so the worker processes it.
+// Only an object under <user id>/<serial>/s-xxxxxxxx.<ext> in device-sessions that NO row points at; the
+// session belongs to the account whose folder it is in (the folder IS the owner — register confines every
+// upload to its caller's own prefix). Audited (`register_orphan`) before the row is written.
+async function adminRegisterOrphans(supabase: any, admin: any, req: Request) {
+  const body = await req.json().catch(() => ({}));
+  const paths = Array.isArray(body?.paths)
+    ? [...new Set<string>(body.paths.filter((x: unknown) => typeof x === 'string' && x.length <= 300))] : [];
+  if (!paths.length || paths.length > 20) return err('paths: 1-20 storage paths required', 400);
+  const registered: { path: string; id: string }[] = [], skipped: { id: string; reason: string }[] = [];
+  for (const path of paths) {
+    const m = path.match(ORPHAN_PATH);
+    if (!m) { skipped.push({ id: path, reason: 'not a session upload path' }); continue; }
+    const [, userId, serial, sessionId, ext] = m;
+    const { data: byId } = await supabase.from('sate_device_sessions').select('id').eq('id', sessionId).maybeSingle();
+    const { data: byPath } = await supabase.from('sate_device_sessions').select('id').eq('storage_path', path).limit(1);
+    if (byId || byPath?.length) { skipped.push({ id: path, reason: 'already has a session' }); continue; }
+    const dir = path.slice(0, path.lastIndexOf('/'));
+    const name = path.slice(path.lastIndexOf('/') + 1);
+    const { data: hits } = await supabase.storage.from('device-sessions').list(dir, { search: name, limit: 100 });
+    const hit = (hits || []).find((f: any) => f.name === name);
+    const bytes = Number(hit?.metadata?.size ?? NaN);
+    if (!hit || !Number.isFinite(bytes)) { skipped.push({ id: path, reason: 'no object' }); continue; }
+    if (bytes <= 0) { skipped.push({ id: path, reason: 'empty object' }); continue; }
+    const web = ext === 'web';
+    const meta = {
+      device_serial: serial, patient_id: web ? 'WEB' : 'Unassigned',
+      // The take's own number is unknown (it travelled in the register call that never arrived);
+      // the upload time is stable and in the same form the phone uses for app-driven hardware.
+      session_number: Math.floor(Date.parse(hit.created_at || new Date().toISOString()) / 1000),
+      sample_rate: 16000,
+    };
+    await auditSession(supabase, sessionId, userId, 'register_orphan', {
+      storage_path: path, bytes, by_admin: admin.email ?? admin.id,
+    });
+    try {
+      await insertSessionRow(supabase, userId, meta, sessionId, path, bytes,
+        web ? { file_name: null, patient_uuid: null, source: 'admin-recovered' } : null);
+      registered.push({ path, id: sessionId });
+    } catch (e) {
+      skipped.push({ id: path, reason: String((e as Error)?.message || e).slice(0, 200) });
+    }
+  }
+  // [v52] The scan is cached for 5 min; without this a registered upload stays listed as an orphan.
+  if (registered.length) orphanScanCache.clear();
+  return json({ registered, skipped });
 }
 
 async function adminRecorders(supabase: any) {
@@ -2536,17 +2832,22 @@ async function adminRetrySessions(supabase: any, admin: any, req: Request) {
   const retried: string[] = [], skipped: { id: string; reason: string }[] = [];
   for (const id of ids) {
     const { data: row } = await supabase.from('sate_device_sessions')
-      .select('id, user_id, status, process_error, attempts').eq('id', id).maybeSingle();
+      .select('id, user_id, status, process_error, attempts, no_text, recording_id').eq('id', id).maybeSingle();
     if (!row) { skipped.push({ id, reason: 'not found' }); continue; }
-    if (row.status !== 'error') { skipped.push({ id, reason: `status is ${row.status}` }); continue; }
+    // [v52] A take that ended `done` with no speech and NO recording is re-run too: the AI is known to
+    // return nothing for audible audio now and then, and the owner's Retry only accepts 'error'.
+    const noText = row.status === 'done' && !!row.no_text && !row.recording_id;
+    if (row.status !== 'error' && !noText) { skipped.push({ id, reason: `status is ${row.status}` }); continue; }
     await auditSession(supabase, id, row.user_id, 'retry', {
-      previous_error: row.process_error, previous_attempts: row.attempts, previous_status: row.status,
+      previous_error: row.process_error ?? (noText ? 'no_text' : null), previous_attempts: row.attempts, previous_status: row.status,
       by_admin: admin.email ?? admin.id,
     });
     // `.eq('status','error')` again: a row that changed under us is left alone.
-    const { data: upd, error } = await updateResettingRefunds((f) => supabase.from('sate_device_sessions')
-      .update(f).eq('id', id).eq('status', 'error').select('id'),
-      { status: 'queued', process_error: null, attempts: 0, not_before: null, processing_started_at: null });
+    const { data: upd, error } = await updateResettingRefunds((f) => {
+      const q = supabase.from('sate_device_sessions').update(f).eq('id', id);
+      return (noText ? q.eq('status', 'done').eq('no_text', true).is('recording_id', null) : q.eq('status', 'error')).select('id');
+    }, { status: 'queued', process_error: null, attempts: 0, not_before: null, processing_started_at: null,
+      ...(noText ? { no_text: false } : {}) });
     if (error) throw new Error(error.message);
     if (upd?.length) retried.push(id); else skipped.push({ id, reason: 'changed meanwhile' });
   }
@@ -3487,7 +3788,7 @@ async function retrySession(supabase: any, userId: string, sessionId: string) {
 // deliberately outlives the row).
 async function deleteSession(supabase: any, userId: string, sessionId: string, pass = 0): Promise<Response> {
   const { data: row } = await supabase.from('sate_device_sessions')
-    .select('storage_path, recording_id, device_serial, session_number, patient_id, bytes')
+    .select('storage_path, recording_id, device_serial, session_number, patient_id, bytes, web_meta')
     .eq('id', sessionId).eq('user_id', userId).maybeSingle();
   if (!row) return err('Session not found', 404);
 
@@ -3592,6 +3893,9 @@ async function deleteSession(supabase: any, userId: string, sessionId: string, p
   await auditSession(supabase, sessionId, userId, 'delete', {
     device_serial: row.device_serial, session_number: row.session_number,
     patient_id: row.patient_id, bytes: row.bytes,
+    // [v52] A withdrawn web upload is listed on Admin → Processing; its file name is how the admin
+    // tells the user WHICH file to upload again (read-own table, never mailed).
+    ...(webFileName(row) ? { file_name: webFileName(row) } : {}),
     storage_path: row.storage_path, session_object: sessionObject,
     recording_object: recordingObject, removed_recording: removedRecording,
     extra_objects: extraRemoved,

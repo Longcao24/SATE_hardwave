@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase';
 import { clearTranscriptBaselines } from '@/services/dataService';
 import type { Session, User } from '@supabase/supabase-js';
 import { validateInviteCode, useInviteCode } from '@/services/inviteCodeService';
+import { flushUsage } from '@/services/usage/tracker';
 
 interface AuthContextValue {
   user: User | null;
@@ -232,6 +233,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // Logging out here means logging out of THIS browser. The one place a
     // global revoke is right is a password change (ResetPasswordPage), which
     // should end other sessions, and that one is deliberately left as-is.
+    // Usage analytics first, while this session's token is still valid: signOut() deletes the
+    // session server-side, and a flush sent after it is refused. Bounded (≤1.5 s), never throws.
+    await flushUsage();
     const { error } = await supabase.auth.signOut({ scope: 'local' });
     if (error) throw error;
     // The transcript conflict-detection baselines are per-editor-session and must not outlive

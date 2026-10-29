@@ -4,12 +4,18 @@
 // is it doing right now and in what order (live list, claim order), how well has it been doing
 // (success rate per day / per device family), and what failed and why (errors grouped by reason,
 // with Retry). Retry is the owner's own Retry, done by an admin and written to the audit trail.
+//
+// [device-api v43.4-problems] PROBLEMS: "Failed" is status='error' only, and most failures never end
+// there — a web upload that failed in the browser, a take that came back with no speech, a stuck job,
+// a withdrawn upload, an empty transcript, audio in Storage that was never registered. Problems lists
+// every one of them with what can be done (Retry / Requeue / Register & process / ask for a re-upload).
+// Web uploads are labelled as such everywhere, with their original file name (this page is admin-only).
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Clock, ExternalLink, Loader2, RefreshCw, RotateCcw, Timer, XCircle, Zap } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Clock, CloudOff, ExternalLink, Loader2, RefreshCw, RotateCcw, Timer, XCircle, Zap } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { deviceApiService } from '@/services/device/deviceApiService';
-import type { AdminProcessing } from '@/services/device/deviceTypes';
+import type { AdminProcessing, ProcProblem, ProcProblemKind, ProcSource } from '@/services/device/deviceTypes';
 
 const len = (sec?: number | null) => {
   const s = Math.round(sec || 0);
@@ -25,6 +31,31 @@ const ago = (iso?: string | null) => {
   return `${Math.round(s / 86400)}d`;
 };
 const pct = (x: number | null | undefined) => (x == null ? '—' : `${(x * 100).toFixed(1)}%`);
+const mb = (b?: number | null) => (b == null ? '—' : b >= 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`);
+
+/** Where a take came from: "Web upload" + the original file name, or the device family + its serial. */
+function Src({ r }: { r: ProcSource & { family: string; device_serial?: string | null } }) {
+  const web = r.source === 'web' || String(r.device_serial || '').startsWith('web-');
+  return (
+    <>
+      <div className={web ? 'text-sky-700 font-medium' : ''}>{web ? 'Web upload' : r.family}</div>
+      {web && r.file_name
+        ? <div className="text-[11px] text-gray-600 truncate max-w-[240px]" title={r.file_name}>{r.file_name}</div>
+        : r.device_serial ? <div className="text-[11px] text-gray-400 font-mono truncate max-w-[240px]" title={r.device_serial}>{r.device_serial}</div> : null}
+    </>
+  );
+}
+
+const KIND: Record<ProcProblemKind, { label: string; tone: string; hint: string }> = {
+  failed: { label: 'Failed', tone: 'bg-red-50 text-red-800 border-red-200', hint: 'Processing gave up (status error). The audio is on the server: Retry.' },
+  stuck: { label: 'Stuck', tone: 'bg-red-50 text-red-800 border-red-200', hint: 'Processing for longer than the watchdog allows.' },
+  queued_long: { label: 'Waiting too long', tone: 'bg-amber-50 text-amber-800 border-amber-200', hint: 'Claimable for 30+ min and not picked up: worker or AI down?' },
+  no_speech: { label: 'No speech', tone: 'bg-amber-50 text-amber-800 border-amber-200', hint: 'Finished, but the AI returned no words, so no recording was made.' },
+  never_reached_server: { label: 'Never reached the server', tone: 'bg-fuchsia-50 text-fuchsia-800 border-fuchsia-200', hint: 'The browser could not hand the file over. Only the user has it: ask them to re-upload.' },
+  withdrawn: { label: 'Withdrawn', tone: 'bg-gray-50 text-gray-700 border-gray-200', hint: 'A web upload the user cancelled before it finished — often because it took too long.' },
+  empty_transcript: { label: 'Empty transcript', tone: 'bg-amber-50 text-amber-800 border-amber-200', hint: 'A recording was saved with no transcript in it.' },
+  orphan_upload: { label: 'Uploaded, never registered', tone: 'bg-violet-50 text-violet-800 border-violet-200', hint: 'The audio is in Storage but has no session, so it was never processed: Register & process.' },
+};
 
 export function ProcessingPanel() {
   const [days, setDays] = useState(7);
@@ -37,6 +68,7 @@ export function ProcessingPanel() {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [recentFilter, setRecentFilter] = useState<'all' | 'done' | 'failed'>('all');
+  const [problemKind, setProblemKind] = useState<ProcProblemKind | null>(null);
   const navigate = useNavigate();
 
   const load = useCallback(() => {
@@ -63,12 +95,13 @@ export function ProcessingPanel() {
   const recent = useMemo(() => (d?.recent || []).filter((r) =>
     recentFilter === 'all' ? true : recentFilter === 'failed' ? (r.status === 'error' || r.no_text) : (r.status === 'done' && !r.no_text)), [d, recentFilter]);
   const errors = useMemo(() => (d?.errors || []).filter((e) => !reason || reasonOf(e.process_error) === reason), [d, reason]);
+  const problems = useMemo(() => (d?.problems || []).filter((p) => !problemKind || p.kind === problemKind), [d, problemKind]);
 
   const act = async (fn: () => Promise<{ skipped: { id: string; reason: string }[] } & Record<string, any>>, verb: string) => {
     setBusy(true); setNote(null);
     try {
       const r = await fn();
-      const okN = (r.retried || r.requeued || []).length;
+      const okN = (r.retried || r.requeued || r.registered || []).length;
       setNote(`${okN} ${verb}${r.skipped.length ? ` · ${r.skipped.length} skipped (${[...new Set(r.skipped.map((x) => x.reason))].join(', ')})` : ''}`);
       setSelected(new Set());
       load();
@@ -77,6 +110,13 @@ export function ProcessingPanel() {
   };
   const retry = (ids: string[]) => act(() => deviceApiService.adminRetrySessions(ids), 're-queued');
   const requeue = (ids: string[]) => act(() => deviceApiService.adminRequeueStuck(ids), 'stuck take(s) re-queued');
+  const register = (paths: string[]) => act(() => deviceApiService.adminRegisterOrphans(paths), 'upload(s) registered and queued');
+  const problemAction = (p: ProcProblem) => {
+    if (p.action === 'retry' && p.id) return { label: 'Retry', run: () => retry([p.id!]) };
+    if (p.action === 'requeue' && p.id) return { label: 'Requeue', run: () => requeue([p.id!]) };
+    if (p.action === 'register' && p.storage_path) return { label: 'Register & process', run: () => register([p.storage_path!]) };
+    return null;
+  };
 
   if (!d && !error) return <div className="p-8 flex justify-center"><Loader2 className="w-5 h-5 animate-spin text-gray-400" /></div>;
   const st = d?.stats;
@@ -133,14 +173,14 @@ export function ProcessingPanel() {
                 {cur.map((r) => (
                   <div key={r.id} className="mt-2 grid grid-cols-2 md:grid-cols-5 gap-2 text-sm">
                     <div><div className="text-[11px] text-gray-500">Account</div><div className="truncate">{r.email || '—'}</div></div>
-                    <div><div className="text-[11px] text-gray-500">Source</div><div>{r.family}</div></div>
+                    <div><div className="text-[11px] text-gray-500">Source</div><Src r={r} /></div>
                     <div><div className="text-[11px] text-gray-500">Length</div><div className="tabular-nums">{r.seconds ? len(r.seconds) : '—'}</div></div>
                     <div><div className="text-[11px] text-gray-500">Running for</div><div className={`tabular-nums ${r.stuck ? 'text-red-700 font-semibold' : ''}`}>{ago(r.processing_started_at)}{r.stuck ? ' · stuck' : ''}</div></div>
                     <div><div className="text-[11px] text-gray-500">Attempt · waited</div><div className="tabular-nums">{r.attempts} · {r.processing_started_at ? len((Date.parse(r.processing_started_at) - Date.parse(r.created_at)) / 1000) : '—'}</div></div>
                   </div>
                 ))}
                 <div className="mt-2 text-xs text-gray-500">
-                  {st.queued ? `${st.queued} waiting${next ? ` · next: ${next.email || '—'} (${next.family}, ${next.seconds ? len(next.seconds) : '—'})` : ''}` : 'Nothing waiting.'}
+                  {st.queued ? `${st.queued} waiting${next ? ` · next: ${next.email || '—'} (${next.source === 'web' ? 'Web upload' : next.family}, ${next.seconds ? len(next.seconds) : '—'})` : ''}` : 'Nothing waiting.'}
                   {' · '}last finished {ago(st.worker_last_finished_at)} ago
                 </div>
               </div>
@@ -148,7 +188,7 @@ export function ProcessingPanel() {
           })()}
 
           {/* KPIs */}
-          <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
             <Kpi icon={<Zap className="w-4 h-4 text-violet-600" />} label="Processing now" value={st.processing}
               sub={st.processing ? len(d!.live.filter((x) => x.status === 'processing').reduce((t, x) => t + x.seconds, 0)) + ' of audio' : 'idle'} />
             <Kpi icon={<Clock className="w-4 h-4 text-blue-600" />} label="In queue" value={st.queued}
@@ -157,6 +197,10 @@ export function ProcessingPanel() {
               sub={`${st.done} done · ${st.error} failed`} />
             <Kpi icon={<AlertTriangle className="w-4 h-4 text-red-600" />} label="Unresolved errors" value={st.unresolved_errors}
               sub="all time, waiting for a retry" tone={st.unresolved_errors ? 'red' : undefined} />
+            {d!.problems && (
+              <Kpi icon={<CloudOff className="w-4 h-4 text-red-600" />} label="Problems" value={d!.problems.length}
+                sub="every failure class, this window" tone={d!.problems.length ? 'red' : undefined} />
+            )}
             <Kpi icon={<Timer className="w-4 h-4 text-gray-600" />} label="Upload → ready" value={st.turnaround_p50_s == null ? '—' : len(st.turnaround_p50_s)}
               sub={`median · p90 ${st.turnaround_p90_s == null ? '—' : len(st.turnaround_p90_s)}`} />
             <Kpi icon={<Clock className="w-4 h-4 text-gray-600" />} label="Audio processed" value={len(st.audio_seconds_done)}
@@ -165,10 +209,58 @@ export function ProcessingPanel() {
               sub="ago" />
           </div>
 
+          {/* Problems — every way a take failed to become a recording */}
+          {d!.problems && (
+            <Section title={`Problems — ${d!.problems.length}`}
+              hint={`Everything that did not become a processed recording in this window (failed takes of any age), web uploads included. ${
+                d!.storage_scan?.error ? `Storage scan failed: ${d!.storage_scan.error}.` : d!.storage_scan
+                  ? `Storage scanned: ${d!.storage_scan.orphans ?? 0} unregistered upload(s), ${d!.storage_scan.duplicates ?? 0} stray duplicate copy(ies) ignored.` : ''}`}>
+              <div className="flex flex-wrap gap-1.5 mb-3">
+                <button onClick={() => setProblemKind(null)}
+                  className={`text-xs px-2 py-1 rounded-full border ${!problemKind ? 'bg-gray-800 text-white border-gray-800' : 'bg-white'}`}>All</button>
+                {(Object.keys(KIND) as ProcProblemKind[]).filter((k) => d!.problem_counts?.[k]).map((k) => (
+                  <button key={k} onClick={() => setProblemKind(k === problemKind ? null : k)} title={KIND[k].hint}
+                    className={`text-xs px-2 py-1 rounded-full border ${problemKind === k ? 'bg-gray-800 text-white border-gray-800' : KIND[k].tone}`}>
+                    {d!.problem_counts![k]} × {KIND[k].label}
+                  </button>
+                ))}
+              </div>
+              <Table head={['When', 'Problem', 'Account', 'Source', 'Length / size', 'Reason', '']}>
+                {problems.length === 0 && <Empty cols={7} text="No problems in this window." />}
+                {problems.map((p) => {
+                  const a = problemAction(p);
+                  return (
+                    <tr key={p.key} className="border-t align-top">
+                      <td className="px-3 py-2 text-gray-500 whitespace-nowrap" title={new Date(p.created_at).toLocaleString()}>{ago(p.created_at)} ago</td>
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        <span className={`text-xs px-2 py-0.5 rounded-full border ${KIND[p.kind]?.tone || ''}`} title={KIND[p.kind]?.hint}>{KIND[p.kind]?.label || p.kind}</span>
+                      </td>
+                      <td className="px-3 py-2 truncate max-w-[200px]">{p.email || '—'}</td>
+                      <td className="px-3 py-2"><Src r={p} /></td>
+                      <td className="px-3 py-2 tabular-nums whitespace-nowrap">{p.seconds ? len(p.seconds) : '—'}<div className="text-[11px] text-gray-400">{mb(p.bytes)}</div></td>
+                      <td className="px-3 py-2 text-xs text-gray-700 max-w-[380px] break-words">{p.reason}</td>
+                      <td className="px-3 py-2 text-right whitespace-nowrap">
+                        {a && <button disabled={busy} onClick={a.run}
+                          className="text-xs px-2 py-1 rounded-md border hover:bg-gray-50 disabled:opacity-40">{a.label}</button>}
+                        {p.action === 'reupload' && <span className="text-[11px] text-fuchsia-700">Ask the user to re-upload</span>}
+                        {p.recording_id && p.user_id && (
+                          <button onClick={() => navigate(`/oversight/${p.user_id}/${p.recording_id}`)} title="Open (read-only)"
+                            className="ml-1 inline-flex items-center gap-1 text-xs px-2 py-1 rounded-md border hover:bg-gray-50">
+                            <ExternalLink className="w-3.5 h-3.5" /> Open
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </Table>
+            </Section>
+          )}
+
           {/* Live */}
           <Section title={`Live — ${d!.live.length} take${d!.live.length === 1 ? '' : 's'}`}
             hint="Processing first, then the queue in the order the worker will take it (short takes go slightly ahead; a long one is never pushed back more than 6 min).">
-            <Table head={['#', 'Status', 'Account', 'Device', 'Length', 'Attempts', 'Uploaded', '']}>
+            <Table head={['#', 'Status', 'Account', 'Source', 'Length', 'Attempts', 'Uploaded', '']}>
               {d!.live.length === 0 && <Empty cols={8} text="Nothing is queued or processing." />}
               {d!.live.map((r, i) => {
                 const backoff = r.not_before && Date.parse(r.not_before) > Date.now();
@@ -185,8 +277,8 @@ export function ProcessingPanel() {
                       {r.status === 'processing' && r.heartbeat_at && <div className="text-[11px] text-gray-400">heartbeat {ago(r.heartbeat_at)} ago</div>}
                     </td>
                     <td className="px-3 py-2 truncate max-w-[220px]">{r.email || '—'}</td>
-                    <td className="px-3 py-2"><div>{r.family}</div><div className="text-[11px] text-gray-400 font-mono">{r.device_serial}</div></td>
-                    <td className="px-3 py-2 tabular-nums">{len(r.seconds)}</td>
+                    <td className="px-3 py-2"><Src r={r} /></td>
+                    <td className="px-3 py-2 tabular-nums">{r.seconds ? len(r.seconds) : r.source === 'web' ? <span title="converted when processing starts">{mb(r.bytes)}</span> : len(r.seconds)}</td>
                     <td className="px-3 py-2 tabular-nums">{r.attempts}</td>
                     <td className="px-3 py-2 text-gray-500 whitespace-nowrap">{new Date(r.created_at).toLocaleString()}</td>
                     <td className="px-3 py-2 text-right">
@@ -225,8 +317,8 @@ export function ProcessingPanel() {
                       {r.process_error && <div className="text-[11px] text-red-700 max-w-[320px] break-words mt-0.5">{r.process_error}</div>}
                     </td>
                     <td className="px-3 py-2 truncate max-w-[200px]">{r.email || '—'}</td>
-                    <td className="px-3 py-2"><div>{r.family}</div><div className="text-[11px] text-gray-400 font-mono">{r.device_serial}</div></td>
-                    <td className="px-3 py-2 tabular-nums">{r.seconds ? len(r.seconds) : '—'}</td>
+                    <td className="px-3 py-2"><Src r={r} /></td>
+                    <td className="px-3 py-2 tabular-nums">{r.seconds ? len(r.seconds) : r.source === 'web' ? mb(r.bytes) : '—'}</td>
                     <td className="px-3 py-2 tabular-nums">{r.wait_s == null ? '—' : len(r.wait_s)}</td>
                     <td className="px-3 py-2 tabular-nums">{r.processing_s == null ? '—' : len(r.processing_s)}</td>
                     <td className="px-3 py-2 tabular-nums">{r.attempts}</td>
@@ -237,7 +329,7 @@ export function ProcessingPanel() {
                           <ExternalLink className="w-3.5 h-3.5" /> Open
                         </button>
                       )}
-                      {r.status === 'error' && (
+                      {(r.status === 'error' || (r.no_text && !r.recording_id && d!.problems)) && (
                         <button disabled={busy} onClick={() => retry([r.id])}
                           className="ml-1 text-xs px-2 py-1 rounded-md border hover:bg-gray-50 disabled:opacity-40">Retry</button>
                       )}
@@ -310,15 +402,15 @@ export function ProcessingPanel() {
                 <RotateCcw className="w-3.5 h-3.5" /> Retry selected ({selected.size})
               </button>
             </div>
-            <Table head={['', 'Account', 'Device', 'Length', 'Tries', 'Uploaded', 'Error', '']}>
-              {errors.length === 0 && <Empty cols={8} text="No failed takes." />}
+            <Table head={['', 'Account', 'Source', 'Length', 'Tries', 'Uploaded', 'Error', '']}>
+              {errors.length === 0 && <Empty cols={8} text={d!.problems?.length ? 'No takes in status error — see Problems above for every other failure.' : 'No failed takes.'} />}
               {errors.map((e) => (
                 <tr key={e.id} className="border-t align-top">
                   <td className="px-3 py-2"><input type="checkbox" checked={selected.has(e.id)}
                     onChange={(ev) => { const n = new Set(selected); ev.target.checked ? n.add(e.id) : n.delete(e.id); setSelected(n); }} /></td>
                   <td className="px-3 py-2 truncate max-w-[200px]">{e.email || '—'}</td>
-                  <td className="px-3 py-2"><div>{e.family}</div><div className="text-[11px] text-gray-400 font-mono">{e.device_serial}</div></td>
-                  <td className="px-3 py-2 tabular-nums">{len(e.seconds)}</td>
+                  <td className="px-3 py-2"><Src r={e} /></td>
+                  <td className="px-3 py-2 tabular-nums">{e.seconds ? len(e.seconds) : e.source === 'web' ? mb(e.bytes) : len(e.seconds)}</td>
                   <td className="px-3 py-2 tabular-nums">{e.attempts}</td>
                   <td className="px-3 py-2 text-gray-500 whitespace-nowrap">{new Date(e.created_at).toLocaleString()}</td>
                   <td className="px-3 py-2 text-xs text-red-700 max-w-[360px] break-words">{e.process_error || '—'}</td>

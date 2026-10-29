@@ -10,7 +10,7 @@ export const ToastNotification: React.FC<ToastNotificationProps> = ({ show, mess
   if (!show) return null;
 
   return (
-    <div className={`fixed top-4 right-4 z-50 p-4 rounded-lg shadow-lg max-w-sm transition-all duration-300 ${
+    <div data-usage-mask className={`fixed top-4 right-4 z-50 p-4 rounded-lg shadow-lg max-w-sm transition-all duration-300 ${
       type === 'success' 
         ? 'bg-green-100 border border-green-200 text-green-800' 
         : 'bg-red-100 border border-red-200 text-red-800'
