@@ -24,6 +24,19 @@ async function get<T>(path: string): Promise<T> {
   return r.json() as Promise<T>;
 }
 
+/**
+ * The Worker's kill switches. Asked once per page load; anything but a clear yes is a no — a tab that
+ * cannot reach the Worker must not start recording a clinician's screen on a guess.
+ */
+let configP: Promise<{ tracking: boolean; replay: boolean }> | null = null;
+export function loadAnalyticsConfig(): Promise<{ tracking: boolean; replay: boolean }> {
+  configP ||= fetch(`${ANALYTICS_URL}/v1/config`, { signal: AbortSignal.timeout(5000) })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((c) => ({ tracking: c?.tracking === true, replay: c?.tracking === true && c?.replay === true }))
+    .catch(() => ({ tracking: false, replay: false }));
+  return configP;
+}
+
 export const analyticsApi = {
   overview: (days: number) => get<UsageOverview>(`/v1/admin/overview?days=${days}`),
   user: (uid: string, days: number) => get<UsageReport>(`/v1/admin/users/${encodeURIComponent(uid)}?days=${days}`),

@@ -256,7 +256,7 @@ export interface SoapPreviewResponse {
 
 export type SoapErrorCode =
   | 'unauthorized' | 'not_found' | 'too_large' | 'rate_limited' | 'invalid_input'
-  | 'model_failed' | 'bad_model_output' | 'server_error';
+  | 'model_failed' | 'bad_model_output' | 'server_error' | 'disabled';
 
 /** Every non-2xx body. */
 export interface SoapError {

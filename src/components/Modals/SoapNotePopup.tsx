@@ -230,7 +230,9 @@ const errorText = (e: unknown): string => {
   if (e instanceof SoapApiError) {
     if (e.code === 'rate_limited') {
       const min = e.retryAfter ? Math.max(1, Math.ceil(e.retryAfter / 60)) : null;
-      return `Generation limit reached (${SOAP_LIMITS.generationsPerHour} per hour).${min ? ` Try again in about ${min} minute${min === 1 ? '' : 's'}.` : ''}`;
+      // The Worker's limit is configurable per environment; read it from its message, not a constant.
+      const limit = /limit of (\d+)/.exec(e.message)?.[1] ?? String(SOAP_LIMITS.generationsPerHour);
+      return `Generation limit reached (${limit} per hour).${min ? ` Try again in about ${min} minute${min === 1 ? '' : 's'}.` : ''}`;
     }
     if (e.code === 'not_found') return 'This recording could not be found for your account.';
     return e.message;
@@ -473,7 +475,7 @@ const TrialScorer: React.FC<TrialScorerProps> = ({ target, segments, speakers, t
         <button onClick={onClose} className="ml-auto px-3 py-1 text-xs font-medium text-white bg-teal-700 rounded-md hover:bg-teal-800">Done</button>
       </div>
       <p className="mb-2 text-[11px] text-gray-500">
-        j / k move · 1 correct · 2 incorrect · 0 clear · Enter plays · Esc closes. Only marked utterances count:
+        j / k move · 1 correct · 2 incorrect (marking moves to the next utterance) · 0 clear · Enter plays · Esc closes. Only marked utterances count:
         total = marked, correct = ✓.
         {orphans > 0 && <span className="text-amber-700"> {orphans} mark{orphans === 1 ? ' is' : 's are'} on utterances no longer in the transcript (still counted — listed below).</span>}
         {atCap && <span className="text-amber-700"> Limit of {SOAP_LIMITS.maxTrialMarks} marks reached.</span>}

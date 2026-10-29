@@ -78,6 +78,16 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 const rid = (recordingId: string) => encodeURIComponent(recordingId);
 
 /** The newest version for this recording (null when none) and the version list, newest first. */
+/** The Worker's kill switch for the SOAP tab, asked once per page load; unreachable = hidden. */
+let configP: Promise<boolean> | null = null;
+export function soapTabEnabled(): Promise<boolean> {
+  configP ||= fetch(`${SOAP_URL}/v1/config`, { signal: AbortSignal.timeout(5000) })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((c) => c?.soap_tab === true)
+    .catch(() => false);
+  return configP;
+}
+
 export function loadSoap(recordingId: string): Promise<SoapListResponse> {
   return call<SoapListResponse>('GET', `/v1/soap/${rid(recordingId)}`);
 }

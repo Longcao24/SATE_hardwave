@@ -13,7 +13,7 @@
 //     listener, timer and recorder in development and mint a second tab id.
 
 import { supabase } from '@/lib/supabase';
-import { ANALYTICS_URL } from './analyticsApi';
+import { ANALYTICS_URL, loadAnalyticsConfig } from './analyticsApi';
 import type { UsageEventIn, UsageKind } from './types';
 import {
   UNTRACKED_PAGES, collapse, recordable, resolveClick, routePattern, scrubMessage, scrubReplayEvent,
@@ -412,8 +412,22 @@ function hide(s: State) {
   if (r && !r.dead) void replayFlush(s, r, budget);
 }
 
-/** Start tracking this tab for `uid`. Idempotent for the same account; a new account = a new tab id. */
+/**
+ * Start tracking this tab for `uid` — once the Worker's kill switches (/v1/config) say so. Idempotent
+ * for the same account; a new account = a new tab id.
+ */
+let wanted: string | null = null;
 export function startUsage(uid: string) {
+  if (st?.uid === uid || wanted === uid) return;
+  wanted = uid;
+  void loadAnalyticsConfig().then((cfg) => {
+    // Signed out (or switched account) while the config was loading: start nothing for this one.
+    if (wanted !== uid || !cfg.tracking) return;
+    startNow(uid, cfg.replay);
+  });
+}
+
+function startNow(uid: string, replay: boolean) {
   try {
     if (st?.uid === uid) return;
     if (st) stopUsage();
@@ -450,7 +464,7 @@ export function startUsage(uid: string) {
     listen(s, document, 'visibilitychange', () => { if (document.visibilityState === 'hidden') hide(s); });
     listen(s, window, 'pagehide', () => hide(s));
     s.timer = setInterval(() => { try { tick(s); } catch { /* never surface */ } }, TICK_MS);
-    startReplay(s);
+    if (replay) startReplay(s);
   } catch { /* tracking is optional */ }
 }
 
@@ -478,6 +492,7 @@ export async function flushUsage(timeoutMs = 1500): Promise<void> {
 
 /** Stop tracking (sign-out): send what is left, end the recording, drop every listener. */
 export function stopUsage() {
+  wanted = null;
   const s = st;
   if (!s) return;
   st = null;

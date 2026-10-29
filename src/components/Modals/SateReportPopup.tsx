@@ -6,6 +6,7 @@ import {
 import { type Segment } from '@/services/dataService';
 import { segmentsToSalt } from '@/services/saltService';
 import { SoapNotePopup } from '@/components/Modals/SoapNotePopup';
+import { soapTabEnabled } from '@/services/soapService';
 import {
   generateLsaReport,
   loadStoredLsaReport,
@@ -537,8 +538,12 @@ interface SateReportPopupProps {
 
 export const SateReportPopup: React.FC<SateReportPopupProps> = ({
   isOpen, onClose, recordingId, transcriptData, readOnly = false, initialReport, allowGenerate = false, saveReport,
-  soapTab = false, audioDuration, onPlaySegment,
+  soapTab: soapTabProp = false, audioDuration, onPlaySegment,
 }) => {
+  // The SOAP Worker's kill switch (/v1/config) decides too: off or unreachable = no tab.
+  const [soapOn, setSoapOn] = React.useState(false);
+  React.useEffect(() => { if (soapTabProp) void soapTabEnabled().then(setSoapOn); }, [soapTabProp]);
+  const soapTab = soapTabProp && soapOn;
   const [tab, setTab] = React.useState<'report' | 'soap'>('report');
   // Mounted on first visit and then only hidden, so switching tabs keeps a half-filled SOAP form.
   const [soapSeen, setSoapSeen] = React.useState(false);
