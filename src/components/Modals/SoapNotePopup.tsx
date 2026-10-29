@@ -58,6 +58,13 @@ interface SoapNotePopupProps {
   transcriptData: Segment[];
   /** The audio's length in seconds, as the player measured it. */
   audioDuration?: number;
+  /**
+   * Rendered as the "SOAP Note" TAB of the SATE Report popup (2026-10-29): no overlay, title or
+   * close button of its own — the host owns those — and it reports an unsaved section edit through
+   * onDirtyChange so the host's close/tab switch can ask first.
+   */
+  embedded?: boolean;
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 interface PerfRowDraft {
@@ -323,7 +330,7 @@ function formFromInputs(inputs: SoapInputs, base: FormState): FormState {
 // --- component -----------------------------------------------------------------
 
 export const SoapNotePopup: React.FC<SoapNotePopupProps> = ({
-  isOpen, onClose, recordingId, transcriptData, audioDuration,
+  isOpen, onClose, recordingId, transcriptData, audioDuration, embedded = false, onDirtyChange,
 }) => {
   const [form, setForm] = React.useState<FormState>(emptyForm);
   const [showForm, setShowForm] = React.useState(true);
@@ -692,6 +699,9 @@ export const SoapNotePopup: React.FC<SoapNotePopupProps> = ({
     };
   };
 
+  const sectionDirty = !!editing && editDirty;
+  React.useEffect(() => { onDirtyChange?.(sectionDirty); }, [sectionDirty, onDirtyChange]);
+
   const requestClose = () => {
     if (editing && editDirty) { setConfirmClose(true); return; }
     onClose();
@@ -744,13 +754,12 @@ export const SoapNotePopup: React.FC<SoapNotePopupProps> = ({
     </div>
   );
 
-  return (
-    <div data-usage-mask className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={requestClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+  const inner = (
+      <>
         {/* Header */}
         <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3 border-b border-gray-200">
           <div className="flex items-baseline gap-2 min-w-0">
-            <h2 className="text-base font-semibold text-gray-900">SOAP Note</h2>
+            {!embedded && <h2 className="text-base font-semibold text-gray-900">SOAP Note</h2>}
             {current && (
               <span className="text-xs text-gray-500 truncate" title={current.created_at}>
                 v{current.version}{latestVersion && current.version !== latestVersion ? ` of ${latestVersion}` : ''}
@@ -794,9 +803,11 @@ export const SoapNotePopup: React.FC<SoapNotePopupProps> = ({
               className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800 disabled:bg-gray-300 disabled:cursor-not-allowed">
               <Printer className="w-4 h-4" /> Print
             </button>
-            <button onClick={requestClose} className="p-1.5 text-gray-500 hover:text-gray-800 rounded-lg hover:bg-gray-100" aria-label="Close">
-              <X className="w-5 h-5" />
-            </button>
+            {!embedded && (
+              <button onClick={requestClose} className="p-1.5 text-gray-500 hover:text-gray-800 rounded-lg hover:bg-gray-100" aria-label="Close">
+                <X className="w-5 h-5" />
+              </button>
+            )}
           </div>
         </div>
 
@@ -1139,6 +1150,14 @@ export const SoapNotePopup: React.FC<SoapNotePopupProps> = ({
             )}
           </div>
         </div>
+      </>
+  );
+
+  if (embedded) return <div data-usage-mask className="flex-1 min-h-0 flex flex-col">{inner}</div>;
+  return (
+    <div data-usage-mask className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={requestClose}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+        {inner}
       </div>
     </div>
   );

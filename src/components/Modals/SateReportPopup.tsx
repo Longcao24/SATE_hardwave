@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { type Segment } from '@/services/dataService';
 import { segmentsToSalt } from '@/services/saltService';
+import { SoapNotePopup } from '@/components/Modals/SoapNotePopup';
 import {
   generateLsaReport,
   loadStoredLsaReport,
@@ -523,11 +524,26 @@ interface SateReportPopupProps {
    *  Edit, no Regenerate). The report is saved through `saveReport`, never written here. */
   allowGenerate?: boolean;
   saveReport?: (stored: StoredLsaReport) => Promise<StoredLsaReport | void>;
+  /**
+   * Show the SOAP Note tab (2026-10-29: SOAP is a tab of the SATE Report, not its own button).
+   * Off on oversight — a SOAP draft is written to the store, and oversight never writes.
+   */
+  soapTab?: boolean;
+  /** The audio's length in seconds — prefills the SOAP note's duration. */
+  audioDuration?: number;
 }
 
 export const SateReportPopup: React.FC<SateReportPopupProps> = ({
   isOpen, onClose, recordingId, transcriptData, readOnly = false, initialReport, allowGenerate = false, saveReport,
+  soapTab = false, audioDuration,
 }) => {
+  const [tab, setTab] = React.useState<'report' | 'soap'>('report');
+  // Mounted on first visit and then only hidden, so switching tabs keeps a half-filled SOAP form.
+  const [soapSeen, setSoapSeen] = React.useState(false);
+  const [soapDirty, setSoapDirty] = React.useState(false);
+  const [confirmSoapClose, setConfirmSoapClose] = React.useState(false);
+  React.useEffect(() => { if (!isOpen) { setTab('report'); setSoapSeen(false); setConfirmSoapClose(false); } }, [isOpen]);
+  const openTab = (t: 'report' | 'soap') => { setTab(t); if (t === 'soap') setSoapSeen(true); };
   const [ageYears, setAgeYears] = React.useState('');
   const [ageMonths, setAgeMonths] = React.useState('');
   const [task, setTask] = React.useState('Narrative (picture-elicited)');
@@ -753,7 +769,11 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
   // Cancel / close never silently throw away a review: with unsaved changes they ask first,
   // in the save bar rather than a browser dialog.
   const requestCancel = () => (dirty ? setConfirmDiscard('cancel') : cancelEditing());
-  const requestClose = () => (dirty ? setConfirmDiscard('close') : onClose());
+  const requestClose = () => {
+    // An unsaved SOAP section edit asks in its own bar (the report's bar is for the report's edits).
+    if (soapDirty) { openTab('soap'); setConfirmSoapClose(true); return; }
+    return dirty ? setConfirmDiscard('close') : onClose();
+  };
 
   const saveEdits = async () => {
     if (readOnly) return;
@@ -985,8 +1005,22 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
            onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
           <div className="flex items-baseline gap-2 min-w-0">
-            <h2 className="text-base font-semibold text-gray-900">SATE Report</h2>
-            {report && (
+            {soapTab ? (
+              <div role="tablist" className="flex items-center gap-1 self-center">
+                {(['report', 'soap'] as const).map((t) => (
+                  <button key={t} role="tab" aria-selected={tab === t} onClick={() => openTab(t)}
+                    disabled={t === 'soap' && editing}
+                    title={t === 'soap' && editing ? 'Save or cancel the report edit first' : undefined}
+                    className={`px-3 py-1 text-sm font-semibold rounded-md transition-colors disabled:opacity-40 ${
+                      tab === t ? 'bg-teal-50 text-teal-800' : 'text-gray-500 hover:text-gray-800 hover:bg-gray-100'}`}>
+                    {t === 'report' ? 'SATE Report' : 'SOAP Note'}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <h2 className="text-base font-semibold text-gray-900">SATE Report</h2>
+            )}
+            {tab === 'report' && report && (
               <span className="text-xs text-gray-500 truncate" title={report.generated_at}>
                 {saveWarning ? 'generated' : 'saved'} {new Date(report.generated_at).toLocaleString()}
                 {report.edited_at && ` · edited ${new Date(report.edited_at).toLocaleDateString()}`}
@@ -995,6 +1029,7 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
             )}
           </div>
           <div className="flex items-center gap-2">
+            {tab === 'report' && (<>
             {justSaved && (
               <span className="inline-flex items-center gap-1 text-xs font-medium text-teal-700" role="status">
                 <Check className="w-4 h-4" /> {saveWarning ? 'Applied' : 'Saved'}
@@ -1017,12 +1052,31 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
               className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-700 bg-white border border-blue-300 rounded-lg hover:bg-blue-50 disabled:text-gray-400 disabled:border-gray-200 disabled:hover:bg-white disabled:cursor-not-allowed transition-colors">
               <FileType className="w-4 h-4" /> Export Word
             </button>
+            </>)}
             <button onClick={requestClose} className="p-1.5 text-gray-500 hover:text-gray-800 rounded-lg hover:bg-gray-100" aria-label="Close">
               <X className="w-5 h-5" />
             </button>
           </div>
         </div>
 
+        {confirmSoapClose && (
+          <div className="flex items-center justify-between gap-3 px-5 py-2 text-sm text-amber-900 bg-amber-50 border-b border-amber-200">
+            <span className="flex items-center gap-2"><AlertTriangle className="w-4 h-4" /> Discard the unsaved SOAP section edit?</span>
+            <div className="flex gap-2">
+              <button onClick={() => setConfirmSoapClose(false)} className="px-3 py-1 text-xs font-medium text-gray-700 bg-white border border-gray-300 rounded-md">Keep editing</button>
+              <button onClick={() => { setConfirmSoapClose(false); setSoapDirty(false); onClose(); }} className="px-3 py-1 text-xs font-medium text-white bg-red-600 rounded-md">Discard</button>
+            </div>
+          </div>
+        )}
+
+        {soapTab && soapSeen && (
+          <div className={tab === 'soap' ? 'flex-1 min-h-0 flex flex-col' : 'hidden'}>
+            <SoapNotePopup embedded isOpen onClose={onClose} recordingId={recordingId}
+              transcriptData={transcriptData} audioDuration={audioDuration} onDirtyChange={setSoapDirty} />
+          </div>
+        )}
+
+        <div className={tab === 'report' ? 'contents' : 'hidden'}>
         {/* Sample information — what the analysis needs and the transcript cannot supply.
             Hidden read-only: it exists to generate a report, and a viewer must not. */}
         {(!readOnly || (allowGenerate && !report)) && (
@@ -1299,6 +1353,7 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
             )}
           </div>
         )}
+        </div>
       </div>
     </div>
   );
