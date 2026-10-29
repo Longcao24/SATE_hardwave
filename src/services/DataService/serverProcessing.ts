@@ -101,6 +101,35 @@ function putFile(url: string, file: File, onProgress?: (fraction: number) => voi
   });
 }
 
+/**
+ * Tell the in-flight uploads indicator (useInFlightUploads) that the server's view changed: a file
+ * was just handed over, or re-queued. Without it the new row would only show on the next slow poll,
+ * which is exactly the "I uploaded it and nothing shows" this indicator exists to remove. A DOM
+ * event rather than an import of the hook keeps this service free of React.
+ */
+export const WEB_UPLOADS_CHANGED = 'sate:web-uploads-changed';
+export function notifyWebUploadsChanged() {
+  try { window.dispatchEvent(new Event(WEB_UPLOADS_CHANGED)); } catch { /* not in a browser */ }
+}
+
+/**
+ * Re-queue an errored upload by session id alone — the in-flight indicator's Retry, which runs
+ * after a reload when the File is long gone. Same route and the same 409 reading as
+ * retryOnServer: a 409 means it is no longer in 'error' (another tab or an admin already retried
+ * it, or it finished), which is the outcome the click wanted, so it is not an error.
+ */
+export async function retrySessionOnServer(sessionId: string): Promise<void> {
+  trackAction('upload:retry');
+  try {
+    await api(`/sessions/${encodeURIComponent(sessionId)}/retry`, {});
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (!/HTTP 409/.test(msg)) throw e;
+  } finally {
+    notifyWebUploadsChanged();
+  }
+}
+
 /** Best-effort record of a failure that happened before the backend had the file. */
 export function reportClientError(context: string, file: File | null, message: string) {
   supabase.from('sate_client_errors')
@@ -198,6 +227,7 @@ async function handOverAndWatch(file: File, opts: ServerProcessingOptions): Prom
   // Cancelled while register was in flight: the backend owns it now, so withdraw it.
   if (cancelled.has(file)) { void withdrawUpload(sessionId); throw new UploadCancelledError(); }
   trackAction('upload:handed-over');
+  notifyWebUploadsChanged();
   onSession?.(sessionId);
   onProgress?.(42);
   return watch(sessionId, opts, file);
@@ -224,6 +254,7 @@ async function requeueAndWatch(file: File, sessionId: string, opts: ServerProces
     }
     throw new ServerProcessingError('Could not reach SATE to retry. Please check your connection and try again.', sessionId, true, msg);
   }
+  notifyWebUploadsChanged();
   return watch(sessionId, opts, file);
 }
 
@@ -282,4 +313,7 @@ export async function withdrawUpload(sessionId: string) {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${session.access_token}`, apikey: import.meta.env.VITE_SUPABASE_ANON_KEY },
   }).catch(() => {});
+  // The row is gone (or the delete failed and it is still there): either way, re-read it rather
+  // than leave a cancelled file sitting in the in-flight list as "Queued".
+  notifyWebUploadsChanged();
 }

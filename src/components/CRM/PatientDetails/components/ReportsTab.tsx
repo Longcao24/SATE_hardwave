@@ -6,6 +6,7 @@ import { Plus, FileAudio, Clock, Activity, AlertTriangle, BarChart3, Eye, Trash2
 import { type Patient } from '@/services/patientService';
 import { type RecordingStats } from '../types';
 import { formatDate, formatDuration } from '../utils';
+import { InFlightUploads } from '@/components/Uploads/InFlightUploads';
 
 interface ReportsTabProps {
   patient: Patient;
@@ -43,6 +44,9 @@ export const ReportsTab: React.FC<ReportsTabProps> = ({
           Add Recording
         </Button>
       </div>
+
+      {/* This patient's uploads that are not a report yet (nothing rendered when none). */}
+      <InFlightUploads patientId={patient.id} variant="card" className="" />
 
       {/* Recording Reports */}
       <Card className="bg-white shadow-sm border-0">

@@ -29,6 +29,7 @@ import { RenameRecordingModal } from './modals/RenameRecordingModal';
 import { AssignPatientModal } from './modals/AssignPatientModal';
 import { MoveToStandaloneModal } from './modals/MoveToStandaloneModal';
 import CreateRecordingPopup from '@/components/Recording/CreateRecordingPopup';
+import { InFlightUploads } from '@/components/Uploads/InFlightUploads';
 import ImportPopup from '@/components/Modals/ImportPopup';
 
 // Feature flag: the Patients block in the sidebar is hidden, not removed.
@@ -323,6 +324,8 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({
               onDeleteClick={handleDeleteClick}
               truncateFileName={truncateFileName}
               onCreateRecording={handleCreateRecording}
+              // Same patient scoping as the list under it: on a patient's page, only their files.
+              topSlot={<InFlightUploads patientId={contextPatientId || selectedFilterPatientId} />}
             />
             
             <SidebarFooter />

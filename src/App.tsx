@@ -21,6 +21,7 @@ import { NotesPage } from '@/components/Notes/NotesPage';
 import { AdminPage } from './components/Admin/AdminPage';
 import OversightPage from './components/Oversight/OversightPage';
 import { UsageTracker } from './components/Usage/UsageTracker';
+import { WebUploadAnnouncer } from './components/Uploads/WebUploadAnnouncer';
 
 // Protected Route component
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -49,6 +50,8 @@ function App() {
     <>
     {/* Usage analytics for Admin → Usage: signed-in accounts only, renders nothing. */}
     <UsageTracker />
+    {/* Watches the user's web uploads on every page and announces "<file> is ready". */}
+    <WebUploadAnnouncer />
     <Routes>
       {/* Public routes */}
       <Route path="/login" element={<LoginPage />} />
