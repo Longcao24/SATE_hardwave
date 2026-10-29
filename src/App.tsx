@@ -20,6 +20,7 @@ import { DevicePage } from './components/Device/DevicePage';
 import { NotesPage } from '@/components/Notes/NotesPage';
 import { AdminPage } from './components/Admin/AdminPage';
 import OversightPage from './components/Oversight/OversightPage';
+import { WebUploadAnnouncer } from './components/Uploads/WebUploadAnnouncer';
 
 // Protected Route component
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -45,6 +46,9 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 // Main App component with routing
 function App() {
   return (
+    <>
+    {/* Watches the user's web uploads on every page and announces "<file> is ready". */}
+    <WebUploadAnnouncer />
     <Routes>
       {/* Public routes */}
       <Route path="/login" element={<LoginPage />} />
@@ -214,6 +218,7 @@ function App() {
       {/* Redirect any unknown routes to home */}
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
+    </>
   );
 }
 

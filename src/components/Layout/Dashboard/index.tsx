@@ -12,6 +12,7 @@ import StatsCards from './components/StatsCards';
 import RecentPatientActivity from './components/RecentPatientActivity';
 import StandaloneRecordings from './components/StandaloneRecordings';
 import DeviceOverview from './components/DeviceOverview';
+import { InFlightUploads } from '@/components/Uploads/InFlightUploads';
 
 // Import custom hook
 import { useDashboardData } from './hooks/useDashboardData';
@@ -95,6 +96,11 @@ const Dashboard: React.FC<DashboardProps> = ({ onImport, onUseSampleData }) => {
           onCreateRecording={() => setShowCreateRecordingPopup(true)}
           onUseSampleData={onUseSampleData}
         />
+
+        {/* Uploads still processing / failed / no speech — renders nothing when there are none.
+            Here, before everything else that is about the past, because it is what the clinician
+            came back to check after closing the tab mid-upload. */}
+        <InFlightUploads variant="card" />
 
         {/* Devices Overview */}
         <DeviceOverview />

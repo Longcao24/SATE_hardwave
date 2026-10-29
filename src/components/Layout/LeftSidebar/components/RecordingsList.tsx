@@ -24,6 +24,8 @@ interface RecordingsListProps {
   onDeleteClick: (recordingId: string, recordingName: string, e: React.MouseEvent) => void;
   truncateFileName: (name: string) => string;
   onCreateRecording?: () => void;
+  /** Rendered above the list, inside its scroll area (the in-flight uploads). */
+  topSlot?: React.ReactNode;
 }
 
 export const RecordingsList: React.FC<RecordingsListProps> = ({
@@ -43,7 +45,8 @@ export const RecordingsList: React.FC<RecordingsListProps> = ({
   onMoveToStandaloneClick,
   onDeleteClick,
   truncateFileName,
-  onCreateRecording
+  onCreateRecording,
+  topSlot
 }) => {
   // The recording currently open in the report view, so the list can show WHICH one you are
   // looking at. Read from the URL rather than passed down: this list is several levels below
@@ -101,6 +104,7 @@ export const RecordingsList: React.FC<RecordingsListProps> = ({
       </div>
       
       <div className="flex-1 overflow-y-auto px-6 pb-6 min-h-0">
+        {topSlot}
         {isLoading && <p className="text-xs text-gray-500">Loading...</p>}
         {error && <p className="text-xs text-red-600">Failed to load recordings</p>}
         {(!recordings || recordings.length === 0) && !isLoading && (
