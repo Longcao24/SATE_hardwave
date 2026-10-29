@@ -4,13 +4,10 @@
 // is it doing right now and in what order (live list, claim order), how well has it been doing
 // (success rate per day / per device family), and what failed and why (errors grouped by reason,
 // with Retry). Retry is the owner's own Retry, done by an admin and written to the audit trail.
-//
-// [v50] It also shows WEB uploads (the browser transcribes those itself, so they are not sessions —
-// see sate_web_jobs) and everything finished in the last 30 min: a take processes in ~7 s, faster
-// than any poll, so without that list most work would never appear here at all.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Clock, Loader2, RefreshCw, RotateCcw, Timer, Zap } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Clock, ExternalLink, Loader2, RefreshCw, RotateCcw, Timer, XCircle, Zap } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { deviceApiService } from '@/services/device/deviceApiService';
 import type { AdminProcessing } from '@/services/device/deviceTypes';
 
@@ -39,6 +36,8 @@ export function ProcessingPanel() {
   const [reason, setReason] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const [recentFilter, setRecentFilter] = useState<'all' | 'done' | 'failed'>('all');
+  const navigate = useNavigate();
 
   const load = useCallback(() => {
     setLoading(true);
@@ -50,7 +49,7 @@ export function ProcessingPanel() {
   useEffect(load, [load]);
   // Poll fast while anything is in flight (a take is done in seconds), slowly when idle, and not at
   // all from a hidden tab — every poll also recomputes the window stats.
-  const busyNow = !!d && (d.live.length > 0 || (d.web_live?.length ?? 0) > 0);
+  const busyNow = !!d && d.live.length > 0;
   useEffect(() => {
     if (!auto) return;
     const t = window.setInterval(() => { if (!document.hidden) load(); }, busyNow ? 4_000 : 10_000);
@@ -61,6 +60,8 @@ export function ProcessingPanel() {
 
   const reasonOf = (e?: string | null) => String(e || 'unknown')
     .replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, '<id>').replace(/\d+(\.\d+)?/g, 'N').trim().slice(0, 120);
+  const recent = useMemo(() => (d?.recent || []).filter((r) =>
+    recentFilter === 'all' ? true : recentFilter === 'failed' ? (r.status === 'error' || r.no_text) : (r.status === 'done' && !r.no_text)), [d, recentFilter]);
   const errors = useMemo(() => (d?.errors || []).filter((e) => !reason || reasonOf(e.process_error) === reason), [d, reason]);
 
   const act = async (fn: () => Promise<{ skipped: { id: string; reason: string }[] } & Record<string, any>>, verb: string) => {
@@ -81,8 +82,6 @@ export function ProcessingPanel() {
   const st = d?.stats;
   const workerQuiet = st && st.queued > 0 && (!st.worker_last_finished_at || Date.now() - Date.parse(st.worker_last_finished_at) > 20 * 60_000)
     && st.processing === 0;
-  const webLive = d?.web_live ?? [];
-  const recent = d?.recent ?? [];
   const maxDay = Math.max(1, ...(d?.per_day || []).map((x) => x.done + x.error));
 
   return (
@@ -121,12 +120,37 @@ export function ProcessingPanel() {
             </div>
           )}
 
+          {/* Now processing — the one job the worker holds, at a glance */}
+          {(() => {
+            const cur = d!.live.filter((x) => x.status === 'processing');
+            const next = d!.live.find((x) => x.status === 'queued');
+            return (
+              <div className={`rounded-xl border p-4 ${cur.length ? 'border-violet-300 bg-violet-50' : 'border-gray-200 bg-white'}`}>
+                <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+                  {cur.length ? <Loader2 className="w-4 h-4 animate-spin text-violet-600" /> : <CheckCircle2 className="w-4 h-4 text-gray-400" />}
+                  {cur.length ? 'Now processing' : 'The worker is idle'}
+                </div>
+                {cur.map((r) => (
+                  <div key={r.id} className="mt-2 grid grid-cols-2 md:grid-cols-5 gap-2 text-sm">
+                    <div><div className="text-[11px] text-gray-500">Account</div><div className="truncate">{r.email || '—'}</div></div>
+                    <div><div className="text-[11px] text-gray-500">Source</div><div>{r.family}</div></div>
+                    <div><div className="text-[11px] text-gray-500">Length</div><div className="tabular-nums">{r.seconds ? len(r.seconds) : '—'}</div></div>
+                    <div><div className="text-[11px] text-gray-500">Running for</div><div className={`tabular-nums ${r.stuck ? 'text-red-700 font-semibold' : ''}`}>{ago(r.processing_started_at)}{r.stuck ? ' · stuck' : ''}</div></div>
+                    <div><div className="text-[11px] text-gray-500">Attempt · waited</div><div className="tabular-nums">{r.attempts} · {r.processing_started_at ? len((Date.parse(r.processing_started_at) - Date.parse(r.created_at)) / 1000) : '—'}</div></div>
+                  </div>
+                ))}
+                <div className="mt-2 text-xs text-gray-500">
+                  {st.queued ? `${st.queued} waiting${next ? ` · next: ${next.email || '—'} (${next.family}, ${next.seconds ? len(next.seconds) : '—'})` : ''}` : 'Nothing waiting.'}
+                  {' · '}last finished {ago(st.worker_last_finished_at)} ago
+                </div>
+              </div>
+            );
+          })()}
+
           {/* KPIs */}
           <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3">
-            <Kpi icon={<Zap className="w-4 h-4 text-violet-600" />} label="Processing now" value={st.processing + webLive.filter((w) => !w.lost).length}
-              sub={[st.processing ? len(d!.live.filter((x) => x.status === 'processing').reduce((t, x) => t + x.seconds, 0)) + ' of device audio' : '',
-                webLive.filter((w) => !w.lost).length ? `${webLive.filter((w) => !w.lost).length} web upload${webLive.filter((w) => !w.lost).length > 1 ? 's' : ''}` : '']
-                .filter(Boolean).join(' · ') || 'idle'} />
+            <Kpi icon={<Zap className="w-4 h-4 text-violet-600" />} label="Processing now" value={st.processing}
+              sub={st.processing ? len(d!.live.filter((x) => x.status === 'processing').reduce((t, x) => t + x.seconds, 0)) + ' of audio' : 'idle'} />
             <Kpi icon={<Clock className="w-4 h-4 text-blue-600" />} label="In queue" value={st.queued}
               sub={st.queued ? `${len(st.queue_seconds)} · oldest ${ago(st.oldest_queued_at)}` : 'empty'} />
             <Kpi icon={<CheckCircle2 className="w-4 h-4 text-green-600" />} label="Success rate" value={pct(st.success_rate)}
@@ -142,10 +166,10 @@ export function ProcessingPanel() {
           </div>
 
           {/* Live */}
-          <Section title={`Live — ${d!.live.length + webLive.length} job${d!.live.length + webLive.length === 1 ? '' : 's'}`}
+          <Section title={`Live — ${d!.live.length} take${d!.live.length === 1 ? '' : 's'}`}
             hint="Processing first, then the queue in the order the worker will take it (short takes go slightly ahead; a long one is never pushed back more than 6 min).">
             <Table head={['#', 'Status', 'Account', 'Device', 'Length', 'Attempts', 'Uploaded', '']}>
-              {d!.live.length === 0 && webLive.length === 0 && <Empty cols={8} text="Nothing is queued or processing right now — see Recently finished below." />}
+              {d!.live.length === 0 && <Empty cols={8} text="Nothing is queued or processing." />}
               {d!.live.map((r, i) => {
                 const backoff = r.not_before && Date.parse(r.not_before) > Date.now();
                 return (
@@ -172,52 +196,57 @@ export function ProcessingPanel() {
                   </tr>
                 );
               })}
-              {webLive.map((w) => (
-                <tr key={w.id} className={`border-t ${w.lost ? 'bg-amber-50' : ''}`}>
-                  <td className="px-3 py-2 text-gray-400">web</td>
-                  <td className="px-3 py-2 whitespace-nowrap">
-                    {w.lost
-                      ? <span className="inline-flex items-center gap-1.5 text-amber-700" title="The browser stopped reporting — the tab was probably closed. The AI may still have finished, but nothing will save it.">
-                          <AlertTriangle className="w-3.5 h-3.5" /> No heartbeat · {ago(w.heartbeat_at)}
-                        </span>
-                      : <span className="inline-flex items-center gap-1.5 text-violet-700"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Processing · {ago(w.started_at)}</span>}
-                    <div className="text-[11px] text-gray-400">in the uploader's browser</div>
-                  </td>
-                  <td className="px-3 py-2 truncate max-w-[220px]">{w.email || '—'}</td>
-                  <td className="px-3 py-2"><div>{w.source === 'patient-upload' ? 'Web upload (patient)' : 'Web upload'}</div>
-                    <div className="text-[11px] text-gray-400 truncate max-w-[220px]" title={w.file_name || ''}>{w.file_name || '—'}</div></td>
-                  <td className="px-3 py-2 tabular-nums text-gray-500">{w.bytes != null ? `${(w.bytes / 1048576).toFixed(1)} MB` : '—'}</td>
-                  <td className="px-3 py-2 text-gray-400">—</td>
-                  <td className="px-3 py-2 text-gray-500 whitespace-nowrap">{new Date(w.started_at).toLocaleString()}</td>
-                  <td />
-                </tr>
-              ))}
             </Table>
           </Section>
 
-          {/* Recently finished */}
-          <Section title={`Recently finished — ${recent.length} in the last 30 min`}
-            hint="Processing usually takes seconds, so most jobs finish between two refreshes. Everything that went through lands here.">
-            <Table head={['Result', 'Account', 'Source', 'Length', 'Took', 'Finished']}>
-              {recent.length === 0 && <Empty cols={6} text="Nothing finished in the last 30 minutes." />}
-              {recent.map((r) => (
-                <tr key={`${r.kind}-${r.id}`} className="border-t align-top">
-                  <td className="px-3 py-2 whitespace-nowrap">
-                    {r.status === 'error'
-                      ? <span className="inline-flex items-center gap-1.5 text-red-700" title={r.error || ''}><AlertTriangle className="w-3.5 h-3.5" /> Failed</span>
-                      : <span className="inline-flex items-center gap-1.5 text-green-700"><CheckCircle2 className="w-3.5 h-3.5" /> {r.no_text ? 'Done · no speech' : 'Done'}</span>}
-                  </td>
-                  <td className="px-3 py-2 truncate max-w-[220px]">{r.email || '—'}</td>
-                  <td className="px-3 py-2"><div>{r.kind === 'web' ? (r.family === 'patient-upload' ? 'Web upload (patient)' : 'Web upload') : r.family}</div>
-                    <div className="text-[11px] text-gray-400 truncate max-w-[220px] font-mono" title={r.label || ''}>{r.label || '—'}</div></td>
-                  <td className="px-3 py-2 tabular-nums">{r.seconds == null ? '—' : len(r.seconds)}</td>
-                  <td className="px-3 py-2 tabular-nums text-gray-500">
-                    {r.started_at ? len((Date.parse(r.finished_at) - Date.parse(r.started_at)) / 1000) : '—'}</td>
-                  <td className="px-3 py-2 text-gray-500 whitespace-nowrap">{ago(r.finished_at)} ago</td>
-                </tr>
-              ))}
-            </Table>
-          </Section>
+          {/* Recently processed */}
+          {d!.recent && (
+            <Section title={`Recently processed — ${d!.recent.length}`}
+              hint="Every take that finished in this window, newest first: done, no speech, or failed. Waited = upload to start; Took = processing time.">
+              <div className="inline-flex rounded-lg border bg-white p-0.5 mb-2">
+                {(['all', 'done', 'failed'] as const).map((f) => (
+                  <button key={f} onClick={() => setRecentFilter(f)}
+                    className={`px-3 py-1 text-xs rounded-md ${recentFilter === f ? 'bg-violet-600 text-white' : 'text-gray-600 hover:bg-gray-50'}`}>
+                    {f === 'all' ? 'All' : f === 'done' ? 'Done' : 'Failed / no speech'}
+                  </button>
+                ))}
+              </div>
+              <Table head={['Finished', 'Outcome', 'Account', 'Source', 'Length', 'Waited', 'Took', 'Tries', '']}>
+                {recent.length === 0 && <Empty cols={9} text="Nothing finished in this window." />}
+                {recent.map((r) => (
+                  <tr key={r.key} className="border-t align-top">
+                    <td className="px-3 py-2 text-gray-500 whitespace-nowrap" title={new Date(r.finished_at).toLocaleString()}>{ago(r.finished_at)} ago</td>
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      {r.status === 'error'
+                        ? <span className="inline-flex items-center gap-1 text-red-700"><XCircle className="w-3.5 h-3.5" /> Failed</span>
+                        : r.no_text
+                          ? <span className="inline-flex items-center gap-1 text-amber-700"><AlertTriangle className="w-3.5 h-3.5" /> No speech</span>
+                          : <span className="inline-flex items-center gap-1 text-green-700"><CheckCircle2 className="w-3.5 h-3.5" /> Done</span>}
+                      {r.process_error && <div className="text-[11px] text-red-700 max-w-[320px] break-words mt-0.5">{r.process_error}</div>}
+                    </td>
+                    <td className="px-3 py-2 truncate max-w-[200px]">{r.email || '—'}</td>
+                    <td className="px-3 py-2"><div>{r.family}</div><div className="text-[11px] text-gray-400 font-mono">{r.device_serial}</div></td>
+                    <td className="px-3 py-2 tabular-nums">{r.seconds ? len(r.seconds) : '—'}</td>
+                    <td className="px-3 py-2 tabular-nums">{r.wait_s == null ? '—' : len(r.wait_s)}</td>
+                    <td className="px-3 py-2 tabular-nums">{r.processing_s == null ? '—' : len(r.processing_s)}</td>
+                    <td className="px-3 py-2 tabular-nums">{r.attempts}</td>
+                    <td className="px-3 py-2 text-right whitespace-nowrap">
+                      {r.recording_id && (
+                        <button onClick={() => navigate(`/oversight/${r.user_id}/${r.recording_id}`)} title="Open (read-only)"
+                          className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-md border hover:bg-gray-50">
+                          <ExternalLink className="w-3.5 h-3.5" /> Open
+                        </button>
+                      )}
+                      {r.status === 'error' && (
+                        <button disabled={busy} onClick={() => retry([r.id])}
+                          className="ml-1 text-xs px-2 py-1 rounded-md border hover:bg-gray-50 disabled:opacity-40">Retry</button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </Table>
+            </Section>
+          )}
 
           {/* Trend */}
           <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">

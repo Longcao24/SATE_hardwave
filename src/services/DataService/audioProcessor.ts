@@ -1,191 +1,23 @@
 import type { TranscriptData, IssueCounts, ProcessingError } from './types';
-import { countErrors } from './errorCounter';
 import { MAX_UPLOAD_BYTES, MAX_UPLOAD_LABEL } from '@/config/uploadLimits';
-import { startWebJob } from './webJobTracker';
+import { processOnServer, retryOnServer, ServerProcessingError, UploadCancelledError } from './serverProcessing';
 
-// Helper function to categorize and format errors
-const categorizeError = (error: any, response?: Response): ProcessingError => {
-  const errorString = error instanceof Error ? error.message : String(error);
-  
-  // Network/Connection errors
-  if (error instanceof TypeError && errorString.includes('fetch')) {
-    return {
-      type: 'network',
-      message: 'Unable to connect to the processing server. Please check your internet connection.',
-      originalError: errorString,
-      retryable: true
-    };
-  }
-  
-  // Timeout errors
-  if (error instanceof Error && error.name === 'AbortError') {
-    return {
-      type: 'network',
-      message: 'Server is taking longer than expected to respond. The server may be starting up or experiencing high load.',
-      originalError: errorString,
-      retryable: true
-    };
-  }
-  
-  // Server errors from response
-  if (response && response.status >= 500) {
-    return {
-      type: 'server',
-      message: 'The processing server is experiencing technical difficulties. This often happens when the server is starting up.',
-      originalError: errorString,
-      retryable: true
-    };
-  }
-  
-  // API errors from response body
-  if (response && response.status >= 400) {
-    let message = 'The server encountered an error while processing your audio file.';
-    let apiType: 'api' | 'validation' = 'api';
-    
-    // Check for specific error patterns
-    if (errorString.includes('float16') || errorString.includes('compute type')) {
-      message = 'The server\'s processing hardware doesn\'t support the current settings. The system will try different processing options.';
-      apiType = 'api';
-    } else if (errorString.includes('CUDA') || errorString.includes('out of memory')) {
-      message = 'The server\'s GPU is out of memory. The system will try processing with CPU instead.';
-      apiType = 'api';
-    } else if (errorString.includes('ValueError') || errorString.includes('Invalid')) {
-      message = 'There was an issue with the audio file format or content. Try a different file or format.';
-      apiType = 'validation';
-    } else if (errorString.includes('File size') || errorString.includes('too large')) {
-      message = `The audio file is too large to process. Please use a file smaller than ${MAX_UPLOAD_LABEL}.`;
-      apiType = 'validation';
-    }
-    
-    return {
-      type: apiType,
-      message,
-      originalError: errorString,
-      retryable: apiType === 'api'
-    };
-  }
-  
-  // Generic error fallback
-  return {
-    type: 'unknown',
-    message: 'An unexpected error occurred while processing the audio file.',
-    originalError: errorString,
-    retryable: true
-  };
-};
+// Sessions that ended in 'error', per File: Retry re-queues that session on the server
+// instead of uploading the same file a second time.
+const erroredSession = new WeakMap<File, string>();
 
-// Helper function to make the actual API request
-const makeAPIRequest = async (
-  audioFile: File,
-  device: string,
-  pauseThreshold: number,
-  onProgress?: (progress: number) => void,
-  onTimeoutWarning?: () => void
-): Promise<{ data: TranscriptData; errorCounts: IssueCounts }> => {
-    // Create FormData for the API request
-    const formData = new FormData();
-    formData.append('audio_file', audioFile);
-    formData.append('device', device);
-    formData.append('pause_threshold', pauseThreshold.toString());
-
-    // Start progress tracking
-    if (onProgress) {
-      onProgress(10); // Initial progress
-    }
-
-    // Create AbortController for timeout handling
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 minute timeout
-    
-    // Set up 2-minute warning timer
-    const warningTimeoutId = setTimeout(() => {
-      if (onTimeoutWarning) {
-        onTimeoutWarning();
-      }
-    }, 120000); // 2 minute warning
-
-    let response: Response;
-    try {
-      response = await fetch('https://sate-v1-5.ngrok.io/process', {
-        method: 'POST',
-        body: formData,
-        signal: controller.signal,
-        // Don't set Content-Type header - let browser set it automatically for FormData
-        // This ensures proper boundary is set for multipart/form-data
-        headers: {
-          // Add any additional headers that might be required by the API
-          'Accept': 'application/json',
-        },
-      });
-
-      clearTimeout(timeoutId);
-      clearTimeout(warningTimeoutId);
-    } catch (error: unknown) {
-      clearTimeout(timeoutId);
-      clearTimeout(warningTimeoutId);
-      
-      const categorizedError = categorizeError(error);
-      const enhancedError = new Error(categorizedError.message);
-      (enhancedError as any).errorDetails = categorizedError;
-      throw enhancedError;
-    }
-
-    if (onProgress) {
-      onProgress(80); // Most of the work is done
-    }
-    
-    if (!response.ok) {
-    // Try to get error details from response
-    let errorText = '';
-    try {
-      errorText = await response.text();
-      console.error('API Error Response:', errorText);
-    } catch (e) {
-      console.error('Could not read error response:', e);
-    }
-    
-    const categorizedError = categorizeError(errorText || `${response.status} ${response.statusText}`, response);
-    const enhancedError = new Error(categorizedError.message);
-    (enhancedError as any).errorDetails = categorizedError;
-    throw enhancedError;
-    }
-    
-    const result = await response.json();
-    
-    if (onProgress) {
-      onProgress(90); // Parsing done
-    }
-
-    // Validate the response structure
-    if (!result || !result.segments) {
-      const categorizedError = categorizeError('Invalid response format from API');
-      const enhancedError = new Error(categorizedError.message);
-      (enhancedError as any).errorDetails = categorizedError;
-      throw enhancedError;
-    }
-
-    // Count errors/issues in the data
-    const errorCounts = countErrors(result.segments);
-
-    if (onProgress) {
-      onProgress(100); // Complete
-    }
-
-    return {
-      data: result as TranscriptData,
-      errorCounts
-    };
-};
-
-// API processing function
+// API processing function. The work is done by the BACKEND (serverProcessing.ts); this
+// validates the file, hands it over and maps the outcome onto the UI's error shape.
+// `device` and `pauseThreshold` are kept for the callers' signature; the backend uses the
+// same settings the device pipeline always has (cuda, 0.25).
 export const processAudioFile = async (
   audioFile: File,
-  device: string = 'cuda',
-  pauseThreshold: number = 0.25,
+  _device: string = 'cuda',
+  _pauseThreshold: number = 0.25,
   onProgress?: (progress: number) => void,
   onTimeoutWarning?: () => void,
-  source: 'web-upload' | 'patient-upload' = 'web-upload'
-): Promise<{ data: TranscriptData; errorCounts: IssueCounts }> => {
+  opts: { patientId?: string; source?: string; onSession?: (sessionId: string) => void } = {}
+): Promise<{ data: TranscriptData; errorCounts: IssueCounts; recordingId: string; sessionId: string }> => {
   try {
     // Validate file before sending
     if (audioFile.size === 0) {
@@ -234,53 +66,35 @@ export const processAudioFile = async (
       throw validationError;
     }
 
-    // The AI call happens here, in the browser — record it so the admin Processing tab can see it.
-    const job = startWebJob(audioFile, source);
+    const watchOpts = { ...opts, onProgress, onTimeoutWarning };
+    const prior = erroredSession.get(audioFile);
+    if (prior) opts.onSession?.(prior);
     try {
-    // Try with the specified device first
-    let result;
-    try {
-      result = await makeAPIRequest(audioFile, device, pauseThreshold, onProgress, onTimeoutWarning);
-    } catch (error) {
-      // Check if this is a categorized error with retry logic
-      const errorDetails = (error as any).errorDetails as ProcessingError;
-      
-      // If CUDA fails with specific errors, try CPU as fallback
-      if (device === 'cuda' && errorDetails && 
-          (errorDetails.originalError?.includes('out of memory') || 
-           errorDetails.originalError?.includes('CUDA failed') ||
-           errorDetails.originalError?.includes('float16') ||
-           errorDetails.originalError?.includes('compute type'))) {
-        console.warn('CUDA processing failed, falling back to CPU processing...');
-        if (onProgress) onProgress(10); // Reset progress for retry
-        
-        try {
-          result = await makeAPIRequest(audioFile, 'cpu', pauseThreshold, onProgress, onTimeoutWarning);
-        } catch (cpuError) {
-          // If CPU also fails, throw the original error with enhanced message
-          const enhancedError = new Error('Processing failed on both GPU and CPU. Please try again or use a different audio file.');
-          (enhancedError as any).errorDetails = {
-            type: 'server',
-            message: 'Processing failed on both GPU and CPU. The server may be experiencing issues.',
-            originalError: `GPU: ${errorDetails.originalError || 'Unknown error'}, CPU: ${(cpuError as any).errorDetails?.originalError || 'Unknown error'}`,
-            retryable: true
-          };
-          throw enhancedError;
-        }
-      } else {
-        // Re-throw the original error with its categorization
-        throw error;
+      const result = prior
+        ? await retryOnServer(audioFile, prior, watchOpts)
+        : await processOnServer(audioFile, watchOpts);
+      erroredSession.delete(audioFile);
+      return result;
+    } catch (e) {
+      // Cancelled by the clinician: pass it through bare, so no error popup follows their click.
+      if (e instanceof UploadCancelledError) throw e;
+      if (e instanceof ServerProcessingError) {
+        if (e.sessionId && e.retryable) erroredSession.set(audioFile, e.sessionId);
+        else erroredSession.delete(audioFile);
+        const err = new Error(e.message);
+        (err as any).errorDetails = {
+          type: e.sessionId ? 'server' : 'network',
+          message: e.message,
+          originalError: e.original,
+          retryable: e.retryable,
+        } satisfies ProcessingError;
+        throw err;
       }
-    }
-
-    job.finish();
-    return result;
-    } catch (error) {
-      job.finish((error as any)?.errorDetails?.originalError || (error instanceof Error ? error.message : String(error)));
-      throw error;
+      throw e;
     }
 
   } catch (error) {
+    if (error instanceof UploadCancelledError) throw error;
     console.error('API processing failed:', error);
     
     // If the error already has errorDetails, preserve them

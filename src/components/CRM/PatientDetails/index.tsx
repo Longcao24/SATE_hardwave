@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { withdrawUpload, cancelUpload } from '@/services/DataService/serverProcessing';
 import { useParams, useNavigate } from 'react-router-dom';
 import { processAudioFile, deleteRecording, updateRecordingPatient, type IssueCounts, type ProcessingError } from '@/services/dataService';
 import { recordingMetadataService, type PendingRecordingData, type RecordingMetadata } from '@/services/recordingMetadataService';
@@ -226,6 +227,8 @@ const PatientDetails: React.FC = () => {
       ...pendingRecordingData,
       transcriptData,
       errorCounts,
+      // The backend already created the recording; Save must name it, never insert another.
+      recordingId: pendingRecordingData.recordingId ?? (window as any).latestProcessingResults?.recordingId,
       isProcessingComplete: true
     };
     
@@ -309,6 +312,12 @@ const PatientDetails: React.FC = () => {
     if (pendingRecordingData?.audioFile) {
       // console.log('🗑️ Cleaning up cached audio file on cancel...');
       audioStorageService.clearCachedAudio(pendingRecordingData.audioFile);
+      // Cancel withdraws the upload from the backend (its session and any recording made from
+      // it). A FAILED one is kept: it is alerted, and the team can retry it (serverProcessing.ts).
+      if (!pendingRecordingData.processingFailed) {
+        cancelUpload(pendingRecordingData.audioFile);
+        if (pendingRecordingData.sessionId) void withdrawUpload(pendingRecordingData.sessionId);
+      }
     }
 
     setShowMetadataForm(false);
@@ -368,7 +377,7 @@ const PatientDetails: React.FC = () => {
 
         // Process audio file with API (30-100%)
         console.log('Starting audio processing for patient:', patientId || id);
-        const { data: processedData, errorCounts } = await processAudioFile(
+        const { data: processedData, errorCounts, recordingId } = await processAudioFile(
           file,
           'cuda',
           0.25,
@@ -377,7 +386,11 @@ const PatientDetails: React.FC = () => {
             setProcessingProgress(mappedProgress);
           },
           () => setShowTimeoutWarning(true),
-          'patient-upload'
+          {
+            patientId: targetPatientId,
+            source: 'patient-upload',
+            onSession: (sessionId) => setPendingRecordingData(prev => prev ? { ...prev, sessionId } : prev),
+          }
         );
 
         console.log('API processing complete, updating form data...');
@@ -392,6 +405,7 @@ const PatientDetails: React.FC = () => {
         window.latestProcessingResults = {
           transcriptData: processedData,
           errorCounts: errorCounts,
+          recordingId,
           timestamp: Date.now()
         };
 
@@ -407,6 +421,7 @@ const PatientDetails: React.FC = () => {
             ...prev,
             transcriptData: processedData,
             errorCounts: errorCounts,
+            recordingId,
             isProcessingComplete: true
           };
 
@@ -429,6 +444,8 @@ const PatientDetails: React.FC = () => {
         // }
 
       } catch (error) {
+        // Cancelled by the clinician (serverProcessing.ts): nothing to report.
+        if ((error as any)?.cancelled) return;
         console.error('Failed to process and save audio:', error);
         
         // Check if this is a categorized error

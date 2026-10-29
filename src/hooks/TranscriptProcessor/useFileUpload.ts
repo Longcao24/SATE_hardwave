@@ -97,7 +97,7 @@ export function useFileUpload(deps: FileUploadDeps) {
 
         // Process audio file with API
         // API processing takes 30-100% of total progress
-        const { data: processedData, errorCounts } = await processAudioFile(
+        const processed = await processAudioFile(
           file,
           'cuda',
           0.25,
@@ -106,8 +106,13 @@ export function useFileUpload(deps: FileUploadDeps) {
             const mappedProgress = 30 + Math.round(apiProgress * 0.7);
             deps.setProcessingProgress(mappedProgress);
           },
-          () => deps.setShowTimeoutWarning(true)
+          () => deps.setShowTimeoutWarning(true),
+          {
+            patientId,
+            onSession: (sessionId) => deps.setPendingRecordingData((prev) => prev ? { ...prev, sessionId } : prev),
+          }
         );
+        const { data: processedData, errorCounts, recordingId } = processed;
 
         // Normalize segments to ensure all pauses have proper index field
         const normalizedSegments = normalizeSegments(processedData.segments);
@@ -117,6 +122,7 @@ export function useFileUpload(deps: FileUploadDeps) {
         (window as any).latestProcessingResults = {
           transcriptData: normalizedData,
           errorCounts: errorCounts,
+          recordingId,
           timestamp: Date.now()
         };
 
@@ -150,6 +156,7 @@ export function useFileUpload(deps: FileUploadDeps) {
             ...prev,
             transcriptData: normalizedData,
             errorCounts: errorCounts,
+            recordingId,
             isProcessingComplete: true
           };
 
@@ -162,7 +169,9 @@ export function useFileUpload(deps: FileUploadDeps) {
         return cachedUrl; // Return the cached URL
 
       } catch (error) {
-        
+        // Cancelled by the clinician (serverProcessing.ts): nothing to report.
+        if ((error as any)?.cancelled) return null;
+
         // Check if this is a categorized error
         const errorDetails = (error as any).errorDetails as ProcessingError;
         if (errorDetails) {

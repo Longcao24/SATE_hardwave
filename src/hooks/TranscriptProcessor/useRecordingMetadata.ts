@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { withdrawUpload, cancelUpload } from '@/services/DataService/serverProcessing';
 import { useNavigate } from 'react-router-dom';
 import { recordingMetadataService } from '@/services/recordingMetadataService';
 import { audioStorageService } from '@/services/audioStorageService';
@@ -63,6 +64,8 @@ export function useRecordingMetadata(user: User | null) {
       ...pendingRecordingData,
       transcriptData,
       errorCounts,
+      // The backend already created the recording; Save must name it, never insert another.
+      recordingId: pendingRecordingData.recordingId ?? (window as any).latestProcessingResults?.recordingId,
       isProcessingComplete: true
     };
     
@@ -188,8 +191,14 @@ export function useRecordingMetadata(user: User | null) {
     if (pendingRecordingData?.audioFile) {
       console.log('🗑️ Cleaning up cached audio file on cancel...');
       audioStorageService.clearCachedAudio(pendingRecordingData.audioFile);
+      // Cancel withdraws the upload from the backend (its session and any recording made from
+      // it). A FAILED one is kept: it is alerted, and the team can retry it (serverProcessing.ts).
+      if (!pendingRecordingData.processingFailed) {
+        cancelUpload(pendingRecordingData.audioFile);
+        if (pendingRecordingData.sessionId) void withdrawUpload(pendingRecordingData.sessionId);
+      }
     }
-    
+
     setShowMetadataForm(false);
     setPendingRecordingData(null);
     setFormMetadata(null);
