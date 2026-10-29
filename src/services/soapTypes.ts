@@ -17,6 +17,16 @@ export interface SoapSegment {
   text: string;
 }
 
+/**
+ * One trial the clinician scored by listening to a transcript segment ("Score trials" mode).
+ * Keyed by the segment's `start` (seconds) — the segment text is NOT copied here, so the
+ * stored inputs still hold no transcript (see SoapTranscriptFingerprint).
+ */
+export interface SoapTrialMark {
+  start: number;
+  mark: 'correct' | 'incorrect';
+}
+
 /** One row of clinician-entered performance data: what was targeted and how it went. */
 export interface SoapPerformanceRow {
   target: string;
@@ -27,6 +37,13 @@ export interface SoapPerformanceRow {
   /** Cueing level as the clinician recorded it ("independent", "min verbal", …). */
   cueing?: string;
   notes?: string;
+  /**
+   * Present when the counts came from scoring trials on the transcript. The server REJECTS a row
+   * whose correct/total differ from soapTrialCounts(trials): two numbers that disagree about one
+   * session cannot both be documentation. At most SOAP_LIMITS.maxTrialMarks marks. Only the
+   * counts reach the model; the per-trial list is kept with the inputs so the form can reopen it.
+   */
+  trials?: SoapTrialMark[];
 }
 
 /** One SATE-computed metric (calculateSpeechAnalysis) — automated, not clinician-verified. */
@@ -89,6 +106,51 @@ export interface SoapTranscriptFingerprint {
 /** SoapInputs as stored and returned: `transcript` is always [] — see SoapTranscriptFingerprint. */
 export interface SoapStoredInputs extends SoapInputs {
   transcript_fingerprint?: SoapTranscriptFingerprint;
+}
+
+/**
+ * A clinician's standing SOAP inputs for one patient, so they are not retyped every session.
+ * Stored in the SOAP Worker's D1 per (clinician, patient) — never in Supabase. `label` is the
+ * patient's code / initials only, never a name (same rule and cap as SoapPatientMeta.label).
+ */
+export interface SoapPatientDefaults {
+  goals?: string;
+  treatment_plan?: string;
+  setting?: string;
+  label?: string;
+}
+
+/** The stored defaults as returned. */
+export interface SoapPatientDefaultsRecord extends SoapPatientDefaults {
+  updated_at: string;
+}
+
+/**
+ * The INPUT goals / treatment plan / setting / label of this clinician's newest SAVED note for
+ * this patient (edits not null) — a fallback prefill when there are no defaults. Re-checked like
+ * previous notes: only if that recording is still visible and still this patient's.
+ */
+export interface SoapLastReviewed extends SoapPatientDefaults {
+  recording_id: string;
+  version: number;
+  /** YYYY-MM-DD, or "Not documented". */
+  session_date: string;
+  edited_at: string | null;
+}
+
+/** GET /v1/soap/patients/:patient_id/defaults (and the PUT's response). */
+export interface SoapPatientDefaultsResponse {
+  /** null = this clinician has no defaults for this patient yet. */
+  defaults: SoapPatientDefaultsRecord | null;
+  last_reviewed: SoapLastReviewed | null;
+}
+
+/**
+ * PUT /v1/soap/patients/:patient_id/defaults body. REPLACES the stored defaults: a field left
+ * out or blank is cleared, and all four blank deletes the row (back to "no defaults").
+ */
+export interface SoapPatientDefaultsRequest {
+  defaults: SoapPatientDefaults;
 }
 
 /** POST /v1/soap/:recording_id/generate (and /preview) body. */
@@ -177,6 +239,12 @@ export interface SoapListResponse {
   latest: SoapVersion | null;
   /** Newest first. */
   versions: SoapVersionSummary[];
+  /**
+   * True when `latest` was drafted while this recording belonged to a DIFFERENT patient than it
+   * does now (it was reassigned since). Its goals / plan / setting / Patient ID describe that
+   * other patient, so a client must not carry them into this patient's form or defaults.
+   */
+  latest_patient_changed?: boolean;
 }
 
 /** POST /v1/soap/:recording_id/preview — what WOULD be sent, without calling the model. */
@@ -207,6 +275,10 @@ export const SOAP_LIMITS = {
   maxPerformanceRows: 50,
   maxMetrics: 40,
   maxLabelChars: 24,
+  /** Scored trials per performance row. */
+  maxTrialMarks: 500,
+  /** SoapPatientDefaults.setting (same as SoapPatientMeta.setting). */
+  maxSettingChars: 200,
   /** Total characters of the model's user message (transcript included). */
   maxPromptChars: 320_000,
   generationsPerHour: 30,
@@ -229,6 +301,13 @@ export function soapTranscriptFingerprint(t: SoapSegment[]): SoapTranscriptFinge
     h = Math.imul(h, 0x01000193) >>> 0;
   }
   return { fnv1a: h.toString(16).padStart(8, '0'), segments: t.length };
+}
+
+/** The counts a list of scored trials stands for: total = marked trials, correct = ✓ marks. */
+export function soapTrialCounts(trials: SoapTrialMark[]): { correct: number; total: number } {
+  let correct = 0;
+  for (const t of trials) if (t.mark === 'correct') correct++;
+  return { correct, total: trials.length };
 }
 
 const SECTIONS: SoapSection[] = ['subjective', 'objective', 'assessment', 'plan'];

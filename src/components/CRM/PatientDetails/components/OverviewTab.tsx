@@ -6,6 +6,7 @@ import { Calendar, Clock, Activity, Plus, FileAudio, ArrowRight } from 'lucide-r
 import { type Patient } from '@/services/patientService';
 import { type RecordingStats } from '../types';
 import { getAge, formatDate, formatDuration } from '../utils';
+import { SoapDefaultsCard } from './SoapDefaultsCard';
 
 interface OverviewTabProps {
   patient: Patient;
@@ -105,6 +106,9 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
           <p className="whitespace-pre-wrap">{patient.notes}</p>
         </Card>
       )}
+
+      {/* Only rendered for a patient that exists (this page shows nothing else without one). */}
+      {patient.id && <SoapDefaultsCard key={patient.id} patientId={patient.id} />}
 
       {/* Recent Reports Section */}
       <Card className="p-6 md:col-span-2">

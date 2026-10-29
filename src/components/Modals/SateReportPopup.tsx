@@ -531,11 +531,13 @@ interface SateReportPopupProps {
   soapTab?: boolean;
   /** The audio's length in seconds — prefills the SOAP note's duration. */
   audioDuration?: number;
+  /** The report player's own segment playback — the SOAP tab's "Score trials" ▶ reuses it. */
+  onPlaySegment?: (startTime: number, endTime: number) => Promise<void>;
 }
 
 export const SateReportPopup: React.FC<SateReportPopupProps> = ({
   isOpen, onClose, recordingId, transcriptData, readOnly = false, initialReport, allowGenerate = false, saveReport,
-  soapTab = false, audioDuration,
+  soapTab = false, audioDuration, onPlaySegment,
 }) => {
   const [tab, setTab] = React.useState<'report' | 'soap'>('report');
   // Mounted on first visit and then only hidden, so switching tabs keeps a half-filled SOAP form.
@@ -1072,7 +1074,8 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
         {soapTab && soapSeen && (
           <div className={tab === 'soap' ? 'flex-1 min-h-0 flex flex-col' : 'hidden'}>
             <SoapNotePopup embedded isOpen onClose={onClose} recordingId={recordingId}
-              transcriptData={transcriptData} audioDuration={audioDuration} onDirtyChange={setSoapDirty} />
+              transcriptData={transcriptData} audioDuration={audioDuration} onDirtyChange={setSoapDirty}
+              onPlaySegment={onPlaySegment} />
           </div>
         )}
 

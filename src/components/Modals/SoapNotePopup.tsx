@@ -1,7 +1,7 @@
 import React from 'react';
 import {
   X, Sparkles, Loader2, AlertTriangle, Pencil, Undo2, Check, Copy, Printer,
-  Plus, Trash2, ClipboardList, ShieldAlert, History, SlidersHorizontal,
+  Plus, Trash2, ClipboardList, ShieldAlert, History, SlidersHorizontal, ListChecks, Play, Eraser,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { type Segment } from '@/services/dataService';
@@ -9,8 +9,10 @@ import { computeSampleMetrics } from '@/services/lsaMetricsService';
 import {
   SoapApiError,
   generateSoap,
+  loadPatientDefaults,
   loadSoap,
   loadSoapVersion,
+  savePatientDefaults,
   saveSoapEdits,
 } from '@/services/soapService';
 import {
@@ -20,14 +22,18 @@ import {
   mergeSoapEdits,
   soapToText,
   soapTranscriptFingerprint,
+  soapTrialCounts,
   type SoapEdits,
   type SoapInputs,
   type SoapMetric,
   type SoapNote,
+  type SoapPatientDefaults,
+  type SoapPatientDefaultsResponse,
   type SoapPerformanceRow,
   type SoapSection,
   type SoapSegment,
   type SoapSessionInformation,
+  type SoapTrialMark,
   type SoapVersion,
   type SoapVersionSummary,
 } from '@/services/soapTypes';
@@ -65,6 +71,12 @@ interface SoapNotePopupProps {
    */
   embedded?: boolean;
   onDirtyChange?: (dirty: boolean) => void;
+  /**
+   * The report player's segment playback (useAudioPlayer.playSegment): "Score trials" ▶ plays
+   * through the SAME audio element as the transcript view, so there is one player, one signed URL
+   * (and its refresh-on-expiry), and two sources can never talk over each other. Absent → no ▶.
+   */
+  onPlaySegment?: (startTime: number, endTime: number) => Promise<void>;
 }
 
 interface PerfRowDraft {
@@ -73,7 +85,22 @@ interface PerfRowDraft {
   total: string;
   cueing: string;
   notes: string;
+  /**
+   * Set while the counts come from scoring trials on the transcript: correct/total are then
+   * DERIVED from these marks (read-only in the table), because the Worker rejects a row whose
+   * counts and marks disagree. undefined = counts typed by hand.
+   */
+  trials?: SoapTrialMark[];
 }
+
+/** The form fields a patient's SOAP defaults / last reviewed note can prefill. */
+type PrefillKey = 'goals' | 'treatmentPlan' | 'setting' | 'label';
+const PREFILL_KEYS: Array<{ key: PrefillKey; field: keyof SoapPatientDefaults }> = [
+  { key: 'goals', field: 'goals' },
+  { key: 'treatmentPlan', field: 'treatment_plan' },
+  { key: 'setting', field: 'setting' },
+  { key: 'label', field: 'label' },
+];
 
 interface FormState {
   label: string;
@@ -300,6 +327,18 @@ function rowProblem(r: PerfRowDraft): string | null {
   return null;
 }
 
+/** A row's counts as its marks stand: total = marked, correct = ✓. No marks = back to typed counts. */
+function withTrials(trials: SoapTrialMark[]): Pick<PerfRowDraft, 'trials' | 'correct' | 'total'> {
+  if (!trials.length) return { trials: undefined, correct: '', total: '' };
+  const c = soapTrialCounts(trials);
+  return { trials, correct: String(c.correct), total: String(c.total) };
+}
+
+const fmtClock = (sec: number): string => {
+  const s = Math.max(0, Math.floor(sec));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+};
+
 function formFromInputs(inputs: SoapInputs, base: FormState): FormState {
   const p = inputs.patient || {};
   return {
@@ -320,6 +359,9 @@ function formFromInputs(inputs: SoapInputs, base: FormState): FormState {
         total: r.total != null ? String(r.total) : '',
         cueing: r.cueing || '',
         notes: r.notes || '',
+        // Reopening a scored row reopens its marks; the counts are re-derived from them so the
+        // table can never show numbers the marks do not add up to.
+        ...(r.trials && r.trials.length ? withTrials(r.trials) : {}),
       }))
       : [emptyRow()],
     includeMetrics: !!(inputs.sate_metrics && inputs.sate_metrics.length),
@@ -327,10 +369,185 @@ function formFromInputs(inputs: SoapInputs, base: FormState): FormState {
   };
 }
 
+// --- "Score trials" ------------------------------------------------------------
+// Clinicians used to replay the session and tally trials on paper, then type two numbers. Here
+// they mark the trials on the transcript itself — the one on screen, edits included — and the
+// row's correct/total ARE the marks. A mark is keyed by the segment's start time, not its text:
+// the stored inputs must keep holding no transcript (see SoapTranscriptFingerprint).
+
+interface TrialScorerProps {
+  target: string;
+  segments: SoapSegment[];
+  speakers: string[];
+  trials: SoapTrialMark[];
+  onChange: (trials: SoapTrialMark[]) => void;
+  onClose: () => void;
+  onPlaySegment?: (startTime: number, endTime: number) => Promise<void>;
+}
+
+const TrialScorer: React.FC<TrialScorerProps> = ({ target, segments, speakers, trials, onChange, onClose, onPlaySegment }) => {
+  // The child is who is being scored in almost every session; any non-adult speaker is the next
+  // best guess, and with neither the clinician starts from everyone ('' = all speakers).
+  const [speaker, setSpeaker] = React.useState(
+    () => speakers.find(isChildSpeaker) || speakers.find((s) => !/^adult/i.test(s) && s !== 'Unknown') || '');
+  const [cursor, setCursor] = React.useState(0);
+  const boxRef = React.useRef<HTMLDivElement>(null);
+  const rowRefs = React.useRef<Array<HTMLLIElement | null>>([]);
+
+  const list = React.useMemo(
+    () => segments.filter((s) => !speaker || (s.speaker || 'Unknown') === speaker), [segments, speaker]);
+  const marks = React.useMemo(() => new Map(trials.map((t) => [t.start, t.mark])), [trials]);
+  // Marks on segments the transcript no longer has (edited or excluded since) still count — they
+  // may have been real trials — but they set the reported accuracy, so they are LISTED below with
+  // their own clear buttons. Otherwise an utterance the clinician deliberately excluded could keep
+  // moving the number, and the only way out would be dropping every mark.
+  const orphanMarks = React.useMemo(() => {
+    const starts = new Set(segments.map((s) => s.start));
+    return trials.filter((t) => !starts.has(t.start));
+  }, [segments, trials]);
+  const orphans = orphanMarks.length;
+  const dropOrphans = () => {
+    const starts = new Set(segments.map((s) => s.start));
+    onChange(trials.filter((t) => starts.has(t.start)));
+  };
+  const clearOrphan = (start: number) => onChange(trials.filter((t) => t.start !== start));
+  const { correct, total } = soapTrialCounts(trials);
+  const atCap = trials.length >= SOAP_LIMITS.maxTrialMarks;
+
+  React.useEffect(() => { boxRef.current?.focus(); }, []);
+  React.useEffect(() => { setCursor((c) => Math.min(c, Math.max(0, list.length - 1))); }, [list.length]);
+  React.useEffect(() => { rowRefs.current[cursor]?.scrollIntoView({ block: 'nearest' }); }, [cursor]);
+
+  const markAt = (seg: SoapSegment | undefined, mark: SoapTrialMark['mark'] | null) => {
+    if (!seg) return;
+    const had = marks.get(seg.start);
+    if (had === mark || (had === undefined && mark === null)) return;
+    if (mark && had === undefined && atCap) return;
+    const rest = trials.filter((t) => t.start !== seg.start);
+    onChange(mark ? [...rest, { start: seg.start, mark }].sort((a, b) => a.start - b.start) : rest);
+  };
+
+  const play = (seg: SoapSegment | undefined) => {
+    if (seg && onPlaySegment) void onPlaySegment(seg.start, seg.end);
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    const tag = (e.target as HTMLElement).tagName;
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || e.metaKey || e.ctrlKey || e.altKey) return;
+    const seg = list[cursor];
+    const step = (d: number) => setCursor((c) => Math.max(0, Math.min(list.length - 1, c + d)));
+    switch (e.key) {
+      case 'j': case 'ArrowDown': step(1); break;
+      case 'k': case 'ArrowUp': step(-1); break;
+      // Marking moves on, so a run of trials is 1 1 2 1 … without touching j.
+      case '1': markAt(seg, 'correct'); step(1); break;
+      case '2': markAt(seg, 'incorrect'); step(1); break;
+      case '0': markAt(seg, null); break;
+      case 'Enter': case 'p': play(seg); break;
+      case 'Escape': onClose(); break;
+      default: return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const btn = 'p-1 rounded border text-xs disabled:opacity-40';
+  return (
+    <div ref={boxRef} tabIndex={0} onKeyDown={onKeyDown}
+      className="mt-2 p-3 bg-white border border-teal-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mb-2">
+        <span className="text-sm font-medium text-gray-800">
+          Scoring trials: <span className="text-teal-800">{target.trim() || 'untitled target'}</span>
+        </span>
+        <span className="text-sm tabular-nums text-gray-700">
+          {correct} / {total} correct{total > 0 && ` (${((correct / total) * 100).toFixed(1)}%)`}
+        </span>
+        <label className="inline-flex items-center gap-1 text-xs text-gray-600">
+          Speaker
+          <select value={speaker} onChange={(e) => { setSpeaker(e.target.value); setCursor(0); }}
+            className="px-1.5 py-1 text-xs border border-gray-300 rounded-md bg-white">
+            <option value="">All speakers</option>
+            {speakers.map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </label>
+        <button onClick={onClose} className="ml-auto px-3 py-1 text-xs font-medium text-white bg-teal-700 rounded-md hover:bg-teal-800">Done</button>
+      </div>
+      <p className="mb-2 text-[11px] text-gray-500">
+        j / k move · 1 correct · 2 incorrect · 0 clear · Enter plays · Esc closes. Only marked utterances count:
+        total = marked, correct = ✓.
+        {orphans > 0 && <span className="text-amber-700"> {orphans} mark{orphans === 1 ? ' is' : 's are'} on utterances no longer in the transcript (still counted — listed below).</span>}
+        {atCap && <span className="text-amber-700"> Limit of {SOAP_LIMITS.maxTrialMarks} marks reached.</span>}
+      </p>
+      {list.length === 0 ? (
+        <p className="text-sm text-gray-500 italic">No utterances for this speaker.</p>
+      ) : (
+        <ul className="max-h-72 overflow-y-auto divide-y divide-gray-100 border border-gray-200 rounded-md">
+          {list.map((s, i) => {
+            const m = marks.get(s.start);
+            return (
+              <li key={`${s.start}-${i}`} ref={(el) => { rowRefs.current[i] = el; }} onClick={() => setCursor(i)}
+                className={`flex items-start gap-2 px-2 py-1.5 text-sm cursor-pointer ${i === cursor ? 'bg-teal-50' : ''} ${m === 'correct' ? 'border-l-4 border-l-green-500' : m === 'incorrect' ? 'border-l-4 border-l-red-500' : 'border-l-4 border-l-transparent'}`}>
+                <span className="w-12 flex-shrink-0 pt-0.5 text-xs tabular-nums text-gray-500">{fmtClock(s.start)}</span>
+                {!speaker && <span className="w-16 flex-shrink-0 pt-0.5 text-xs text-gray-500 truncate">{s.speaker || 'Unknown'}</span>}
+                <span className="flex-1 min-w-0 text-gray-800">{s.text}</span>
+                <span className="flex flex-shrink-0 items-center gap-1">
+                  {onPlaySegment && (
+                    <button aria-label="Play this utterance" title="Play (Enter)" onClick={(e) => { e.stopPropagation(); setCursor(i); play(s); }}
+                      className={`${btn} text-gray-600 border-gray-200 hover:bg-gray-100`}><Play className="w-3.5 h-3.5" /></button>
+                  )}
+                  <button aria-label="Correct" title="Correct (1)" disabled={m === undefined && atCap}
+                    onClick={(e) => { e.stopPropagation(); setCursor(i); markAt(s, 'correct'); }}
+                    className={`${btn} ${m === 'correct' ? 'text-white bg-green-600 border-green-600' : 'text-green-700 border-green-300 hover:bg-green-50'}`}>
+                    <Check className="w-3.5 h-3.5" />
+                  </button>
+                  <button aria-label="Incorrect" title="Incorrect (2)" disabled={m === undefined && atCap}
+                    onClick={(e) => { e.stopPropagation(); setCursor(i); markAt(s, 'incorrect'); }}
+                    className={`${btn} ${m === 'incorrect' ? 'text-white bg-red-600 border-red-600' : 'text-red-700 border-red-300 hover:bg-red-50'}`}>
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                  <button aria-label="Clear mark" title="Clear (0)" disabled={m === undefined}
+                    onClick={(e) => { e.stopPropagation(); setCursor(i); markAt(s, null); }}
+                    className={`${btn} text-gray-500 border-gray-200 hover:bg-gray-100`}>
+                    <Eraser className="w-3.5 h-3.5" />
+                  </button>
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {orphans > 0 && (
+        <div className="mt-2 p-2 border border-amber-200 bg-amber-50 rounded-md">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-xs font-medium text-amber-900">
+              Counted marks not in the transcript any more ({orphans})
+            </span>
+            <button onClick={dropOrphans} className="ml-auto text-xs text-amber-900 underline hover:text-amber-950">
+              Drop {orphans === 1 ? 'it' : `all ${orphans}`}
+            </button>
+          </div>
+          <ul className="flex flex-wrap gap-1.5">
+            {orphanMarks.map((t) => (
+              <li key={t.start} className="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs bg-white border border-amber-200 rounded">
+                <span className="tabular-nums text-gray-600">{fmtClock(t.start)}</span>
+                {t.mark === 'correct'
+                  ? <Check className="w-3 h-3 text-green-700" aria-label="correct" />
+                  : <X className="w-3 h-3 text-red-700" aria-label="incorrect" />}
+                <button aria-label="Clear this mark" title="Clear this mark" onClick={() => clearOrphan(t.start)}
+                  className="text-gray-500 hover:text-gray-800"><Eraser className="w-3 h-3" /></button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+};
+
 // --- component -----------------------------------------------------------------
 
 export const SoapNotePopup: React.FC<SoapNotePopupProps> = ({
-  isOpen, onClose, recordingId, transcriptData, audioDuration, embedded = false, onDirtyChange,
+  isOpen, onClose, recordingId, transcriptData, audioDuration, embedded = false, onDirtyChange, onPlaySegment,
 }) => {
   const [form, setForm] = React.useState<FormState>(emptyForm);
   const [showForm, setShowForm] = React.useState(true);
@@ -350,6 +567,18 @@ export const SoapNotePopup: React.FC<SoapNotePopupProps> = ({
   const [confirmClose, setConfirmClose] = React.useState(false);
   const [flash, setFlash] = React.useState('');
   const [switchingVersion, setSwitchingVersion] = React.useState(false);
+  // The recording's patient (null = standalone: no defaults, so none of that UI is shown).
+  const [patientId, setPatientId] = React.useState<string | null>(null);
+  const [patientDefaults, setPatientDefaults] = React.useState<SoapPatientDefaultsResponse | null>(null);
+  // Where each prefilled field came from, shown under it until the clinician changes or clears it:
+  // a value they did not type must say so, or a stale goal from months ago reads as today's.
+  const [prefillFrom, setPrefillFrom] = React.useState<Partial<Record<PrefillKey, string>>>({});
+  const [saveAsDefaults, setSaveAsDefaults] = React.useState(false);
+  // The saved note was drafted while this recording belonged to another patient: its goals, plan,
+  // setting and code were left out of the form, and the clinician is told why.
+  const [patientChanged, setPatientChanged] = React.useState(false);
+  // "Score trials": which performance row is being scored, the speaker filter and the cursor.
+  const [scoringRow, setScoringRow] = React.useState<number | null>(null);
 
   const transcript = React.useMemo(() => buildTranscript(transcriptData), [transcriptData]);
 
@@ -403,6 +632,12 @@ export const SoapNotePopup: React.FC<SoapNotePopupProps> = ({
     setConfirmClose(false);
     setEditing(null);
     setShowForm(true);
+    setPatientId(null);
+    setPatientDefaults(null);
+    setPrefillFrom({});
+    setSaveAsDefaults(false);
+    setPatientChanged(false);
+    setScoringRow(null);
 
     // Duration: the loaded audio > recordings.duration (applied in the prefill below) > the
     // transcript's last timestamp. The last one is only a floor — trailing silence is not
@@ -416,38 +651,73 @@ export const SoapNotePopup: React.FC<SoapNotePopupProps> = ({
     setForm(base);
     if (!recordingId) return;
 
-    // What the app knows: the session date, the length, the patient's age and active goals.
+    // What the app knows: the session date, the length, the patient's age and active goals, and
+    // this clinician's SOAP defaults for the patient (with their last reviewed note's inputs).
     // Only date_of_birth is read from the patient record — never the name.
-    const prefill = (async (): Promise<FormState> => {
+    type Prefill = { form: FormState; pid: string | null; activeGoals: string; defaults: SoapPatientDefaultsResponse | null };
+    const prefill = (async (): Promise<Prefill> => {
       const next = { ...base };
+      let activeGoals = '';
+      let defaults: SoapPatientDefaultsResponse | null = null;
       const { data: rec } = await supabase
         .from('recordings').select('patient_id, created_at, duration').eq('id', recordingId).maybeSingle();
       const row = rec as { patient_id?: string | null; created_at?: string; duration?: number | null } | null;
       if (row?.created_at) next.sessionDate = localDate(row.created_at);
       if (!haveAudio && row?.duration && row.duration > 0) next.duration = fmtDuration(row.duration);
-      const pid = row?.patient_id;
-      if (pid && /^[0-9a-f-]{36}$/i.test(pid)) {
-        const [{ data: pat }, { data: goals }] = await Promise.all([
+      const pid = row?.patient_id && /^[0-9a-f-]{36}$/i.test(row.patient_id) ? row.patient_id : null;
+      if (pid) {
+        const [{ data: pat }, { data: goals }, d] = await Promise.all([
           supabase.from('patients').select('date_of_birth').eq('id', pid).maybeSingle(),
           supabase.from('patient_goals').select('goal_category, goal_description, status').eq('patient_id', pid),
+          // Best-effort: defaults only save typing, so a Worker hiccup must not cost the form.
+          loadPatientDefaults(pid).catch(() => null),
         ]);
+        defaults = d;
         const dob = (pat as { date_of_birth?: string | null } | null)?.date_of_birth;
         if (dob) next.age = ageOn(dob, next.sessionDate);
         const active = ((goals as Array<{ goal_category?: string; goal_description?: string; status?: string }> | null) || [])
           .filter((g) => g.status === 'active' && g.goal_description?.trim());
         if (active.length) {
-          next.goals = active.map((g) => `- ${g.goal_category ? `[${g.goal_category}] ` : ''}${g.goal_description!.trim()}`).join('\n');
+          activeGoals = active.map((g) => `- ${g.goal_category ? `[${g.goal_category}] ` : ''}${g.goal_description!.trim()}`).join('\n');
         }
       }
-      return next;
-    })().catch(() => base);
+      return { form: next, pid, activeGoals, defaults };
+    })().catch((): Prefill => ({ form: base, pid: null, activeGoals: '', defaults: null }));
+
+    /**
+     * Fill only EMPTY fields, never one that already holds the clinician's words: patient defaults
+     * > the last reviewed note's inputs > (goals only) the patient's active goals > nothing.
+     */
+    const applyPrefill = (f: FormState, pre: Prefill): FormState => {
+      const out = { ...f };
+      const from: Partial<Record<PrefillKey, string>> = {};
+      const d = pre.defaults?.defaults, lr = pre.defaults?.last_reviewed;
+      for (const { key, field } of PREFILL_KEYS) {
+        if (out[key].trim()) continue;
+        const dv = d?.[field]?.trim(), lv = lr?.[field]?.trim();
+        if (dv) { out[key] = dv; from[key] = 'from patient defaults'; }
+        else if (lv && lr) {
+          out[key] = lv;
+          from[key] = lr.session_date && lr.session_date !== NOT_DOCUMENTED
+            ? `from the reviewed note of ${lr.session_date}` : 'from the last reviewed note';
+        } else if (key === 'goals' && pre.activeGoals) { out.goals = pre.activeGoals; from.goals = "from the patient's active goals"; }
+      }
+      if (out.label.length > SOAP_LIMITS.maxLabelChars) out.label = out.label.slice(0, SOAP_LIMITS.maxLabelChars);
+      setPrefillFrom(from);
+      setPatientId(pre.pid);
+      setPatientDefaults(pre.defaults);
+      // Default ON only when this patient has no defaults yet: the first session's goals become
+      // the standing ones, and an existing set is not overwritten unless the clinician asks.
+      setSaveAsDefaults(!!pre.pid && !!pre.defaults && !pre.defaults.defaults);
+      return out;
+    };
 
     setLoadingSaved(true);
     Promise.all([prefill, loadSoap(recordingId).then((r) => ({ ok: true as const, r }), (e) => ({ ok: false as const, e }))])
       .then(([pre, saved]) => {
         if (cancelled) return;
         if (!saved.ok) {
-          setForm(pre);
+          setForm(applyPrefill(pre.form, pre));
           setLoadError(errorText(saved.e));
           return;
         }
@@ -456,10 +726,18 @@ export const SoapNotePopup: React.FC<SoapNotePopupProps> = ({
           // The inputs the latest note was actually built from win over the prefill: they are
           // what the clinician entered and what the draft describes.
           setCurrent(saved.r.latest);
-          setForm(formFromInputs(saved.r.latest.inputs, pre));
+          const loaded = formFromInputs(saved.r.latest.inputs, pre.form);
+          if (saved.r.latest_patient_changed) {
+            // Drafted under the patient this recording USED to belong to: those goals, plan,
+            // setting and code describe someone else. Left blank, they are filled (with hints) from
+            // THIS patient's defaults / reviewed note — and so can never be saved as its defaults.
+            loaded.goals = ''; loaded.treatmentPlan = ''; loaded.setting = ''; loaded.label = '';
+            setPatientChanged(true);
+          }
+          setForm(applyPrefill(loaded, pre));
           setShowForm(false);
         } else {
-          setForm(pre);
+          setForm(applyPrefill(pre.form, pre));
         }
       })
       .finally(() => { if (!cancelled) setLoadingSaved(false); });
@@ -487,7 +765,11 @@ export const SoapNotePopup: React.FC<SoapNotePopupProps> = ({
 
   // --- inputs ---------------------------------------------------------------------------
 
-  const set = <K extends keyof FormState>(k: K, v: FormState[K]) => setForm((f) => ({ ...f, [k]: v }));
+  const set = <K extends keyof FormState>(k: K, v: FormState[K]) => {
+    setForm((f) => ({ ...f, [k]: v }));
+    // Once the clinician touches a prefilled field it is theirs; its "from …" hint would now lie.
+    if (k in prefillFrom) setPrefillFrom((p) => { const n = { ...p }; delete n[k as PrefillKey]; return n; });
+  };
   const setRow = (i: number, patch: Partial<PerfRowDraft>) =>
     setForm((f) => ({ ...f, performance: f.performance.map((r, j) => (j === i ? { ...r, ...patch } : r)) }));
 
@@ -499,14 +781,21 @@ export const SoapNotePopup: React.FC<SoapNotePopupProps> = ({
 
   const buildInputs = (): SoapInputs => {
     const performance: SoapPerformanceRow[] = form.performance
-      .filter((r) => r.target.trim() || r.correct.trim() || r.total.trim() || r.cueing.trim() || r.notes.trim())
-      .map((r) => ({
-        target: r.target.trim() || NOT_DOCUMENTED,
-        correct: toNum(r.correct),
-        total: toNum(r.total),
-        ...(r.cueing.trim() ? { cueing: r.cueing.trim() } : {}),
-        ...(r.notes.trim() ? { notes: r.notes.trim() } : {}),
-      }));
+      .filter((r) => r.target.trim() || r.correct.trim() || r.total.trim() || r.cueing.trim() || r.notes.trim() || r.trials?.length)
+      .map((r) => {
+        // A scored row sends counts computed from its marks at this moment — never the text
+        // boxes — so what the Worker checks (counts == marks) holds by construction.
+        const scored = r.trials && r.trials.length ? r.trials : null;
+        const counts = scored ? soapTrialCounts(scored) : null;
+        return {
+          target: r.target.trim() || NOT_DOCUMENTED,
+          correct: counts ? counts.correct : toNum(r.correct),
+          total: counts ? counts.total : toNum(r.total),
+          ...(r.cueing.trim() ? { cueing: r.cueing.trim() } : {}),
+          ...(r.notes.trim() ? { notes: r.notes.trim() } : {}),
+          ...(scored ? { trials: scored } : {}),
+        };
+      });
     const text = (v: string) => (v.trim() ? v.trim() : undefined);
     return {
       transcript,
@@ -534,6 +823,8 @@ export const SoapNotePopup: React.FC<SoapNotePopupProps> = ({
     if (durationBad) return 'Duration must be m:ss, h:mm:ss or a number of minutes.';
     if (rowProblems.some(Boolean)) return 'Fix the performance data first.';
     if (fieldTooLong) return `A text field is longer than ${SOAP_LIMITS.maxFieldChars.toLocaleString()} characters.`;
+    if (form.setting.length > SOAP_LIMITS.maxSettingChars) return `Setting is longer than ${SOAP_LIMITS.maxSettingChars} characters.`;
+    if (form.performance.some((r) => (r.trials?.length || 0) > SOAP_LIMITS.maxTrialMarks)) return `A row has more than ${SOAP_LIMITS.maxTrialMarks} scored trials.`;
     return '';
   })();
 
@@ -554,6 +845,29 @@ export const SoapNotePopup: React.FC<SoapNotePopupProps> = ({
     setError('');
     setSaveError('');
     setEditing(null);
+    // Saved alongside the draft, not before it: a defaults failure only costs future typing, so
+    // it is reported but never stands between the clinician and this session's note.
+    if (patientId && saveAsDefaults) {
+      const d: SoapPatientDefaults = {
+        goals: inputs.goals,
+        treatment_plan: inputs.treatment_plan,
+        setting: inputs.patient?.setting,
+        // The PUT replaces the whole record, so a blank Patient ID box keeps the stored code
+        // rather than silently clearing it.
+        label: inputs.patient?.label || patientDefaults?.defaults?.label || undefined,
+      };
+      savePatientDefaults(patientId, d).then(
+        (r) => {
+          setPatientDefaults(r);
+          // Saved once; ticking it again is a deliberate "overwrite my defaults".
+          setSaveAsDefaults(false);
+        },
+        // The defaults route's 404 is about the PATIENT (deleted or unshared while the tab was
+        // open), not the recording — errorText's wording would blame the wrong thing.
+        (e) => setSaveError(`Patient defaults not saved: ${e instanceof SoapApiError && e.code === 'not_found'
+          ? 'this patient is no longer visible to your account.' : errorText(e)}`),
+      );
+    }
     try {
       const v = await generateSoap(recordingId, inputs);
       setCurrent(v);
@@ -719,6 +1033,18 @@ export const SoapNotePopup: React.FC<SoapNotePopupProps> = ({
     <span className="text-xs font-medium text-gray-600">{t}{hint && <span className="font-normal text-gray-400"> · {hint}</span>}</span>
   );
 
+  // "from patient defaults" / "from the reviewed note of …" under a prefilled field, with a
+  // one-click clear — a value the clinician did not type must be easy to see and to drop.
+  const prefillHint = (k: PrefillKey) => (prefillFrom[k] ? (
+    <span className="flex items-center gap-1.5 text-[11px] text-teal-700">
+      {prefillFrom[k]}
+      <button type="button" onClick={(e) => { e.preventDefault(); set(k, ''); }}
+        className="inline-flex items-center gap-0.5 text-gray-500 hover:text-red-600" title="Clear this prefilled value">
+        <X className="w-3 h-3" /> clear
+      </button>
+    </span>
+  ) : null);
+
   const sectionTools = (key: NonNullable<typeof editing>) => (
     editing === key ? null : (
       <div className="flex items-center gap-1 print:hidden">
@@ -824,18 +1150,31 @@ export const SoapNotePopup: React.FC<SoapNotePopupProps> = ({
         <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden bg-gray-100">
           {/* ---- inputs ---- */}
           {showForm && (
-            <div className="px-5 py-4 bg-gray-50 border-b border-gray-200 space-y-3">
+            // Read-only until the saved note and the prefill have arrived: they are merged into the
+            // form when they land, and anything typed before then would be overwritten by them.
+            <fieldset disabled={loadingSaved} aria-busy={loadingSaved}
+              className="block min-w-0 px-5 py-4 bg-gray-50 border-b border-gray-200 space-y-3 disabled:opacity-60">
               <p className="text-xs text-gray-600">
                 Add what the transcript cannot show. Leave anything you do not have blank — the note will
                 say <b>Not documented</b> rather than guess. Prefilled values come from this recording and
                 the patient record; check them.
               </p>
+              {patientChanged && (
+                <p className="text-xs text-amber-800">
+                  The saved note was drafted when this recording belonged to another patient, so its goals, plan,
+                  setting and Patient ID were not carried over.
+                </p>
+              )}
+              {loadingSaved && (
+                <p className="flex items-center gap-1.5 text-xs text-gray-500"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading saved inputs and prefill…</p>
+              )}
               <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                 <label className="flex flex-col gap-1">
                   {label('Patient ID', 'code or initials')}
                   <input value={form.label} maxLength={SOAP_LIMITS.maxLabelChars} placeholder="Patient"
                     onChange={(e) => set('label', e.target.value)} className={inputCls}
                     title="An internal code or initials — never the patient's full name. Blank prints “Patient”." />
+                  {prefillHint('label')}
                 </label>
                 <label className="flex flex-col gap-1">
                   {label('Age')}
@@ -852,17 +1191,20 @@ export const SoapNotePopup: React.FC<SoapNotePopupProps> = ({
                 </label>
                 <label className="flex flex-col gap-1">
                   {label('Setting')}
-                  <input value={form.setting} placeholder="Outpatient clinic, individual" onChange={(e) => set('setting', e.target.value)} className={inputCls} />
+                  <input value={form.setting} maxLength={SOAP_LIMITS.maxSettingChars} placeholder="Outpatient clinic, individual" onChange={(e) => set('setting', e.target.value)} className={inputCls} />
+                  {prefillHint('setting')}
                 </label>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <label className="flex flex-col gap-1">
                   {label('Therapy goals', 'as written in the plan of care')}
                   <textarea rows={3} value={form.goals} onChange={(e) => set('goals', e.target.value)} className={inputCls} />
+                  {prefillHint('goals')}
                 </label>
                 <label className="flex flex-col gap-1">
                   {label('Existing treatment plan', 'next steps already documented')}
                   <textarea rows={3} value={form.treatmentPlan} onChange={(e) => set('treatmentPlan', e.target.value)} className={inputCls} />
+                  {prefillHint('treatmentPlan')}
                 </label>
                 <label className="flex flex-col gap-1">
                   {label('Clinician observations')}
@@ -901,20 +1243,42 @@ export const SoapNotePopup: React.FC<SoapNotePopupProps> = ({
                       {form.performance.map((r, i) => {
                         const c = toNum(r.correct), t = toNum(r.total);
                         const pct = !rowProblems[i] && c != null && t != null ? `${((c / t) * 100).toFixed(1)}%` : '—';
+                        // Scored rows: the counts ARE the marks, so the boxes are read-only.
+                        const scored = !!r.trials?.length;
+                        const countCls = `${inputCls} text-right ${scored ? 'bg-gray-50 text-gray-700' : ''}`;
+                        const countTitle = scored ? `Computed from ${r.trials!.length} scored trial${r.trials!.length === 1 ? '' : 's'}` : undefined;
                         return (
                           <React.Fragment key={i}>
                             <tr>
                               <td className="py-1 pr-2"><input value={r.target} placeholder="/s/ initial position, words" onChange={(e) => setRow(i, { target: e.target.value })} className={inputCls} /></td>
-                              <td className="py-1 pr-2"><input value={r.correct} inputMode="numeric" onChange={(e) => setRow(i, { correct: e.target.value.replace(/\D/g, '').slice(0, 5) })} className={`${inputCls} text-right`} /></td>
-                              <td className="py-1 pr-2"><input value={r.total} inputMode="numeric" onChange={(e) => setRow(i, { total: e.target.value.replace(/\D/g, '').slice(0, 5) })} className={`${inputCls} text-right`} /></td>
+                              <td className="py-1 pr-2"><input value={r.correct} inputMode="numeric" readOnly={scored} title={countTitle} onChange={(e) => setRow(i, { correct: e.target.value.replace(/\D/g, '').slice(0, 5) })} className={countCls} /></td>
+                              <td className="py-1 pr-2"><input value={r.total} inputMode="numeric" readOnly={scored} title={countTitle} onChange={(e) => setRow(i, { total: e.target.value.replace(/\D/g, '').slice(0, 5) })} className={countCls} /></td>
                               <td className="py-1 pr-2 text-right tabular-nums text-gray-600">{pct}</td>
                               <td className="py-1 pr-2"><input value={r.cueing} placeholder="min. verbal cues" onChange={(e) => setRow(i, { cueing: e.target.value })} className={inputCls} /></td>
                               <td className="py-1 pr-2"><input value={r.notes} onChange={(e) => setRow(i, { notes: e.target.value })} className={inputCls} /></td>
-                              <td className="py-1">
-                                <button aria-label="Remove row" onClick={() => set('performance', form.performance.length > 1 ? form.performance.filter((_, j) => j !== i) : [emptyRow()])}
+                              <td className="py-1 whitespace-nowrap">
+                                <button aria-label="Score trials on the transcript" title="Score trials on the transcript"
+                                  onClick={() => setScoringRow(scoringRow === i ? null : i)} disabled={transcript.length === 0}
+                                  className={`p-1 rounded disabled:opacity-40 ${scoringRow === i ? 'text-white bg-teal-700' : 'text-teal-700 hover:bg-teal-50'}`}>
+                                  <ListChecks className="w-4 h-4" />
+                                </button>
+                                <button aria-label="Remove row" onClick={() => {
+                                  // Indices shift on removal, so an open scorer could land on another row.
+                                  setScoringRow(null);
+                                  set('performance', form.performance.length > 1 ? form.performance.filter((_, j) => j !== i) : [emptyRow()]);
+                                }}
                                   className="p-1 text-gray-400 hover:text-red-600"><Trash2 className="w-4 h-4" /></button>
                               </td>
                             </tr>
+                            {scored && (
+                              <tr><td colSpan={7} className="pb-1 text-[11px] text-teal-800">
+                                Counts from {r.trials!.length} trial{r.trials!.length === 1 ? '' : 's'} scored on the transcript.{' '}
+                                <button type="button" onClick={() => { if (scoringRow === i) setScoringRow(null); setRow(i, { trials: undefined }); }}
+                                  className="underline text-gray-500 hover:text-gray-800" title="Drop the marks and type the counts yourself (the current numbers stay)">
+                                  Type counts instead
+                                </button>
+                              </td></tr>
+                            )}
                             {rowProblems[i] && (
                               <tr><td colSpan={7} className="pb-1 text-xs text-red-700">{rowProblems[i]}</td></tr>
                             )}
@@ -924,6 +1288,18 @@ export const SoapNotePopup: React.FC<SoapNotePopupProps> = ({
                     </tbody>
                   </table>
                 </div>
+                {scoringRow !== null && form.performance[scoringRow] && (
+                  <TrialScorer
+                    key={scoringRow}
+                    target={form.performance[scoringRow].target}
+                    segments={transcript}
+                    speakers={speakers}
+                    trials={form.performance[scoringRow].trials || []}
+                    onChange={(trials) => setRow(scoringRow, withTrials(trials))}
+                    onClose={() => setScoringRow(null)}
+                    onPlaySegment={onPlaySegment}
+                  />
+                )}
               </div>
 
               <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
@@ -947,6 +1323,14 @@ export const SoapNotePopup: React.FC<SoapNotePopupProps> = ({
                     className="w-4 h-4 text-teal-700 border-gray-300 rounded focus:ring-teal-500" />
                   Use this patient's earlier reviewed notes
                 </label>
+                {patientId && (
+                  <label className="inline-flex items-center gap-2 text-sm text-gray-700"
+                    title="Saved when you press Generate, for you and this patient only. The patient page shows them under SOAP defaults. The Patient ID code is kept with them.">
+                    <input type="checkbox" checked={saveAsDefaults} onChange={(e) => setSaveAsDefaults(e.target.checked)}
+                      className="w-4 h-4 text-teal-700 border-gray-300 rounded focus:ring-teal-500" />
+                    Save goals, plan and setting as this patient's defaults
+                  </label>
+                )}
                 <div className="ml-auto flex items-center gap-2">
                   {current && (
                     <button onClick={() => setShowForm(false)} disabled={generating}
@@ -964,7 +1348,8 @@ export const SoapNotePopup: React.FC<SoapNotePopupProps> = ({
                 </div>
               </div>
               {blockReason && !generating && <p className="text-xs text-amber-800">{blockReason}</p>}
-            </div>
+              {saveError && !merged && <p className="text-xs text-red-700">{saveError}</p>}
+            </fieldset>
           )}
 
           <div className="p-6 space-y-4">

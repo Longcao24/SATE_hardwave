@@ -21,6 +21,8 @@ interface ActionButtonsPanelProps {
   onSaveLsaReport?: (stored: StoredLsaReport) => Promise<StoredLsaReport | void>;
   /** The audio's length in seconds — prefills the SOAP note's session duration. */
   audioDuration?: number;
+  /** Plays one transcript segment on the report's player (SOAP "Score trials" ▶). */
+  onPlaySegment?: (startTime: number, endTime: number) => Promise<void>;
 }
 
 export const ActionButtonsPanel: React.FC<ActionButtonsPanelProps> = ({
@@ -37,6 +39,7 @@ export const ActionButtonsPanel: React.FC<ActionButtonsPanelProps> = ({
   lsaAllowGenerate,
   onSaveLsaReport,
   audioDuration,
+  onPlaySegment,
 }) => {
   const [showSaltExportPopup, setShowSaltExportPopup] = useState(false);
   const [showSateReportPopup, setShowSateReportPopup] = useState(false);
@@ -169,6 +172,7 @@ export const ActionButtonsPanel: React.FC<ActionButtonsPanelProps> = ({
         saveReport={onSaveLsaReport}
         soapTab={!readOnly}
         audioDuration={audioDuration}
+        onPlaySegment={onPlaySegment}
       />
 
     </>

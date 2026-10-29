@@ -223,6 +223,7 @@ const MainContent: React.FC<MainContentProps> = ({
                 lsaAllowGenerate={lsaAllowGenerate}
                 onSaveLsaReport={onSaveLsaReport}
                 audioDuration={duration}
+                onPlaySegment={onPlaySegment}
               />
               
               {/* Second Row - Display Mode Toggle */}

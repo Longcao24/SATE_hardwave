@@ -14,6 +14,8 @@ import type {
   SoapErrorCode,
   SoapInputs,
   SoapListResponse,
+  SoapPatientDefaults,
+  SoapPatientDefaultsResponse,
   SoapVersion,
 } from './soapTypes';
 
@@ -104,4 +106,20 @@ export async function generateSoap(recordingId: string, inputs: SoapInputs): Pro
  */
 export function saveSoapEdits(recordingId: string, version: number, edits: SoapEdits): Promise<SoapVersion> {
   return call<SoapVersion>('PUT', `/v1/soap/${rid(recordingId)}/${version}/edits`, { edits });
+}
+
+const pid = (patientId: string) => encodeURIComponent(patientId);
+
+/**
+ * This clinician's SOAP defaults for one patient, plus the inputs of their newest reviewed note
+ * for that patient (the fallback prefill). The Worker checks the patient is visible to the caller
+ * through RLS first, so a patient id from another account is a 404, not an empty answer.
+ */
+export function loadPatientDefaults(patientId: string): Promise<SoapPatientDefaultsResponse> {
+  return call<SoapPatientDefaultsResponse>('GET', `/v1/soap/patients/${pid(patientId)}/defaults`);
+}
+
+/** REPLACES the stored defaults (a blank field is cleared; all blank deletes them). */
+export function savePatientDefaults(patientId: string, defaults: SoapPatientDefaults): Promise<SoapPatientDefaultsResponse> {
+  return call<SoapPatientDefaultsResponse>('PUT', `/v1/soap/patients/${pid(patientId)}/defaults`, { defaults });
 }
