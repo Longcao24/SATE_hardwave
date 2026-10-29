@@ -1,4 +1,4 @@
-// SATE Device API — Supabase Edge Function              [v50]
+// SATE Device API — Supabase Edge Function              [v51]
 // Replaces the mock-server's Express endpoints with a single Edge Function
 // that does internal path routing. Authenticated via Supabase JWT (users) or a
 // device key (the recorder).
@@ -52,6 +52,12 @@
 //      (and the gateway's 502 above it) simply does not apply. `storage_path` is
 //      confined to the caller's own `<user id>/` prefix and the byte count comes
 //      from Storage, never from the client.
+// v51 (2026-10-28) = v50 + what was DEPLOYED to production that day as v43.1-web / v43.2-jobs (on
+//      top of v43; production had never run v44–v50): web uploads through the backend queue
+//      (upload-url `format:'web'`, register `web_meta`, web-aware health digest + deleteSession) and
+//      the per-job operator mail (/health/jobs) + admin Processing `recent`. v50's browser-side
+//      `web_live` / 30-min `recent` from sate_web_jobs is REMOVED: the browser no longer transcribes,
+//      and that table was never created in production.
 // v50: THE PROCESSING TAB SEES EVERYTHING THAT IS BEING TRANSCRIBED. (a) A file uploaded on the WEB is
 //      transcribed by the browser calling the AI directly, so it was never a session and never appeared;
 //      the browser now records the call in sate_web_jobs (migration 20261005_web_jobs) and
@@ -209,6 +215,20 @@
 //      registration; removing the device (DELETE /devices/:id) is what frees it. `hw_serial` is the
 //      unit's own serial (L81x opcode 0x01) — the same on iPhone and Android, where `serial`
 //      (l816-<BLE id>) is not. Also: externalKind() now knows l815 and sonic (both were rejected).
+// v43.2-jobs (2026-10-28): EVERY finished job is mailed to the operator, done or failed. GET
+//      /health/jobs?key=… (same secret as /health/alerts) lists the takes that finished in the last
+//      3 days, each with a stable `key` (`<id>:done`, or `<id>:error:<run start>` so a take that fails
+//      again after a Retry is mailed again); the status Worker mails each key once (D1 job_mail).
+//      No file names in it — it goes to a mailbox. /admin/processing adds `recent`: the last 100
+//      finished takes with queue wait and processing time, for the admin Processing tab.
+// v43.1-web (2026-10-28): WEB UPLOADS GO THROUGH THE SAME QUEUE AS A DEVICE TAKE. The web app
+//      used to send the file from the BROWSER straight to the AI, so a failure was seen by no
+//      server and alerted no one (UT Dallas, 2026-10-28: a 10-min file failed for an hour and left
+//      no trace). Now: upload-url `format: 'web'` → `<id>.web` (cf-processor converts any format
+//      with ffmpeg), register stores `web_meta` {file_name, patient_uuid} (finalize-session uses
+//      it; the patient is re-checked there), and /health/alerts reports web sessions that ended with no speech plus
+//      `sate_client_errors` (an upload the browser could not even hand over) as recent errors,
+//      so every failure reaches the operator's mail. Serial is `web-<8 hex of the account>`.
 // v30: POST /sessions/upload-url takes `format: 'mp3'` — a SonicNote take, stored as `<id>.mp3`;
 //      cf-processor converts it to the pipeline's 16 kHz mono WAV (ffmpeg) exactly like an `.asc`.
 // v29: sessions carry `audio_seconds` (set here for an ASC take, exactly by cf-processor) and
@@ -354,6 +374,13 @@ serve(async (req) => {
     const want = Deno.env.get('HEALTH_ALERT_KEY') || '';
     if (!want || key !== want) return err('forbidden', 403);
     return await healthAlerts(supabase);
+  }
+  // [v43.2-jobs] Every finished job, for the operator's per-job mail — same secret.
+  if (subPath === '/health/jobs' && method === 'GET') {
+    const key = url.searchParams.get('key') || '';
+    const want = Deno.env.get('HEALTH_ALERT_KEY') || '';
+    if (!want || key !== want) return err('forbidden', 403);
+    return await healthJobs(supabase);
   }
   // [v36] Manager "new reports" digest + ack — same secret, no user JWT.
   if (subPath === '/health/manager-digest' || subPath === '/health/manager-digest/ack') {
@@ -559,10 +586,12 @@ serve(async (req) => {
       // it is an ordinary session. The extension is the only signal the processor keys on,
       // so it is chosen here from a closed set, never taken from the client verbatim.
       // [v30] `mp3` = a SonicNote take (the recorder's own MP3); cf-processor converts it.
-      const ext = body.format === 'asc' ? 'asc' : body.format === 'mp3' ? 'mp3' : 'wav';
+      const ext = body.format === 'asc' ? 'asc' : body.format === 'mp3' ? 'mp3' : body.format === 'web' ? 'web' : 'wav';
       const path = sessionStoragePath(user.id, body.device_serial || 'external', sessionId, ext);
+      // [v43.1-web] A browser retries its PUT; without upsert a retry after a lost response
+      // fails with "already exists" and reports an upload that actually landed as failed.
       const { data, error: sErr } = await supabase.storage.from('device-sessions')
-        .createSignedUploadUrl(path);
+        .createSignedUploadUrl(path, ext === 'web' ? { upsert: true } : undefined);
       if (sErr) return err(`could not sign an upload: ${sErr.message}`, 500);
       // The id is handed out NOW and echoed back on register, so the object lands
       // at its final path and nothing has to be copied or moved afterwards.
@@ -636,6 +665,22 @@ serve(async (req) => {
       const sessionId = String(body.session_id || '').match(/^s-[0-9a-f]{8}$/)
         ? String(body.session_id)
         : newSessionId();
+      // [v43.1-web] A web upload carries what the recording should be called and which patient
+      // it belongs to; finalize-session reads it. The patient must be one of this account's own.
+      let webMeta: Record<string, unknown> | null = null;
+      if (storagePath.endsWith('.web')) {
+        const wm = (body.web_meta && typeof body.web_meta === 'object') ? body.web_meta : {};
+        const fileName = String(wm.file_name || '').slice(0, 255) || null;
+        let patientUuid: string | null = null;
+        const pid = String(wm.patient_uuid || '');
+        if (/^[0-9a-f-]{36}$/i.test(pid)) {
+          const { data: pat } = await supabase.from('patients').select('id')
+            .eq('id', pid).eq('slp_id', user.id).maybeSingle();
+          if (!pat) return err('patient is not in this account', 403);
+          patientUuid = pid;
+        }
+        webMeta = { file_name: fileName, patient_uuid: patientUuid, source: String(wm.source || 'web-upload').slice(0, 40) };
+      }
       // [v46] The same take under ANOTHER account. 'report' (default): accepted — no audio is
       // ever dropped on a guess — and recorded for /health/alerts. 'refuse': 409, and the object
       // just uploaded is removed (the unit still holds the take; the other account holds its copy).
@@ -648,7 +693,7 @@ serve(async (req) => {
         await supabase.storage.from('device-sessions').remove([storagePath]).catch(() => {});
         return takeOwnedElsewhere();
       }
-      const res = await insertSessionRow(supabase, user.id, meta, sessionId, storagePath, bytes);
+      const res = await insertSessionRow(supabase, user.id, meta, sessionId, storagePath, bytes, webMeta);
       if (other) await auditTakeElsewhere(supabase, user.id, meta, bytes, unit, other, mode, 'accepted', sessionId);
       return res;
     }
@@ -1909,7 +1954,7 @@ async function healthAlerts(supabase: any) {
     .eq('status', 'processing').lt('processing_started_at', stuckCutoff)
     .order('processing_started_at', { ascending: true }).limit(25);
   const { data: recentErrors } = await supabase.from('sate_device_sessions')
-    .select('id, device_serial, session_number, attempts, process_error, created_at')
+    .select('id, device_serial, session_number, attempts, process_error, created_at, user_id')
     .eq('status', 'error').order('created_at', { ascending: false }).limit(10);
   await supabase.from('sate_devices')
     .update({ online: false, state: 'idle' })
@@ -2052,7 +2097,51 @@ async function healthAlerts(supabase: any) {
       outcome: d.outcome ?? null, session_number: d.session_number ?? null,
       session_id: d.session_id ?? null, other_session_id: d.other_session_id ?? null };
   });
-  const errors = recentErrors || [];
+  const errors: any[] = [...(recentErrors || [])];
+  // [v43.1-web] Every failure of a WEB upload must reach the operator, including the two the
+  // query above cannot see: a web take that finished with no speech (status 'done', no_text —
+  // a clinician uploaded a real file and got nothing back), and an upload the browser could not
+  // hand over at all (sate_client_errors: no session row exists). Both are keyed so the status
+  // Worker mails each one ONCE (it keys on `device_serial#session_number`).
+  const weekAgo = new Date(now - 7 * 24 * 3600 * 1000).toISOString();
+  const { data: webNoText } = await supabase.from('sate_device_sessions')
+    .select('id, device_serial, session_number, attempts, created_at')
+    .like('device_serial', 'web-%').eq('status', 'done').eq('no_text', true)
+    .gte('created_at', weekAgo).order('created_at', { ascending: false }).limit(10);
+  for (const r of webNoText || []) {
+    errors.push({ ...r, process_error: 'web upload finished with NO SPEECH detected (no recording was created)' });
+  }
+  const { data: clientErrs, error: ceErr } = await supabase.from('sate_client_errors')
+    .select('id, user_id, context, file_name, bytes, message, created_at')
+    .gte('created_at', weekAgo).order('created_at', { ascending: false }).limit(10);
+  if (!ceErr) {
+    for (const c of clientErrs || []) {
+      errors.push({ id: `client-${c.id}`, device_serial: 'web-client', session_number: c.id, attempts: 0,
+        created_at: c.created_at, user_id: c.user_id,
+        process_error: `${c.context || 'web upload'} failed in the browser: ${String(c.message || '').slice(0, 160)}`
+          // Never the file NAME: clinicians name files after the child, and this goes to a mailbox.
+          + (c.bytes ? ` (${Math.round(c.bytes / 1048576 * 10) / 10} MB file)` : '') });
+    }
+  }
+  // Name the account and the file on every web error, so the mail says whose upload failed.
+  const webIds = errors.filter((e) => String(e.device_serial || '').startsWith('web-') && !String(e.id).startsWith('client-')).map((e) => e.id);
+  if (webIds.length) {
+    const { data: wm } = await supabase.from('sate_device_sessions').select('id, user_id').in('id', webIds);
+    const byId = new Map((wm || []).map((r: any) => [r.id, r]));
+    for (const e of errors) {
+      const r: any = byId.get(e.id);
+      if (r) { e.user_id = r.user_id; e.process_error = `${e.process_error} (web upload ${e.id})`; }
+    }
+  }
+  const uids = Array.from(new Set(errors.filter((e) => e.user_id).map((e) => e.user_id)));
+  const emails = new Map<string, string>();
+  for (const uid of uids.slice(0, 20)) {
+    try { const { data } = await supabase.auth.admin.getUserById(uid); if (data?.user?.email) emails.set(uid, data.user.email); } catch (_e) { /* best-effort */ }
+  }
+  for (const e of errors) {
+    if (e.user_id && emails.get(e.user_id)) e.process_error = `[${emails.get(e.user_id)}] ${e.process_error}`;
+    delete e.user_id;
+  }
   const stuckList = stuck || [];
   const offlineList = offline || [];
   return json({
@@ -2069,7 +2158,7 @@ async function healthAlerts(supabase: any) {
       p: processorProblems.map((p: any) => `${p.worker_id}:${p.status}`).sort(),
       x: crossDups.map((r: any) => r.id).sort(),
     }),
-    error_count: errorCount || 0,
+    error_count: (errorCount || 0) + (errors.length - (recentErrors || []).length),
     stuck_count: stuckList.length,
     recent_errors: errors,
     stuck_list: stuckList,
@@ -2160,7 +2249,9 @@ async function adminStatus(supabase: any) {
 
 // Must match cf-processor STUCK_MINUTES (90) — see the THREE-copies note in CLAUDE.md.
 const PROC_STUCK_MS = 90 * 60 * 1000;
-const takeSeconds = (r: any) => (r.audio_seconds ?? Math.max((r.bytes || 0) - 44, 0) / 32000);
+const takeSeconds = (r: any) => (r.audio_seconds
+  // A web upload is compressed until cf-processor converts it: its bytes say nothing about length.
+  ?? (String(r.device_serial || '').startsWith('web-') ? 0 : Math.max((r.bytes || 0) - 44, 0) / 32000));
 const familyOf = (serial?: string | null) => {
   const p = String(serial || '').toLowerCase().split('-')[0];
   if (p === 'sate') return 'SATE recorder';
@@ -2168,14 +2259,13 @@ const familyOf = (serial?: string | null) => {
   if (p === 'plaud') return 'Plaud';
   if (/^l81\d$/.test(p)) return 'L81x';
   if (p === 'sonic') return 'SonicNote';
+  if (p === 'web') return 'Web upload';
   return p ? p : 'unknown';
 };
 // "download failed: Object not found (session 1234)" and the same with another id are ONE reason.
 const errorReason = (e?: string | null) => String(e || 'unknown')
   .replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, '<id>').replace(/\d+(\.\d+)?/g, 'N').trim().slice(0, 120);
 
-const WEB_JOB_LOST_MS = 2 * 60_000;   // the browser beats every 30 s
-const RECENT_MS = 30 * 60_000;
 async function adminProcessing(supabase: any, url: URL) {
   const days = Math.min(Math.max(parseInt(url.searchParams.get('days') || '7', 10) || 7, 1), 30);
   const now = Date.now();
@@ -2204,40 +2294,6 @@ async function adminProcessing(supabase: any, url: URL) {
       stuck: r.status === 'processing' && !!r.processing_started_at && now - Date.parse(r.processing_started_at) > PROC_STUCK_MS,
     });
   }
-
-  // [v50] Web uploads: the BROWSER calls the AI, so they are not sessions. sate_web_jobs is the
-  // browser's own record of the call (best-effort; a closed tab stops its heartbeat, it never
-  // closes the row). A row silent past WEB_JOB_LOST_MS is shown as lost, and dropped after a day.
-  const { data: web } = await supabase.from('sate_web_jobs')
-    .select('id, user_id, file_name, bytes, source, started_at, heartbeat_at')
-    .eq('status', 'processing').gte('heartbeat_at', new Date(now - 86400_000).toISOString())
-    .order('started_at', { ascending: true }).limit(200);
-  const webRows = [];
-  for (const w of web || []) {
-    webRows.push({ id: w.id, email: await email(w.user_id), source: w.source, file_name: w.file_name, bytes: w.bytes,
-      started_at: w.started_at, heartbeat_at: w.heartbeat_at,
-      lost: now - Date.parse(w.heartbeat_at) > WEB_JOB_LOST_MS });
-  }
-
-  // [v50] Recently finished. Processing itself takes seconds (median ~7 s), shorter than any poll,
-  // so a take that was never caught "processing" must still be visible as having just gone through.
-  const recentSince = new Date(now - RECENT_MS).toISOString();
-  const { data: recentDev } = await supabase.from('sate_device_sessions').select(cols)
-    .in('status', ['done', 'error']).gte('processed_at', recentSince).order('processed_at', { ascending: false }).limit(50);
-  const { data: recentWeb } = await supabase.from('sate_web_jobs')
-    .select('id, user_id, file_name, bytes, source, status, started_at, finished_at, error')
-    .in('status', ['done', 'error']).gte('finished_at', recentSince).order('finished_at', { ascending: false }).limit(50);
-  const recentRows = [];
-  for (const r of recentDev || []) {
-    recentRows.push({ id: r.id, kind: 'device', email: await email(r.user_id), label: r.device_serial, family: familyOf(r.device_serial),
-      seconds: takeSeconds(r), status: r.status, no_text: !!r.no_text,
-      started_at: r.processing_started_at, finished_at: r.processed_at, error: r.status === 'error' ? r.process_error : null });
-  }
-  for (const w of recentWeb || []) {
-    recentRows.push({ id: w.id, kind: 'web', email: await email(w.user_id), label: w.file_name, family: w.source,
-      seconds: null, status: w.status, no_text: false, started_at: w.started_at, finished_at: w.finished_at, error: w.error });
-  }
-  recentRows.sort((a: any, b: any) => Date.parse(b.finished_at) - Date.parse(a.finished_at));
 
   // Unresolved errors (any age — an error never clears by itself).
   const { data: errs, error: e2 } = await supabase.from('sate_device_sessions').select(cols)
@@ -2283,13 +2339,17 @@ async function adminProcessing(supabase: any, url: URL) {
   const { data: last } = await supabase.from('sate_device_sessions').select('processed_at')
     .not('processed_at', 'is', null).order('processed_at', { ascending: false }).limit(1);
   const finished = count('done') + count('error');
+  // [v43.2-jobs] The last finished takes, newest first: what the worker actually did.
+  const recent = [];
+  for (const r of await finishedJobs(supabase, since, 100)) {
+    recent.push({ ...r, email: await email(r.user_id) });
+  }
 
   return json({
     generated_at: new Date(now).toISOString(),
     days,
     live: liveRows,
-    web_live: webRows,
-    recent: recentRows.slice(0, 50),
+    recent,
     errors: errorRows,
     error_reasons: [...reasons.entries()].map(([reason, n]) => ({ reason, n })).sort((a, b) => b.n - a.n),
     stats: {
@@ -2310,6 +2370,43 @@ async function adminProcessing(supabase: any, url: URL) {
     per_family: [...perFamily.entries()].map(([family, v]) => ({ family, ...v,
       success_rate: v.done + v.error ? v.done / (v.done + v.error) : null })).sort((a, b) => (b.done + b.error) - (a.done + a.error)),
   });
+}
+
+/** [v43.2-jobs] Takes that FINISHED since `since` (done, incl. no speech, or error), newest first. */
+async function finishedJobs(supabase: any, since: string, limit: number) {
+  const cols = 'id, user_id, device_serial, session_number, bytes, audio_seconds, status, attempts, created_at, processing_started_at, heartbeat_at, processed_at, process_error, no_text, recording_id';
+  const { data: done, error: e1 } = await supabase.from('sate_device_sessions').select(cols)
+    .eq('status', 'done').gte('processed_at', since).order('processed_at', { ascending: false }).limit(limit);
+  if (e1) throw new Error(e1.message);
+  const { data: failed, error: e2 } = await supabase.from('sate_device_sessions').select(cols)
+    .eq('status', 'error').gte('created_at', since).order('created_at', { ascending: false }).limit(limit);
+  if (e2) throw new Error(e2.message);
+  const sec = (a?: string | null, b?: string | null) => (a && b ? Math.max(0, Math.round((Date.parse(b) - Date.parse(a)) / 1000)) : null);
+  return [...(done || []), ...(failed || [])].map((r: any) => {
+    // An error row has no processed_at; its last sign of life is when it last ran.
+    const finished_at = r.processed_at || r.heartbeat_at || r.processing_started_at || r.created_at;
+    return {
+      key: r.status === 'done' ? `${r.id}:done` : `${r.id}:error:${r.processing_started_at || r.created_at}`,
+      id: r.id, user_id: r.user_id, device_serial: r.device_serial, family: familyOf(r.device_serial),
+      session_number: r.session_number, seconds: takeSeconds(r), status: r.status, no_text: !!r.no_text,
+      attempts: r.attempts, created_at: r.created_at, processing_started_at: r.processing_started_at,
+      finished_at, wait_s: sec(r.created_at, r.processing_started_at), processing_s: sec(r.processing_started_at, r.processed_at),
+      recording_id: r.recording_id, process_error: r.process_error ? String(r.process_error).slice(0, 400) : null,
+    };
+  }).sort((a: any, b: any) => Date.parse(b.finished_at) - Date.parse(a.finished_at)).slice(0, limit);
+}
+
+/** [v43.2-jobs] For the status Worker's per-job mail. No file names: this goes to a mailbox. */
+async function healthJobs(supabase: any) {
+  const since = new Date(Date.now() - 3 * 86400_000).toISOString();
+  const jobs = await finishedJobs(supabase, since, 300);
+  const emails = new Map<string, string | null>();
+  for (const j of jobs) {
+    if (!emails.has(j.user_id)) emails.set(j.user_id, await emailOf(supabase, j.user_id));
+    (j as any).email = emails.get(j.user_id);
+    delete (j as any).user_id;
+  }
+  return json({ generated_at: new Date().toISOString(), jobs });
 }
 
 async function adminRecorders(supabase: any) {
@@ -3234,7 +3331,7 @@ function newSessionId() {
  * serial, because /sessions/verify and the dedup probe match the value the recorder sends.
  */
 function sessionStoragePath(userId: string, serial: string, sessionId: string,
-                            ext: 'wav' | 'asc' | 'mp3' = 'wav') {
+                            ext: 'wav' | 'asc' | 'mp3' | 'web' = 'wav') {
   const segment = String(serial || '').replace(/[^A-Za-z0-9_-]/g, '') || 'unknown';
   return `${userId}/${segment}/${sessionId}.${ext}`;
 }
@@ -3248,8 +3345,11 @@ async function insertSessionRow(
   sessionId: string,
   storagePath: string,
   bytes: number,
+  webMeta: Record<string, unknown> | null = null,
 ) {
   const { error: insertError } = await supabase.from('sate_device_sessions').insert({
+    // [v43.1-web] In the SAME insert: a web take without it would silently become a device take.
+    ...(webMeta ? { web_meta: webMeta } : {}),
     id: sessionId, user_id: userId, device_serial: meta.device_serial,
     patient_id: meta.patient_id, session_number: meta.session_number,
     sample_rate: meta.sample_rate, bytes, storage_path: storagePath,
@@ -3419,6 +3519,19 @@ async function deleteSession(supabase: any, userId: string, sessionId: string, p
     const { data: rmd, error } = await supabase.storage.from('device-sessions').remove(extra);
     if (error && !gone(error.message)) failures.push(`device-sessions extra objects: ${error.message}`);
     else for (const o of (rmd || []) as any[]) if (o?.name) extraRemoved.push(o.name);
+  }
+  // [v43.1-web] A web upload withdrawn mid-processing: cf-processor may already have written its
+  // converted WAV beside the original, or its copy into the recordings bucket (keyed
+  // `<user>/<session>_…`) before any recording row points at it. Remove both; best-effort.
+  if (String(row.device_serial || '').startsWith('web-')) {
+    if (row.storage_path) {
+      await supabase.storage.from('device-sessions').remove([row.storage_path.replace(/\.web$/, '.wav')]);
+    }
+    if (!row.recording_id) {
+      const { data: objs } = await supabase.storage.from('recordings').list(userId, { search: `${sessionId}_`, limit: 20 });
+      const keys = (objs || []).filter((o: any) => o.name?.startsWith(`${sessionId}_`)).map((o: any) => `${userId}/${o.name}`);
+      if (keys.length) await supabase.storage.from('recordings').remove(keys);
+    }
   }
 
   let removedRecording: string | null = null;
