@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { AlertTriangle, RefreshCw, X, Wifi, Server, AlertCircle } from 'lucide-react';
 import { Button } from '../ui/button';
+import { reportClientError } from '@/services/DataService/serverProcessing';
 
 interface ErrorNotificationPopupProps {
   isOpen: boolean;
@@ -22,6 +23,20 @@ const ErrorNotificationPopup: React.FC<ErrorNotificationPopupProps> = ({
   error,
   isRetrying = false
 }) => {
+  // EVERY error a user is shown here is reported to the operator (2026-10-29): it lands in
+  // sate_client_errors, which device-api's health digest mails within ~5 min. Once per error
+  // object, so a re-render does not report it twice. No file name — the text only.
+  const reported = useRef<object | null>(null);
+  useEffect(() => {
+    if (!isOpen || !error || reported.current === error) return;
+    reported.current = error;
+    reportClientError(
+      `web app (${window.location.pathname.split('/')[1] || 'home'})`,
+      null,
+      `[${error.type}] ${error.message}${error.originalError ? ` — ${error.originalError}` : ''}`,
+    );
+  }, [isOpen, error]);
+
   if (!isOpen) return null;
 
   const getErrorIcon = () => {

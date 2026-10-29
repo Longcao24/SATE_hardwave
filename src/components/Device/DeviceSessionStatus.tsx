@@ -43,8 +43,11 @@ const timing = (s: UploadedSession) => {
 // with no recording). A short one is usually a real accidental tap and keeps today's display.
 // Only a `done` row: a legacy row with no status reads as no_text too, and the server refuses it.
 const NO_TEXT_RETRY_MIN_SEC = 30;
+// Needs device-api ≥v45 (its retry accepts a done/no_text row). Production runs v43.2-jobs, whose
+// retry answers 409 for anything but 'error' — so the button stays off until that ships.
+const NO_TEXT_RETRY_ENABLED = false;
 const noTextRetryable = (s: UploadedSession) =>
-  s.status === 'done' && !!s.no_text && !s.recording_id && sessionSeconds(s.bytes, s.sample_rate, s.audio_seconds) >= NO_TEXT_RETRY_MIN_SEC;
+  NO_TEXT_RETRY_ENABLED && s.status === 'done' && !!s.no_text && !s.recording_id && sessionSeconds(s.bytes, s.sample_rate, s.audio_seconds) >= NO_TEXT_RETRY_MIN_SEC;
 
 const statusOf = (s: UploadedSession): Status => {
   // Authoritative async state machine when the column is present.
