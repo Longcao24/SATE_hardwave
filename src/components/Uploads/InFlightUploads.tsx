@@ -89,7 +89,7 @@ export function InFlightUploads({ patientId, variant = 'sidebar', className = 'm
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
           {kind === 'queued' && (
             <span
-              title="Uploaded and waiting for the processor. One processor serves every account, in upload order. You can close this tab — it keeps going."
+              title="Uploaded and waiting for the processor. Transcription runs one take at a time across every account, in upload order (Professional plans first). You can close this tab — it keeps going."
               className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-semibold text-sky-700 bg-sky-50 rounded-md"
             >
               <Clock className="w-3 h-3" />

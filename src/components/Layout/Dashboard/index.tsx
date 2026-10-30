@@ -283,6 +283,16 @@ const Dashboard: React.FC<DashboardProps> = ({ onImport, onUseSampleData }) => {
           loadingPatients={loadingPatients}
           onAssignPatient={setAssignRecordingId}
         />
+
+        {/* Below it: every recording still without a patient, all of them, to work through. */}
+        <StandaloneRecordings
+          mode="standalone"
+          recordings={recordings}
+          timeFilter={timeFilter}
+          patients={patients}
+          loadingPatients={loadingPatients}
+          onAssignPatient={setAssignRecordingId}
+        />
       </div>
 
       <AssignPatientModal

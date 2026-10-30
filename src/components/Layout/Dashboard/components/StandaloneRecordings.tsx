@@ -31,6 +31,10 @@ interface StandaloneRecordingsProps {
   /** Opens the assign-to-patient dialog for this recording. Owned by the dashboard so the
    *  modal, the patient list and the cache invalidation all live in one place. */
   onAssignPatient: (recordingId: string) => void;
+  /** 'recent' = every recording, newest or most recently edited first (time filter applies).
+   *  'standalone' = EVERY recording with no patient yet, newest first — the list to work through
+   *  when assigning, so the time filter does not hide old ones. */
+  mode?: 'recent' | 'standalone';
 }
 
 type NoteMark = { id: string; status: string; title: string | null };
@@ -51,7 +55,9 @@ const StandaloneRecordings: React.FC<StandaloneRecordingsProps> = ({
   timeFilter,
   patients,
   onAssignPatient,
+  mode = 'recent',
 }) => {
+  const standalone = mode === 'standalone';
   const navigate = useNavigate();
 
   // Voice Notes is off unless an admin enabled it for this account, so a clinical user never
@@ -75,9 +81,11 @@ const StandaloneRecordings: React.FC<StandaloneRecordingsProps> = ({
   // only recordings with no patient, so a take a clinician had just edited for a patient was
   // nowhere on the dashboard.
   const patientName = new Map(patients.map(p => [p.id, `${p.first_name} ${p.last_name}`.trim()]));
-  const recentRecordings = [...(recordings || [])].sort((a, b) => activityAt(b) - activityAt(a));
+  const recentRecordings = standalone
+    ? (recordings || []).filter(r => !r.patient_id).sort((a, b) => ms(b.created_at) - ms(a.created_at))
+    : [...(recordings || [])].sort((a, b) => activityAt(b) - activityAt(a));
   const filteredStandaloneRecordings = recentRecordings.filter(recording => {
-    if (timeFilter === 'all') return true;
+    if (standalone || timeFilter === 'all') return true;
 
     const recordingDate = new Date(activityAt(recording));
     const now = new Date();
@@ -167,15 +175,26 @@ const StandaloneRecordings: React.FC<StandaloneRecordingsProps> = ({
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-200 mt-8">
       <div className="p-6 border-b border-gray-200">
-        <h2 className="text-xl font-semibold text-gray-900">Recent Recordings</h2>
-        <p className="text-sm text-gray-600 mt-1">Newest and most recently edited first</p>
+        <div className="flex items-center gap-2">
+          <h2 className="text-xl font-semibold text-gray-900">{standalone ? 'Standalone Recordings' : 'Recent Recordings'}</h2>
+          {standalone && (
+            <span className="text-xs font-medium text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">
+              {filteredStandaloneRecordings.length}
+            </span>
+          )}
+        </div>
+        <p className="text-sm text-gray-600 mt-1">
+          {standalone ? 'Every recording not assigned to a patient yet, newest first' : 'Newest and most recently edited first'}
+        </p>
       </div>
 
       {filteredStandaloneRecordings.length === 0 ? (
         <div className="p-12 text-center">
           <FileAudio className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-          <p className="text-gray-500 mb-4">No recordings yet</p>
-          <p className="text-sm text-gray-400">Record on a device or upload an audio file to get started</p>
+          <p className="text-gray-500 mb-4">{standalone ? 'No standalone recordings' : 'No recordings yet'}</p>
+          <p className="text-sm text-gray-400">
+            {standalone ? 'Every recording is assigned to a patient' : 'Record on a device or upload an audio file to get started'}
+          </p>
         </div>
       ) : (
         <div className="divide-y divide-gray-200">

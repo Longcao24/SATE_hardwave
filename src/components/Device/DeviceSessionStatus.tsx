@@ -259,7 +259,7 @@ export function DeviceSessionStatus({ sessions }: DeviceSessionStatusProps) {
                 {status === 'queued' && (
                   <span
                     title={s.queue_position
-                      ? `Waiting for the processor: ${s.queue_position === 1 ? 'next in line' : `${s.queue_position - 1} take(s) ahead`}${s.queue_ahead_seconds ? `, ${dur(s.queue_ahead_seconds)} of audio` : ''}. Up to 4 takes are processed at once, in upload order (short takes slightly first; Professional plans first).`
+                      ? `Waiting for the processor: ${s.queue_position === 1 ? 'next in line' : `${s.queue_position - 1} take(s) ahead`}${s.queue_ahead_seconds ? `, ${dur(s.queue_ahead_seconds)} of audio` : ''}. Transcription runs one take at a time across every account, in upload order (short takes slightly first; Professional plans first).`
                       : 'Uploaded and waiting for the processor to pick it up.'}
                     className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-sky-700 bg-sky-50 rounded-lg"
                   >
