@@ -6,6 +6,8 @@ export interface Recording {
   id: string;
   file_name: string;
   created_at: string;
+  /** Moved by any write to the row (transcript save, rename, patient move) — kept by a trigger. */
+  updated_at?: string | null;
   file_path: string;
   patient_id?: string; // Add patient association
   recording_name?: string; // Add recording name
@@ -19,6 +21,28 @@ export interface Recording {
    *  been processed (and for anything stored before the column was filled), so every reader
    *  must treat "no duration" as unknown rather than as zero — see `formatLength`. */
   duration?: number | null;
+}
+
+const tsMs = (iso?: string | null) => {
+  const t = iso ? Date.parse(iso) : NaN;
+  return Number.isNaN(t) ? 0 : t;
+};
+/** A write this soon after creation is processing filling the row in, not a person editing. */
+const EDIT_GRACE_MS = 5 * 60 * 1000;
+/** Only edits this recent count. `updated_at` is also moved by bulk backfills (one on 2026-09-11
+ *  touched 237 rows in the same minute), and those must not read as someone's edit forever. */
+const EDIT_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** When a person last edited this recording (ms), or 0 if not recently. */
+export function recordingEditedAt(r: Pick<Recording, 'created_at' | 'updated_at'>): number {
+  const u = tsMs(r.updated_at);
+  if (u - tsMs(r.created_at) <= EDIT_GRACE_MS) return 0;
+  return Date.now() - u <= EDIT_WINDOW_MS ? u : 0;
+}
+
+/** Newest activity: added or (recently) edited, whichever is later. */
+export function recordingActivityAt(r: Pick<Recording, 'created_at' | 'updated_at'>): number {
+  return Math.max(tsMs(r.created_at), recordingEditedAt(r));
 }
 
 export const useRecordings = () => {
@@ -41,7 +65,7 @@ export const useRecordings = () => {
       // value the device path copies into the column), so pull just that one key out of the
       // jsonb rather than the whole analysis blob, and prefer the column when it is real.
       const BASE =
-        'id, file_name, created_at, file_path, patient_id, recording_name, protocol, notes, source_session_id, duration';
+        'id, file_name, created_at, updated_at, file_path, patient_id, recording_name, protocol, notes, source_session_id, duration';
 
       let { data, error } = await supabase
         .from('recordings')

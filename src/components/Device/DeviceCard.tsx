@@ -50,9 +50,9 @@ export function DeviceCard({ device, onClick }: DeviceCardProps) {
       onClick={onClick}
       className="device-card group"
     >
-      <div className="flex items-start justify-between">
-        <div className="flex items-center gap-3">
-          <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className={`w-10 h-10 shrink-0 rounded-xl flex items-center justify-center ${
             isPlaud ? 'bg-indigo-50' : device.online ? 'bg-blue-50' : 'bg-gray-100'
           }`}>
             <StatusIcon className={`w-5 h-5 ${
@@ -62,14 +62,15 @@ export function DeviceCard({ device, onClick }: DeviceCardProps) {
               device.online ? 'text-blue-600' : 'text-gray-400'
             }`} />
           </div>
-          <div className="text-left">
-            <h3 className="text-sm font-semibold text-gray-900 group-hover:text-blue-600 transition-colors">
+          <div className="text-left min-w-0">
+            <h3 className="text-sm font-semibold text-gray-900 group-hover:text-blue-600 transition-colors truncate">
               {device.name}
             </h3>
-            <p className="text-xs text-gray-400 mt-0.5">{device.serial}</p>
+            {/* Long BLE serials (iOS L816 / pendant UUIDs) used to wrap over two lines. */}
+            <p className="text-xs text-gray-400 mt-0.5 truncate" title={device.serial}>{device.serial}</p>
           </div>
         </div>
-        <span className={`w-2.5 h-2.5 rounded-full mt-1 ${statusDot} ${
+        <span className={`w-2.5 h-2.5 shrink-0 rounded-full mt-1 ${statusDot} ${
           isRecording ? 'animate-pulse' : ''
         }`} />
       </div>

@@ -12,14 +12,16 @@ import {
   Loader2,
   StickyNote,
   Clock,
+  User,
 } from 'lucide-react';
+import { timeAgo } from '@/hooks/useDevices';
 import type { TimeFilter } from '../types';
 import { formatDate } from '../utils';
 import { formatLength } from '@/utils/duration';
 import { notesApiService, isWorking } from '@/services/notesApiService';
 import { deviceApiService } from '@/services/device/deviceApiService';
 import type { Patient } from '@/services/patientService';
-import type { Recording } from '@/hooks/useRecordings';
+import { recordingEditedAt as editedAt, recordingActivityAt as activityAt, type Recording } from '@/hooks/useRecordings';
 
 interface StandaloneRecordingsProps {
   recordings: Recording[] | undefined;
@@ -36,9 +38,18 @@ type NoteMark = { id: string; status: string; title: string | null };
 /** How many rows a page shows, and how many each "Show more" adds. */
 const PAGE_SIZE = 10;
 
+/** A recording added this recently carries a "New" badge. */
+const NEW_MS = 24 * 60 * 60 * 1000;
+
+const ms = (iso?: string | null) => {
+  const t = iso ? Date.parse(iso) : NaN;
+  return Number.isNaN(t) ? 0 : t;
+};
+
 const StandaloneRecordings: React.FC<StandaloneRecordingsProps> = ({
   recordings,
   timeFilter,
+  patients,
   onAssignPatient,
 }) => {
   const navigate = useNavigate();
@@ -60,11 +71,15 @@ const StandaloneRecordings: React.FC<StandaloneRecordingsProps> = ({
     return `${truncatedName}...${extension}`;
   };
 
-  const standaloneRecordings = recordings?.filter(recording => !recording.patient_id) || [];
-  const filteredStandaloneRecordings = standaloneRecordings.filter(recording => {
+  // Every recording (assigned or not), most recently added or edited first. This used to list
+  // only recordings with no patient, so a take a clinician had just edited for a patient was
+  // nowhere on the dashboard.
+  const patientName = new Map(patients.map(p => [p.id, `${p.first_name} ${p.last_name}`.trim()]));
+  const recentRecordings = [...(recordings || [])].sort((a, b) => activityAt(b) - activityAt(a));
+  const filteredStandaloneRecordings = recentRecordings.filter(recording => {
     if (timeFilter === 'all') return true;
 
-    const recordingDate = new Date(recording.created_at);
+    const recordingDate = new Date(activityAt(recording));
     const now = new Date();
     const daysDiff = (now.getTime() - recordingDate.getTime()) / (1000 * 60 * 60 * 24);
 
@@ -152,15 +167,15 @@ const StandaloneRecordings: React.FC<StandaloneRecordingsProps> = ({
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-200 mt-8">
       <div className="p-6 border-b border-gray-200">
-        <h2 className="text-xl font-semibold text-gray-900">Standalone Recordings</h2>
-        <p className="text-sm text-gray-600 mt-1">Recordings not linked to any patient</p>
+        <h2 className="text-xl font-semibold text-gray-900">Recent Recordings</h2>
+        <p className="text-sm text-gray-600 mt-1">Newest and most recently edited first</p>
       </div>
 
       {filteredStandaloneRecordings.length === 0 ? (
         <div className="p-12 text-center">
           <FileAudio className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-          <p className="text-gray-500 mb-4">No standalone recordings found</p>
-          <p className="text-sm text-gray-400">Create one-time recordings that don't require patient profiles</p>
+          <p className="text-gray-500 mb-4">No recordings yet</p>
+          <p className="text-sm text-gray-400">Record on a device or upload an audio file to get started</p>
         </div>
       ) : (
         <div className="divide-y divide-gray-200">
@@ -169,6 +184,9 @@ const StandaloneRecordings: React.FC<StandaloneRecordingsProps> = ({
             const note = sessionId ? noteOf[sessionId] : undefined;
             const busy = makingFor === recording.id || (note && isWorking(note.status));
             const length = formatLength(recording.duration);
+            const edited = editedAt(recording);
+            const isNew = !edited && Date.now() - ms(recording.created_at) < NEW_MS;
+            const owner = recording.patient_id ? patientName.get(recording.patient_id) : undefined;
 
             return (
               <div
@@ -178,9 +196,20 @@ const StandaloneRecordings: React.FC<StandaloneRecordingsProps> = ({
               >
                 <div className="flex items-center justify-between">
                   <div className="flex-1 min-w-0">
-                    <h3 className="text-lg font-medium text-gray-900 mb-1 truncate" title={recording.recording_name || recording.file_name}>
-                      {truncateFileName(recordingLabel(recording.recording_name || recording.file_name), 60)}
-                    </h3>
+                    <div className="flex items-center gap-2 mb-1 min-w-0">
+                      <h3 className="text-lg font-medium text-gray-900 truncate" title={recording.recording_name || recording.file_name}>
+                        {truncateFileName(recordingLabel(recording.recording_name || recording.file_name), 60)}
+                      </h3>
+                      {isNew && (
+                        <span className="shrink-0 text-xs font-medium text-blue-700 bg-blue-50 px-2 py-0.5 rounded-full">New</span>
+                      )}
+                      {edited > 0 && (
+                        <span className="shrink-0 text-xs font-medium text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full"
+                          title={new Date(edited).toLocaleString()}>
+                          Edited {timeAgo(new Date(edited).toISOString())}
+                        </span>
+                      )}
+                    </div>
                     <div className="flex items-center gap-4 text-sm text-gray-600">
                       <span className="flex items-center gap-1">
                         <Calendar className="w-4 h-4" />
@@ -200,7 +229,12 @@ const StandaloneRecordings: React.FC<StandaloneRecordingsProps> = ({
                       {/* The recording's kind. A dropdown only when this account has Voice Notes;
                           otherwise it stays the plain label it has always been, because a user
                           without access must not learn the feature exists. */}
-                      {!notesOn ? (
+                      {recording.patient_id ? (
+                        <span className="flex items-center gap-1">
+                          <User className="w-4 h-4" />
+                          Patient recording
+                        </span>
+                      ) : !notesOn ? (
                         <span className="flex items-center gap-1">
                           <FileAudio className="w-4 h-4" />
                           Standalone recording
@@ -271,6 +305,17 @@ const StandaloneRecordings: React.FC<StandaloneRecordingsProps> = ({
                   </div>
 
                   <div className="flex items-center gap-4">
+                    {recording.patient_id ? (
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); navigate(`/patients/${recording.patient_id}`); }}
+                        className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100 transition-colors max-w-[14rem]"
+                        title="Open patient"
+                      >
+                        <User className="w-3.5 h-3.5 shrink-0" />
+                        <span className="truncate">{owner || 'Patient'}</span>
+                      </button>
+                    ) : (
                     <div className="text-right">
                       {/* Was a dead "No Patient" chip. Assigning a patient was only reachable
                           from the sidebar's overflow menu, so the one screen that lists every
@@ -285,6 +330,7 @@ const StandaloneRecordings: React.FC<StandaloneRecordingsProps> = ({
                       </button>
                       <p className="text-xs text-gray-500 mt-1">One-time recording</p>
                     </div>
+                    )}
                     <ArrowRight className="w-5 h-5 text-gray-400" />
                   </div>
                 </div>
@@ -295,7 +341,7 @@ const StandaloneRecordings: React.FC<StandaloneRecordingsProps> = ({
           {filteredStandaloneRecordings.length > PAGE_SIZE && (
             <div className="p-4 text-center border-t border-gray-200">
               <p className="text-sm text-gray-500 mb-2">
-                Showing {visible.length} of {filteredStandaloneRecordings.length} standalone recordings
+                Showing {visible.length} of {filteredStandaloneRecordings.length} recordings
               </p>
               {remaining > 0 ? (
                 <button

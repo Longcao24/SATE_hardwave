@@ -12,6 +12,7 @@ import StatsCards from './components/StatsCards';
 import RecentPatientActivity from './components/RecentPatientActivity';
 import StandaloneRecordings from './components/StandaloneRecordings';
 import DeviceOverview from './components/DeviceOverview';
+import RecentPatients from './components/RecentPatients';
 import { InFlightUploads } from '@/components/Uploads/InFlightUploads';
 
 // Import custom hook
@@ -102,9 +103,6 @@ const Dashboard: React.FC<DashboardProps> = ({ onImport, onUseSampleData }) => {
             came back to check after closing the tab mid-upload. */}
         <InFlightUploads variant="card" />
 
-        {/* Devices Overview */}
-        <DeviceOverview />
-
         {/* Time Filter */}
         {/* <div className="flex items-center gap-2 mb-6">
           <Filter className="w-4 h-4 text-gray-500" />
@@ -144,6 +142,12 @@ const Dashboard: React.FC<DashboardProps> = ({ onImport, onUseSampleData }) => {
 
         {/* Clinical Overview Stats */}
         <StatsCards dashboardSummary={dashboardSummary} />
+
+        {/* Recent Patients — the 3 last worked on, "View all" → /patients */}
+        <RecentPatients patients={patients} recordings={recordings ?? []} />
+
+        {/* Devices Overview */}
+        <DeviceOverview />
 
         {/* Quick Recording */}
         {/* <div className="bg-white rounded-xl shadow-sm border border-gray-200 mb-8">
@@ -271,7 +275,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onImport, onUseSampleData }) => {
           />
         )}
 
-        {/* Standalone Recordings (No Patient) */}
+        {/* Recent Recordings — every recording, newest or most recently edited first */}
         <StandaloneRecordings
           recordings={recordings}
           timeFilter={timeFilter}
