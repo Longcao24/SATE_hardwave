@@ -49,6 +49,17 @@ export class ServerProcessingError extends Error {
 const cancelled = new WeakSet<File>();
 const inflight = new WeakMap<File, XMLHttpRequest>();
 
+// Closing the form must NOT lose the file (2026-11-02: six web uploads were deleted that way, most
+// because the clinician got tired of waiting). Closing DETACHES the upload: the PUT and register
+// still finish, the backend processes it, and it shows in the in-flight list and then in the
+// recordings — this tab just stops watching it. Only an explicit discard would withdraw it.
+const detached = new WeakSet<File>();
+
+/** The clinician closed the form: keep uploading and processing, stop watching in this tab. */
+export function detachUpload(file: File) {
+  detached.add(file);
+}
+
 /** Thrown when the clinician cancelled; not an error to show. */
 export class UploadCancelledError extends Error {
   readonly cancelled = true;
@@ -148,6 +159,7 @@ export async function processOnServer(file: File, opts: ServerProcessingOptions 
   if (paused) throw new ServerProcessingError(paused, null, false, 'uploads paused (sate_web_notice)');
   const serial = `web-${session.user.id.replace(/-/g, '').slice(0, 8)}`;
   cancelled.delete(file);
+  detached.delete(file);
   const checkCancelled = () => { if (cancelled.has(file)) throw new UploadCancelledError(); };
 
   // 1. Hand the file over. Every failure here is reported: the backend never saw this file.
@@ -207,6 +219,8 @@ export async function processOnServer(file: File, opts: ServerProcessingOptions 
   // Cancelled while register was in flight: the backend owns it now, so withdraw it.
   if (cancelled.has(file)) { void withdrawUpload(sessionId); throw new UploadCancelledError(); }
   notifyWebUploadsChanged();
+  // Form closed during the hand-over: the file is safely on the server and queued. Stop here.
+  if (detached.has(file)) throw new UploadCancelledError();
   onSession?.(sessionId);
   onProgress?.(42);
   return watch(sessionId, opts, file);
@@ -215,6 +229,7 @@ export async function processOnServer(file: File, opts: ServerProcessingOptions 
 /** Put an errored upload back in the queue and wait again. */
 export async function retryOnServer(file: File, sessionId: string, opts: ServerProcessingOptions = {}): Promise<ServerProcessingResult> {
   cancelled.delete(file);
+  detached.delete(file);
   try {
     await api(`/sessions/${encodeURIComponent(sessionId)}/retry`, {});
   } catch (e) {
@@ -239,7 +254,7 @@ async function watch(sessionId: string, opts: ServerProcessingOptions, file: Fil
   let warned = false;
   for (;;) {
     await sleep(POLL_MS);
-    if (cancelled.has(file)) throw new UploadCancelledError();
+    if (cancelled.has(file) || detached.has(file)) throw new UploadCancelledError();
     const { data: row, error } = await supabase.from('sate_device_sessions')
       .select('status, recording_id, no_text, process_error')
       .eq('id', sessionId).maybeSingle();
