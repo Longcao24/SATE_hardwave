@@ -12,6 +12,16 @@ interface UseAudioPlayerProps {
   refreshAudioUrl?: () => Promise<string | null>;
 }
 
+/**
+ * Any playback the user asked for (play/pause, a seek, a segment or word play). A word click waits a
+ * moment to tell a single click from a double one; this tells every such pending click that something
+ * else was asked for meanwhile, so a late word play never overrides it (TranscriptSegment listens).
+ */
+export const PLAYBACK_INTENT = 'sate:playback-intent';
+export function announcePlaybackIntent() {
+  try { window.dispatchEvent(new Event(PLAYBACK_INTENT)); } catch { /* not in a browser */ }
+}
+
 export function useAudioPlayer({ transcriptData = [], refreshAudioUrl }: UseAudioPlayerProps = {}) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [currentTime, setCurrentTime] = useState(0);
@@ -229,6 +239,7 @@ export function useAudioPlayer({ transcriptData = [], refreshAudioUrl }: UseAudi
 
   // Audio controls
   const togglePlayPause = async () => {
+    announcePlaybackIntent();
     const audio = audioRef.current;
     
     if (!audio) {
@@ -260,6 +271,7 @@ export function useAudioPlayer({ transcriptData = [], refreshAudioUrl }: UseAudi
   const endSegmentPlayback = () => {
     segmentTokenRef.current++;
     setSegmentEndTime(null);
+    announcePlaybackIntent();
   };
 
   const seekTo = (time: number) => {
@@ -317,6 +329,7 @@ export function useAudioPlayer({ transcriptData = [], refreshAudioUrl }: UseAudi
 
   // Play a specific segment (from start to end)
   const playSegment = async (startTime: number, endTime: number) => {
+    announcePlaybackIntent();
     const audio = audioRef.current;
     if (!audio || !audioLoaded) return;
     

@@ -204,6 +204,8 @@ const AnnotationPopup: React.FC<AnnotationPopupProps> = ({
   const renderPlay = () => {
     if (!onPlay || !currentAnnotation) return null;
     const start = Number(currentAnnotation.start) || 0;
+    // No timing at all (start and end 0): there is nothing to play — not the first 0.6 s of the take.
+    if (!(Number(currentAnnotation.end) > start) && start === 0) return null;
     const end = Number(currentAnnotation.end) > start ? Number(currentAnnotation.end) : start + 0.6;
     return (
       <button

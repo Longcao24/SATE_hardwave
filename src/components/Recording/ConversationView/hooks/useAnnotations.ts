@@ -111,6 +111,21 @@ const removeAnnotationFromSegment = (segment: Segment, wordIndex: number, type: 
   }
 };
 
+/**
+ * The time span of several words of one segment: earliest start → latest end, skipping words with no
+ * timing. A repetition, revision or maze covers several words, and the popup's Play must play all of
+ * them, not just the one that was clicked (audit 2026-11-02). Falls back to the clicked word.
+ */
+export function wordsSpan(segment: Segment, indices: number[], fallback: number): { start: number; end: number } {
+  const ws = [...new Set([...indices, fallback])].map((i) => segment.words[i])
+    .filter((w) => w && w.start != null && w.end != null) as { start: number; end: number }[];
+  if (!ws.length) {
+    const w = segment.words[fallback];
+    return { start: w?.start || 0, end: w?.end || 0 };
+  }
+  return { start: Math.min(...ws.map((w) => w.start)), end: Math.max(...ws.map((w) => w.end)) };
+}
+
 export const useAnnotations = (
   transcriptData: Segment[],
   onTranscriptChange?: (updatedSegments: Segment[]) => void,
@@ -345,12 +360,13 @@ export const useAnnotations = (
           rep.words.includes(wordIndex)
         );
         if (repetition) {
+          const span = wordsSpan(segment, repetition.words || [], wordIndex);
           return {
             type: 'repetition',
             content: repetition.content,
-            start: word.start || 0,
-            end: word.end || 0,
-            duration: (word.end || 0) - (word.start || 0),
+            start: span.start,
+            end: span.end,
+            duration: span.end - span.start,
             position,
             additionalInfo: { 
               words: repetition.words,
@@ -435,12 +451,13 @@ export const useAnnotations = (
         });
         if (revision) {
           const wordIndices = revision.location || revision.words || [];
+          const span = wordsSpan(segment, wordIndices, wordIndex);
           return {
             type: 'revision',
             content: revision.content,
-            start: word.start || 0,
-            end: word.end || 0,
-            duration: (word.end || 0) - (word.start || 0),
+            start: span.start,
+            end: span.end,
+            duration: span.end - span.start,
             position,
             additionalInfo: { 
               words: wordIndices,
@@ -521,12 +538,16 @@ export const useAnnotations = (
         });
         
         // Create a unified "Maze" annotation that combines all maze components
+        // The maze spans every component's words (a repetition/revision now carries its whole span).
+        const timed = mazeAnnotations.filter((a) => a.end > a.start);
+        const mazeStart = timed.length ? Math.min(...timed.map((a) => a.start)) : (word.start || 0);
+        const mazeEnd = timed.length ? Math.max(...timed.map((a) => a.end)) : (word.end || 0);
         const mazeAnnotation: AnnotationDetails = {
           type: 'maze',
           content: filteredMazeAnnotations.map(ann => ann.content || ann.type).filter(Boolean).join(', '),
-          start: word.start || 0,
-          end: word.end || 0,
-          duration: (word.end || 0) - (word.start || 0),
+          start: mazeStart,
+          end: mazeEnd,
+          duration: mazeEnd - mazeStart,
           position,
           additionalInfo: {
             wordIndex,

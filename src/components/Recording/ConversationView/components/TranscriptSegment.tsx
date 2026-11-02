@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from "react";
+import { PLAYBACK_INTENT, announcePlaybackIntent } from "@/hooks/useAudioPlayer";
 import {
   Play,
   Edit2,
@@ -75,8 +76,9 @@ interface TranscriptSegmentProps {
   onNoteChange?: (segmentIndex: number, note: string) => void;
 }
 
-/** How long a click on a word waits for a second click before playing just that word. */
-const WORD_CLICK_MS = 220;
+/** How long a click on a word waits for a second click before playing just that word. Long enough for
+ *  an ordinary double click (220 ms was not: the word played, then jumped to the segment). */
+const WORD_CLICK_MS = 350;
 
 const TranscriptSegment: React.FC<TranscriptSegmentProps> = ({
   segment,
@@ -123,7 +125,11 @@ const TranscriptSegment: React.FC<TranscriptSegmentProps> = ({
   const cancelWordClick = () => {
     if (wordClickTimer.current !== null) { window.clearTimeout(wordClickTimer.current); wordClickTimer.current = null; }
   };
-  useEffect(() => cancelWordClick, []);
+  useEffect(() => {
+    // Anything else the user plays meanwhile (another word, the play button, a seek) wins.
+    window.addEventListener(PLAYBACK_INTENT, cancelWordClick);
+    return () => { window.removeEventListener(PLAYBACK_INTENT, cancelWordClick); cancelWordClick(); };
+  }, []);
   const wordSpan = (wordIndex: number): [number, number] | null => {
     const w = segment.words[wordIndex];
     if (!w || w.start === undefined || w.start === null) return null;
@@ -931,7 +937,8 @@ const TranscriptSegment: React.FC<TranscriptSegmentProps> = ({
                           if (onWordClick) {
                             onWordClick(segmentIndex, wordIndex, word);
                           }
-                          cancelWordClick();
+                          // Cancels this and every other segment's pending word play.
+                          announcePlaybackIntent();
                           // The second click of a double click: onDoubleClick plays the segment.
                           if (e.detail >= 2) return;
                           const span = wordSpan(wordIndex);
