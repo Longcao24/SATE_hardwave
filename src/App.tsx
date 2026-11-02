@@ -22,6 +22,7 @@ import { AdminPage } from './components/Admin/AdminPage';
 import OversightPage from './components/Oversight/OversightPage';
 import { WebUploadAnnouncer } from './components/Uploads/WebUploadAnnouncer';
 import { WebNoticeBanner } from './components/Notice/WebNoticeBanner';
+import StandaloneRecordingsPage from './components/Recording/StandaloneRecordingsPage';
 
 // Protected Route component
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -130,6 +131,16 @@ function App() {
         }
       />
       
+      {/* Every recording not assigned to a patient (the dashboard links here) */}
+      <Route
+        path="/recordings/standalone"
+        element={
+          <ProtectedRoute>
+            <StandaloneRecordingsPage />
+          </ProtectedRoute>
+        }
+      />
+
       {/* Devices Route */}
       <Route
         path="/devices"

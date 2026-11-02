@@ -21,6 +21,7 @@ import { AssignPatientModal } from '@/components/Layout/LeftSidebar/modals/Assig
 import { updateRecordingPatient } from '@/services/dataService';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
+import { ChevronRight, FileAudio } from 'lucide-react';
 
 // Import types
 import type { DashboardProps } from './types';
@@ -284,15 +285,29 @@ const Dashboard: React.FC<DashboardProps> = ({ onImport, onUseSampleData }) => {
           onAssignPatient={setAssignRecordingId}
         />
 
-        {/* Below it: every recording still without a patient, all of them, to work through. */}
-        <StandaloneRecordings
-          mode="standalone"
-          recordings={recordings}
-          timeFilter={timeFilter}
-          patients={patients}
-          loadingPatients={loadingPatients}
-          onAssignPatient={setAssignRecordingId}
-        />
+        {/* Every recording still without a patient lives on its own page (it overlapped Recent
+            Recordings as a second full list here); this is the way in. */}
+        {(() => {
+          const n = (recordings || []).filter((r) => !r.patient_id).length;
+          return (
+            <button onClick={() => navigate('/recordings/standalone')}
+              className="mt-6 w-full flex items-center gap-3 rounded-xl border border-gray-200 bg-white px-5 py-4 text-left hover:border-blue-300 hover:bg-blue-50/40 transition-colors">
+              <div className="w-8 h-8 shrink-0 bg-amber-100 rounded-lg flex items-center justify-center">
+                <FileAudio className="w-4 h-4 text-amber-700" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-base font-semibold text-gray-900">Standalone Recordings</span>
+                  <span className="text-xs font-medium text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">{n}</span>
+                </div>
+                <p className="text-xs text-gray-500 truncate">
+                  {n ? 'Recordings not assigned to a patient yet — open the full list to assign them' : 'Every recording is assigned to a patient'}
+                </p>
+              </div>
+              <span className="text-sm text-blue-600 font-medium flex items-center gap-1 shrink-0">View all <ChevronRight className="w-4 h-4" /></span>
+            </button>
+          );
+        })()}
       </div>
 
       <AssignPatientModal

@@ -235,6 +235,9 @@ export const deviceApiService = {
     req<{ retried: string[]; skipped: { id: string; reason: string }[] }>('/admin/sessions/retry', { method: 'POST', body: JSON.stringify({ ids }) }),
   adminRequeueStuck: (ids: string[]) =>
     req<{ requeued: string[]; skipped: { id: string; reason: string }[] }>('/admin/sessions/requeue-stuck', { method: 'POST', body: JSON.stringify({ ids }) }),
+  /** [v43.4-problems] Create the session an upload in Storage never got, so the worker processes it. */
+  adminRegisterOrphans: (paths: string[]) =>
+    req<{ registered: { path: string; id: string }[]; skipped: { id: string; reason: string }[] }>('/admin/sessions/register-orphan', { method: 'POST', body: JSON.stringify({ paths }) }),
   /** [v38] Every device anywhere (incl. app-only hardware) with its holder and every account that used it. */
   adminRecorders: () => req<{ generated_at: string; recorders: AdminRecorder[] }>('/admin/recorders'),
   adminDeleteUser: (id: string, confirmEmail: string) =>
