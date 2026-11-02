@@ -248,7 +248,7 @@ export function AdminPage() {
                     <th className="text-right font-semibold px-3 py-2">Reports</th>
                     <th className="text-right font-semibold px-3 py-2">Audio</th>
                     <th className="text-right font-semibold px-3 py-2">Recorders</th>
-                    <th className="text-right font-semibold px-3 py-2">Last sign-in</th>
+                    <th className="text-right font-semibold px-3 py-2" title="Latest of: sign-in, session refresh (the app or web in use), last recording">Last active</th>
                     <th className="px-3 py-2"></th>
                   </tr>
                 </thead>
@@ -278,7 +278,10 @@ export function AdminPage() {
                         <td className="px-3 py-2.5 text-right tabular-nums">{u.recordings ?? '—'}</td>
                         <td className="px-3 py-2.5 text-right tabular-nums">{u.audio_seconds != null ? fmtHours(u.audio_seconds) : '—'}</td>
                         <td className="px-3 py-2.5 text-right tabular-nums">{u.devices}</td>
-                        <td className="px-3 py-2.5 text-right text-gray-500 whitespace-nowrap">{u.last_sign_in_at ? timeAgo(u.last_sign_in_at) : 'never'}</td>
+                        <td className="px-3 py-2.5 text-right text-gray-500 whitespace-nowrap"
+                          title={`Last password sign-in: ${u.last_sign_in_at ? new Date(u.last_sign_in_at).toLocaleString() : 'never'}`}>
+                          {(u.last_active_at ?? u.last_sign_in_at) ? timeAgo((u.last_active_at ?? u.last_sign_in_at)!) : 'never'}
+                        </td>
                         <td className="px-3 py-2.5 text-right">
                           <button onClick={() => setOpenUser(u.id)} className="text-xs px-2.5 py-1 rounded-md border hover:bg-white">Manage</button>
                         </td>

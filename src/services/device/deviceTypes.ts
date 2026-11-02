@@ -93,6 +93,8 @@ export interface AdminUser {
   email: string;
   created_at?: string;
   last_sign_in_at?: string | null;
+  /** [device-api v43.8] Latest of: password sign-in, session refresh, last recording. */
+  last_active_at?: string | null;
   devices: number;
   is_admin: boolean;
   // [device-api v35] — optional so an older server still type-checks
@@ -110,6 +112,8 @@ export interface AdminUserDetail {
   email: string;
   created_at?: string;
   last_sign_in_at?: string | null;
+  /** [device-api v43.8] Latest of: password sign-in, session refresh, last recording. */
+  last_active_at?: string | null;
   email_confirmed_at?: string | null;
   disabled: boolean;
   is_admin: boolean;

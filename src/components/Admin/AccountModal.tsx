@@ -82,7 +82,8 @@ export function AccountModal({ userId, onClose, onChanged, notes }: {
               <Stat label="Uploaded sessions" value={u.stats.sessions} />
               <Stat label="Devices" value={u.stats.devices} />
               <Stat label="Last recording" value={fmtDate(u.stats.last_recording_at)} />
-              <Stat label="Last sign-in" value={fmtDate(u.last_sign_in_at)} />
+              <Stat label="Last active" value={fmtDate(u.last_active_at ?? u.last_sign_in_at)} />
+              <Stat label="Last password sign-in" value={fmtDate(u.last_sign_in_at)} />
             </div>
             <p className="text-xs text-gray-500">Joined {fmtDate(u.created_at)} · email {u.email_confirmed_at ? 'confirmed' : 'not confirmed'}</p>
 
