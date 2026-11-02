@@ -7,6 +7,8 @@ import { type Patient } from '@/services/patientService';
 import { type RecordingStats } from '../types';
 import { formatDate, formatDuration } from '../utils';
 import { InFlightUploads } from '@/components/Uploads/InFlightUploads';
+import { useRecordings } from '@/hooks/useRecordings';
+import { ProcessingChip } from '@/components/Report/ProcessingChip';
 
 interface ReportsTabProps {
   patient: Patient;
@@ -28,6 +30,9 @@ export const ReportsTab: React.FC<ReportsTabProps> = ({
   onChangePatient
 }) => {
   const navigate = useNavigate();
+  // Reports saved before processing finished (Save-first): listed with their status until they fill in.
+  const { recordings } = useRecordings();
+  const waiting = (recordings ?? []).filter((r) => r.patient_id === patient.id && r.processing);
 
   return (
     <div className="space-y-8">
@@ -47,6 +52,24 @@ export const ReportsTab: React.FC<ReportsTabProps> = ({
 
       {/* This patient's uploads that are not a report yet (nothing rendered when none). */}
       <InFlightUploads patientId={patient.id} variant="card" className="" />
+
+      {waiting.length > 0 && (
+        <Card className="bg-white shadow-sm border-0 p-4">
+          <div className="text-sm font-semibold text-gray-900 mb-2">Saved, not ready yet</div>
+          <div data-usage-mask className="divide-y divide-gray-100">
+            {waiting.map((r) => (
+              <button key={r.id} onClick={() => navigate(`/report/${r.id}`)} data-track="Reports: open waiting report"
+                className="w-full flex items-center justify-between gap-3 py-2 text-left hover:bg-gray-50 rounded">
+                <span className="truncate text-sm text-gray-800">{r.recording_name || r.file_name}</span>
+                <span className="flex items-center gap-3 shrink-0">
+                  <ProcessingChip state={r.processing} />
+                  <span className="text-xs text-gray-400">{new Date(r.created_at).toLocaleDateString()}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+        </Card>
+      )}
 
       {/* Recording Reports */}
       <Card className="bg-white shadow-sm border-0">

@@ -25,6 +25,7 @@ import ErrorNotificationPopup from '@/components/Modals/ErrorNotificationPopup';
 import RecordingMetadataForm from '@/components/Recording/RecordingMetadataForm';
 import CreateRecordingPopup from '@/components/Recording/CreateRecordingPopup';
 import Dashboard from '@/components/Layout/Dashboard';
+import { PendingReport, type PendingReportInfo } from '@/components/Report/PendingReport';
 import { ToastNotification } from '@/components/Common/ToastNotification';
 import { ConfirmationDialog } from '@/components/Common/ConfirmationDialog';
 
@@ -64,6 +65,9 @@ export function MainApp() {
   
   // Serialization of report loads (see the load effect below)
   const reportLoadTokenRef = useRef(0);
+  // Save-first: a report saved before its upload was processed — shown as PendingReport until it fills in.
+  const [pendingReport, setPendingReport] = useState<PendingReportInfo | null>(null);
+  const [reportReloadKey, setReportReloadKey] = useState(0);
   const reportLoadChainRef = useRef<Promise<void>>(Promise.resolve());
 
   // Import popup state
@@ -155,6 +159,23 @@ export function MainApp() {
     const loadReportFromUrl = async () => {
       // Handle report route
       if (reportId && user) {
+        // A Save-first report still waiting for processing has no transcript or audio yet: show where it
+        // stands instead of loading it (which would fall through to the dashboard and toast a missing audio).
+        const { data: head } = await supabase.from('recordings')
+          .select('id, recording_name, file_name, created_at, source_session_id, pending:transcript->pending, no_speech:transcript->no_speech')
+          .eq('id', reportId).maybeSingle();
+        if (runToken !== reportLoadTokenRef.current) return;
+        if (head && (head.pending === true || head.no_speech === true)) {
+          audioPlayer.stopAndReset();
+          transcriptProcessor.clearData();
+          audioPlayer.setAudioUrl(null);
+          setPendingReport({
+            id: head.id, name: head.recording_name || head.file_name || 'Recording', createdAt: head.created_at,
+            sessionId: head.source_session_id, noSpeech: head.no_speech === true,
+          });
+          return;
+        }
+        setPendingReport(null);
         const audioUrl = await transcriptProcessor.loadRecordingById(reportId);
         if (runToken !== reportLoadTokenRef.current) return;
         // Always hand the player the new source, null included: keeping the
@@ -176,7 +197,8 @@ export function MainApp() {
         if (rec?.needs_review) {
           setReviewRec({ id: rec.id, name: rec.recording_name || '' });
         }
-      } else if (!reportId && !isSampleData && (transcriptProcessor.transcriptData.length > 0 || transcriptProcessor.currentRecordingId || audioPlayer.audioUrl)) {
+      } else if (!reportId && !isSampleData && (transcriptProcessor.transcriptData.length > 0 || transcriptProcessor.currentRecordingId || audioPlayer.audioUrl || pendingReport)) {
+        setPendingReport(null);
         // Clear data when navigating to home (not on sample or report route) and we have data to clear
         // Stop audio playback first
         audioPlayer.stopAndReset();
@@ -195,7 +217,7 @@ export function MainApp() {
     reportLoadChainRef.current = reportLoadChainRef.current
       .then(loadReportFromUrl)
       .catch(() => undefined);
-  }, [reportId, user, navigate]);
+  }, [reportId, user, navigate, reportReloadKey]);
 
   // Surface audio failures: the controls otherwise just sit there disabled
   useEffect(() => {
@@ -455,6 +477,8 @@ export function MainApp() {
             onDeleteFlag={transcriptProcessor.deleteFlag}
             onUpdateFlagNote={transcriptProcessor.updateFlagNote}
           />
+        ) : pendingReport && reportId === pendingReport.id ? (
+          <PendingReport key={pendingReport.id} info={pendingReport} onReady={() => setReportReloadKey((k) => k + 1)} />
         ) : (
           <Dashboard 
             onImport={handleFileUpload}
@@ -558,6 +582,7 @@ export function MainApp() {
           patientName={transcriptProcessor.pendingRecordingData?.patientName}
           isProcessing={transcriptProcessor.isProcessing && !transcriptProcessor.pendingRecordingData?.isProcessingComplete}
           processingProgress={transcriptProcessor.processingProgress}
+          canSaveNow={!!transcriptProcessor.pendingRecordingData?.sessionId}
           hasError={transcriptProcessor.showErrorNotification || !!transcriptProcessor.dataError}
         />
 

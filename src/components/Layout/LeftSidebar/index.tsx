@@ -178,10 +178,10 @@ const LeftSidebar: React.FC<LeftSidebarProps> = ({
   
   const handleRecordingClick = useCallback(async (recording: Recording) => {
     if (!onSelectRecording) return;
-    const url = await getRecordingUrl(recording.file_path);
-    if (url) {
-      onSelectRecording(url, recording.id);
-    }
+    // Open by id. A Save-first report still processing has no audio yet (file_path ''), and requiring a
+    // signed URL here made clicking it do nothing; the report page loads its own audio anyway.
+    const url = recording.file_path ? await getRecordingUrl(recording.file_path) : null;
+    onSelectRecording(url || '', recording.id);
   }, [onSelectRecording]);
   
   const handleSettingsClick = useCallback((section: 'profile' | 'billing' | 'inviteCodes') => {

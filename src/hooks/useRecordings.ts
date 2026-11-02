@@ -21,7 +21,15 @@ export interface Recording {
    *  been processed (and for anything stored before the column was filled), so every reader
    *  must treat "no duration" as unknown rather than as zero — see `formatLength`. */
   duration?: number | null;
+  /** [Save-first, 2026-11-02] A report saved before its upload finished processing: where it stands.
+   *  null/undefined = an ordinary, ready recording. */
+  processing?: RecordingProcessing | null;
+  /** When processing filled a Save-first report in (ISO), so that write is not mistaken for an edit. */
+  ready_at?: string | null;
 }
+
+/** Where a Save-first report stands. 'failed' offers Retry; details are for admins only. */
+export type RecordingProcessing = 'queued' | 'processing' | 'failed' | 'no_speech' | 'removed';
 
 const tsMs = (iso?: string | null) => {
   const t = iso ? Date.parse(iso) : NaN;
@@ -34,9 +42,11 @@ const EDIT_GRACE_MS = 5 * 60 * 1000;
 const EDIT_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** When a person last edited this recording (ms), or 0 if not recently. */
-export function recordingEditedAt(r: Pick<Recording, 'created_at' | 'updated_at'>): number {
+export function recordingEditedAt(r: Pick<Recording, 'created_at' | 'updated_at'> & { ready_at?: string | null }): number {
   const u = tsMs(r.updated_at);
   if (u - tsMs(r.created_at) <= EDIT_GRACE_MS) return 0;
+  // A Save-first report is filled in by processing, possibly long after it was created: that is not an edit.
+  if (r.ready_at && u - tsMs(r.ready_at) <= EDIT_GRACE_MS) return 0;
   return Date.now() - u <= EDIT_WINDOW_MS ? u : 0;
 }
 
@@ -69,7 +79,7 @@ export const useRecordings = () => {
 
       let { data, error } = await supabase
         .from('recordings')
-        .select(`${BASE}, analysis_seconds:analysis->totalDuration`)
+        .select(`${BASE}, analysis_seconds:analysis->totalDuration, t_pending:transcript->pending, t_no_speech:transcript->no_speech, ready_at:transcript->>ready_at`)
         .eq('user_id', user.id)
         .order('created_at', { ascending: false });
 
@@ -87,13 +97,34 @@ export const useRecordings = () => {
 
       if (error) throw error;
 
+      // Save-first reports still waiting: read their uploads' status (owners can read their sessions).
+      type Row = Recording & { analysis_seconds?: number | string | null; t_pending?: boolean | null; t_no_speech?: boolean | null };
+      const rows = (data ?? []) as Row[];
+      const waiting = rows.filter((r) => r.t_pending === true && r.source_session_id).map((r) => r.source_session_id as string);
+      const status = new Map<string, string>();
+      for (let i = 0; i < waiting.length; i += 100) {
+        const { data: ss } = await supabase.from('sate_device_sessions').select('id, status').in('id', waiting.slice(i, i + 100));
+        for (const x of ss || []) status.set(x.id, x.status);
+      }
+      const processingOf = (r: Row): RecordingProcessing | null => {
+        if (r.t_no_speech === true) return 'no_speech';
+        if (r.t_pending !== true) return null;
+        const st = r.source_session_id ? status.get(r.source_session_id) : undefined;
+        if (st === 'error') return 'failed';
+        if (st === 'processing') return 'processing';
+        if (st === 'queued') return 'queued';
+        // 'done' but still pending = the fill is landing right now; no session = it was removed.
+        return st === 'done' ? 'processing' : 'removed';
+      };
+
       // Collapse the two sources into the one field every consumer reads.
-      return (data ?? []).map((r) => {
-        const row = r as Recording & { analysis_seconds?: number | string | null };
+      return rows.map((row) => {
         const fallback = Number(row.analysis_seconds);
+        const { t_pending: _p, t_no_speech: _n, analysis_seconds: _a, ...rest } = row;
         return {
-          ...row,
+          ...rest,
           duration: row.duration || (Number.isFinite(fallback) ? fallback : null),
+          processing: processingOf(row),
         } as Recording;
       });
     },
@@ -107,6 +138,8 @@ export const useRecordings = () => {
     refetchOnMount: true,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
+    // While a Save-first report is still being processed, keep its chip current.
+    refetchInterval: (q) => ((q.state.data as Recording[] | undefined)?.some((r) => r.processing === 'queued' || r.processing === 'processing') ? 10_000 : false),
   });
 
   return { recordings, isLoading, error, refetch };

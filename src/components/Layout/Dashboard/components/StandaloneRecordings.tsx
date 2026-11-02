@@ -1,3 +1,4 @@
+import { ProcessingChip } from '@/components/Report/ProcessingChip';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { recordingLabel } from '@/services/recordingName';
 import { useNavigate } from 'react-router-dom';
@@ -199,7 +200,8 @@ const StandaloneRecordings: React.FC<StandaloneRecordingsProps> = ({
       ) : (
         <div className="divide-y divide-gray-200">
           {visible.map((recording) => {
-            const sessionId = recording.source_session_id || null;
+            // No meeting note for a report still waiting for processing: it has no transcript yet.
+            const sessionId = recording.processing ? null : (recording.source_session_id || null);
             const note = sessionId ? noteOf[sessionId] : undefined;
             const busy = makingFor === recording.id || (note && isWorking(note.status));
             const length = formatLength(recording.duration);
@@ -228,6 +230,7 @@ const StandaloneRecordings: React.FC<StandaloneRecordingsProps> = ({
                           Edited {timeAgo(new Date(edited).toISOString())}
                         </span>
                       )}
+                      <ProcessingChip state={recording.processing} className="shrink-0" />
                     </div>
                     <div className="flex items-center gap-4 text-sm text-gray-600">
                       <span className="flex items-center gap-1">

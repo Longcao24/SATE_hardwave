@@ -13,6 +13,9 @@ interface RecordingMetadataFormProps {
   patientName?: string;
   isProcessing?: boolean;
   processingProgress?: number;
+  /** The upload is already on the server: Save can create the report now and processing carries on
+   *  in the background (Save-first, 2026-11-02). */
+  canSaveNow?: boolean;
   zIndex?: number;
   hasError?: boolean;
 }
@@ -26,6 +29,7 @@ const RecordingMetadataForm: React.FC<RecordingMetadataFormProps> = ({
   patientName,
   isProcessing = false,
   processingProgress = 0,
+  canSaveNow = false,
   zIndex = 50,
   hasError = false
 }) => {
@@ -185,7 +189,9 @@ const RecordingMetadataForm: React.FC<RecordingMetadataFormProps> = ({
           {isProcessing && (
             <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-4">
               <p className="text-sm text-yellow-700">
-                💡 <strong>Tip:</strong> Save time by filling out these details while your audio is being processed!
+                💡 <strong>Tip:</strong> {canSaveNow
+                  ? 'Your file is uploaded. Save now and the report opens straight away — processing carries on in the background, even if you close this tab.'
+                  : 'Save time by filling out these details while your audio is being processed!'}
               </p>
             </div>
           )}
@@ -261,12 +267,17 @@ const RecordingMetadataForm: React.FC<RecordingMetadataFormProps> = ({
             <Button
               type="submit"
               className="flex-1 bg-green-600 hover:bg-green-700 text-white"
-              disabled={isLoading || (isProcessing && processingProgress < 100)}
+              disabled={isLoading || (isProcessing && processingProgress < 100 && !canSaveNow)}
             >
               {isLoading ? (
                 <>
                   <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></div>
                   Saving...
+                </>
+              ) : isProcessing && processingProgress < 100 && canSaveNow ? (
+                <>
+                  <Save className="w-4 h-4 mr-2" />
+                  Save Recording
                 </>
               ) : isProcessing && processingProgress < 100 ? (
                 <>

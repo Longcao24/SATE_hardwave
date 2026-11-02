@@ -323,6 +323,44 @@ async function watch(sessionId: string, opts: ServerProcessingOptions, file: Fil
   }
 }
 
+/**
+ * Save-first (2026-11-02): save the report NOW, while the upload is still being processed. Creates the
+ * session's recording (device-api POST /sessions/:id/recording) with the clinician's name / protocol /
+ * note / patient; processing fills it in later, keeping those. Also stops this tab watching the upload
+ * — it carries on on the server, and the report page shows how far it has got.
+ */
+export async function saveBeforeProcessed(
+  file: File | null, sessionId: string, meta: { name: string; protocol?: string; note?: string; patientId?: string | null },
+): Promise<string> {
+  const r = await api<{ recording_id: string }>(`/sessions/${encodeURIComponent(sessionId)}/recording`, {
+    name: meta.name, protocol: meta.protocol || '', note: meta.note || '', patient_id: meta.patientId || null,
+  });
+  if (file) detachUpload(file);
+  notifyWebUploadsChanged();
+  return r.recording_id;
+}
+
+/**
+ * Delete an upload on purpose (the clinician deleted its Save-first report while it was still processing):
+ * device-api removes the session, its audio and the report. Unlike withdrawUpload this says whether it
+ * worked — deleting only the report row would let processing finish and bring the report back.
+ */
+export async function deleteUploadChecked(sessionId: string): Promise<{ ok: boolean; error?: string }> {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) return { ok: false, error: 'Not signed in' };
+  try {
+    const r = await fetch(`${apiBase()}/sessions/${encodeURIComponent(sessionId)}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${session.access_token}`, apikey: import.meta.env.VITE_SUPABASE_ANON_KEY },
+    });
+    notifyWebUploadsChanged();
+    if (r.ok || r.status === 404) return { ok: true };   // 404: already gone
+    return { ok: false, error: `HTTP ${r.status}: ${(await r.text().catch(() => '')).slice(0, 200)}` };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 /** The clinician cancelled: withdraw the upload (its session, and any recording made from it). */
 export async function withdrawUpload(sessionId: string) {
   const { data: { session } } = await supabase.auth.getSession();

@@ -29,6 +29,9 @@ export const useRecordingStats = (recordings: any[] | undefined, patientId?: str
       const stats: RecordingStats[] = [];
 
       for (const recording of patientRecordings) {
+        // A Save-first report still waiting for (or failed / no speech in) processing has no transcript:
+        // it is listed with its status in the Reports tab, never as a "0 words, 0% errors" result.
+        if (recording.processing) continue;
         try {
           const data = await loadRecording(recording.id);
           if (cancelled) return;

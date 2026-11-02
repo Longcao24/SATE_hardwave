@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { detachUpload } from '@/services/DataService/serverProcessing';
+import { detachUpload, saveBeforeProcessed } from '@/services/DataService/serverProcessing';
+import { useQueryClient } from '@tanstack/react-query';
 import { useParams, useNavigate } from 'react-router-dom';
 import { processAudioFile, deleteRecording, updateRecordingPatient, type IssueCounts, type ProcessingError } from '@/services/dataService';
 import { recordingMetadataService, type PendingRecordingData, type RecordingMetadata } from '@/services/recordingMetadataService';
@@ -151,6 +152,32 @@ const PatientDetails: React.FC = () => {
     setShowMetadataForm(true);
   };
 
+  // Save-first (2026-11-02): once the upload is on the server (it has a session), Save no longer waits for
+  // processing. It creates the report now with what the clinician typed and opens it; the report page shows
+  // how far processing has got and fills in when it is done — even if this tab is closed. A processing
+  // failure after the hand-over saves too: the report offers Retry.
+  const queryClient = useQueryClient();
+  const saveFirst = async (metadata: RecordingMetadata) => {
+    const pending = pendingRecordingData;
+    if (!pending?.sessionId || !user || isSavingRecording) return;
+    setIsSavingRecording(true);
+    try {
+      const id = await saveBeforeProcessed(pending.audioFile, pending.sessionId, {
+        name: metadata.name, protocol: metadata.protocol, note: metadata.note, patientId: pending.patientId,
+      });
+      setShowMetadataForm(false);
+      setPendingRecordingData(null);
+      setFormMetadata(null);
+      delete (window as any).latestProcessingResults;
+      queryClient.invalidateQueries({ queryKey: ['recordings', user.id] });
+      navigate(`/report/${id}`);
+    } catch (e) {
+      showErrorNotificationPopup({ type: 'server', message: `Could not save the report yet. Please try Save again. (${e instanceof Error ? e.message : e})` });
+    } finally {
+      setIsSavingRecording(false);
+    }
+  };
+
   const handleMetadataFormSave = async (metadata: RecordingMetadata) => {
     console.log('🔄 handleMetadataFormSave called:', {
       hasPendingData: !!pendingRecordingData,
@@ -178,7 +205,13 @@ const PatientDetails: React.FC = () => {
       return;
     }
 
-    // Store the metadata for when processing completes
+    if (!pendingRecordingData.isProcessingComplete && pendingRecordingData.sessionId) {
+      await saveFirst(metadata);
+      return;
+    }
+
+    // Store the metadata for when processing completes — or, still uploading, for when the upload has a
+    // session (the effect below then saves it first).
     setFormMetadata(metadata);
 
     // If processing is not complete, wait for it
@@ -324,6 +357,13 @@ const PatientDetails: React.FC = () => {
     // Results for the abandoned file must not be paired with the next upload
     delete window.latestProcessingResults;
   };
+
+  // Save clicked while the file was still uploading: save it first the moment the upload has a session.
+  useEffect(() => {
+    if (formMetadata && pendingRecordingData?.sessionId && !pendingRecordingData.isProcessingComplete && !isSavingRecording) {
+      void saveFirst(formMetadata);
+    }
+  }, [formMetadata, pendingRecordingData?.sessionId, pendingRecordingData?.isProcessingComplete]);
 
   // Auto-save when processing completes AFTER user has clicked Save button
   // (formMetadata is only set when user clicks Save, ensuring explicit user action)
@@ -685,6 +725,7 @@ const PatientDetails: React.FC = () => {
         patientName={pendingRecordingData?.patientName}
         isProcessing={isProcessing && !pendingRecordingData?.isProcessingComplete}
         processingProgress={processingProgress}
+        canSaveNow={!!pendingRecordingData?.sessionId}
         zIndex={60}
         hasError={showErrorNotification || !!processingError}
       />

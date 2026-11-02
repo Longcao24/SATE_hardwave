@@ -2,6 +2,7 @@ import React from 'react';
 import { useLocation } from 'react-router-dom';
 import { AudioLines, MoreVertical, Edit, UserPlus, UserX, Trash2, Plus } from 'lucide-react';
 import { type Recording } from '@/hooks/useRecordings';
+import { ProcessingChip } from '@/components/Report/ProcessingChip';
 import { type Patient } from '@/services/patientService';
 import { recordingLabel } from '@/services/recordingName';
 import { formatLength } from '@/utils/duration';
@@ -138,6 +139,7 @@ export const RecordingsList: React.FC<RecordingsListProps> = ({
                     <span className="truncate">
                       {truncateFileName(recordingDisplayName)}
                     </span>
+                    {r.processing && <ProcessingChip state={r.processing} className="self-start" />}
                     {patientName && !currentPatient && !selectedFilterPatientId && (
                       <span className="text-xs text-blue-600 truncate">
                         ({patientName})

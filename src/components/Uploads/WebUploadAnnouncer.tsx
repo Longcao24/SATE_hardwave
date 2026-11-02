@@ -37,11 +37,18 @@ export function WebUploadAnnouncer() {
   useEffect(() => {
     if (!uid) return;
     return onUploadsReady((done) => {
+      // A report saved before processing (Save-first) already has the name the clinician gave it:
+      // announce that, not the file name. Read from the list before it is refetched below.
+      const recs = queryClient.getQueryData<{ id: string; recording_name?: string }[]>(['recordings', uid]) ?? [];
+      const named = done.map((d) => ({ ...d, fileName: recs.find((r) => r.id === d.recordingId)?.recording_name || d.fileName }));
       // The new recording is the one the user is waiting for; every list reading this key
       // (sidebar, dashboard, patient page) picks it up.
       queryClient.invalidateQueries({ queryKey: ['recordings', uid] });
+      // Someone already on that report's page sees it fill in there; no toast over it.
+      const last = named[named.length - 1];
+      if (window.location.pathname === `/report/${last.recordingId}`) return;
       // Several at once: announce the newest; the rest are in the list a click away.
-      setReady(done[done.length - 1]);
+      setReady(last);
     });
   }, [uid, queryClient]);
 

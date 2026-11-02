@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthProvider';
 import { retrySessionOnServer } from '@/services/DataService/serverProcessing';
+import { useRecordings } from '@/hooks/useRecordings';
 
 // The clinician's OWN web uploads that have not (successfully) become a recording yet.
 //
@@ -181,11 +182,15 @@ export function useInFlightUploads(patientId?: string | null) {
     await queryClient.invalidateQueries({ queryKey: inFlightKey(uid) });
   }, [queryClient, uid]);
 
+  // An upload that was SAVED (Save-first) is already a report with its own status chip: listing it here
+  // too showed the same take twice.
+  const { recordings } = useRecordings();
   const items = useMemo(() => {
     const hidden = new Set(dismissed);
+    const saved = new Set((recordings ?? []).map((r) => r.source_session_id).filter(Boolean) as string[]);
     return (data ?? []).filter((u) =>
-      !hidden.has(u.id) && (!patientId || u.web_meta?.patient_uuid === patientId));
-  }, [data, dismissed, patientId]);
+      !hidden.has(u.id) && !saved.has(u.id) && (!patientId || u.web_meta?.patient_uuid === patientId));
+  }, [data, dismissed, patientId, recordings]);
 
   return { items, dismiss, retry };
 }

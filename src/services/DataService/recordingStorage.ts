@@ -4,6 +4,7 @@ import type { TranscriptData, IssueCounts, SpeechAnalysis, FlagNotes } from './t
 import { countErrors } from './errorCounter';
 import { calculateSpeechAnalysis } from './speechAnalysis';
 import { trackAction } from '@/services/usage/tracker';
+import { deleteUploadChecked } from './serverProcessing';
 
 // Save recording with audio file and comprehensive analysis to Supabase
 export const saveRecording = async (
@@ -220,7 +221,7 @@ export const deleteRecording = async (
     // 1. Get recording details first to get file path
     const { data: recording, error: fetchError } = await supabase
       .from('recordings')
-      .select('file_path')
+      .select('file_path, source_session_id, pending:transcript->pending')
       .eq('id', recordingId)
       .eq('user_id', userId) // Ensure user can only delete their own recordings
       .single();
@@ -228,6 +229,19 @@ export const deleteRecording = async (
     if (fetchError || !recording) {
       console.error('Failed to fetch recording for deletion:', fetchError);
       return { success: false, error: 'Recording not found or access denied' };
+    }
+
+    // A Save-first report still waiting for processing: delete the UPLOAD (device-api removes the session,
+    // its audio and this report together). Deleting only this row would let processing finish and insert
+    // the report again.
+    if ((recording as { pending?: boolean }).pending === true && recording.source_session_id) {
+      const r = await deleteUploadChecked(recording.source_session_id);
+      if (!r.ok) return { success: false, error: `Could not delete the upload: ${r.error}` };
+      // The server deleted the placeholder with the session; make sure no row is left either way.
+      await supabase.from('recordings').delete().eq('id', recordingId).eq('user_id', userId);
+      lastSeenVersion.delete(recordingId);
+      queryClient.invalidateQueries({ queryKey: ['recordings', userId] });
+      return { success: true };
     }
 
     // 2. Delete from database first. If storage deletion fails afterwards we
