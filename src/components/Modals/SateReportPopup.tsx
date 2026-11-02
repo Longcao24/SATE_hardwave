@@ -951,6 +951,8 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
     // Print via a hidden iframe (Save as PDF) — preserves the exact layout/colors.
     const iframe = document.createElement('iframe');
     iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
+    // Never recorded by usage analytics: this frame holds the full report and transcript.
+    iframe.setAttribute('data-usage-block', '');
     document.body.appendChild(iframe);
     const doc = iframe.contentWindow!.document;
     doc.open();

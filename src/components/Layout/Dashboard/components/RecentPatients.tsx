@@ -39,7 +39,8 @@ export default function RecentPatients({ patients, recordings }: RecentPatientsP
   const hidden = patients.length - shown.length;
 
   return (
-    <div className="mb-8">
+    // data-usage-mask: patient names and diagnoses must never reach screen replays or click labels.
+    <div className="mb-8" data-usage-mask>
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center">
@@ -63,7 +64,7 @@ export default function RecentPatients({ patients, recordings }: RecentPatientsP
           const n = count.get(p.id) ?? 0;
           const name = `${p.first_name} ${p.last_name}`.trim();
           return (
-            <button key={p.id} onClick={() => navigate(`/patients/${p.id}`)} className="device-card group">
+            <button key={p.id} onClick={() => navigate(`/patients/${p.id}`)} data-track="Dashboard: open recent patient" className="device-card group">
               <div className="flex items-center gap-3 min-w-0">
                 <div className="w-10 h-10 shrink-0 rounded-xl bg-blue-50 flex items-center justify-center text-sm font-semibold text-blue-600">
                   {(p.first_name?.charAt(0) ?? '') + (p.last_name?.charAt(0) ?? '')}

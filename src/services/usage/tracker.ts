@@ -329,7 +329,9 @@ function startRecorder(s: State, r: Replay) {
       maskAllInputs: true,
       maskTextSelector: '[data-usage-mask], [data-usage-mask] *',
       // Media is blocked outright as well as by attribute: a recording's audio is clinical data.
-      blockSelector: '[data-usage-block], audio, video',
+      // iframe: the SATE Report's print frame holds the whole report + transcript, and rrweb serializes a
+      // same-origin frame's document where no [data-usage-mask] of the parent page can reach (audit 2026-11-02).
+      blockSelector: '[data-usage-block], audio, video, iframe',
       recordCanvas: false,
       collectFonts: false,
       inlineImages: false,
@@ -418,13 +420,15 @@ function hide(s: State) {
  */
 let wanted: string | null = null;
 export function startUsage(uid: string) {
-  if (st?.uid === uid || wanted === uid) return;
-  wanted = uid;
-  void loadAnalyticsConfig().then((cfg) => {
-    // Signed out (or switched account) while the config was loading: start nothing for this one.
-    if (wanted !== uid || !cfg.tracking) return;
-    startNow(uid, cfg.replay);
-  });
+  try {
+    if (st?.uid === uid || wanted === uid) return;
+    wanted = uid;
+    void loadAnalyticsConfig().then((cfg) => {
+      // Signed out (or switched account) while the config was loading: start nothing for this one.
+      if (wanted !== uid || !cfg.tracking) return;
+      startNow(uid, cfg.replay);
+    }).catch(() => { /* tracking is optional */ });
+  } catch { /* called from an effect: an analytics error must never reach the error boundary */ }
 }
 
 function startNow(uid: string, replay: boolean) {
@@ -465,6 +469,9 @@ function startNow(uid: string, replay: boolean) {
     listen(s, window, 'pagehide', () => hide(s));
     s.timer = setInterval(() => { try { tick(s); } catch { /* never surface */ } }, TICK_MS);
     if (replay) startReplay(s);
+    // The page this tab opened on. UsageTracker's setUsagePage ran while the config was still loading
+    // (st was null), so without this the landing view — and its tz/screen props — were never sent.
+    setUsagePage(window.location.pathname);
   } catch { /* tracking is optional */ }
 }
 
