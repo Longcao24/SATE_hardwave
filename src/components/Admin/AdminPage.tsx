@@ -30,7 +30,19 @@ import { Button } from '@/components/ui/button';
 import {
   ArrowLeft, ShieldCheck, Trash2, RefreshCw, Cpu, HardDrive, Loader2,
   Activity, ExternalLink, Users, Search, UserPlus, Eye, FileAudio, Clock, UserCog, X, Zap, BarChart3,
+  ArrowUp, ArrowDown, ChevronsUpDown,
 } from 'lucide-react';
+
+/** Sortable columns of the Accounts table. */
+type AccountSortKey = 'email' | 'recordings' | 'audio' | 'devices' | 'last_active' | 'joined';
+const ACCOUNT_SORT_VALUE: Record<AccountSortKey, (u: AdminUser) => string | number | null> = {
+  email: (u) => (u.email || '').toLowerCase() || null,
+  recordings: (u) => u.recordings ?? null,
+  audio: (u) => u.audio_seconds ?? null,
+  devices: (u) => u.devices ?? null,
+  last_active: (u) => { const t = Date.parse(u.last_active_at ?? u.last_sign_in_at ?? ''); return Number.isNaN(t) ? null : t; },
+  joined: (u) => { const t = Date.parse(u.created_at ?? ''); return Number.isNaN(t) ? null : t; },
+};
 
 // Ops surfaces linked from the admin page (open in a new tab).
 const MONITORING_LINKS = [
@@ -118,10 +130,42 @@ export function AdminPage() {
     online: devices.filter((d) => d.online).length,
   }), [users, devices]);
 
+  // Click a header to sort by it; click again to reverse. Numbers and dates start biggest/newest first,
+  // the email A→Z. Empty values (never active, no recordings) always go last, whichever way.
+  const [accountSort, setAccountSort] = useState<{ key: AccountSortKey; dir: 'asc' | 'desc' } | null>(null);
+  const sortAccountsBy = (key: AccountSortKey) => setAccountSort((cur) =>
+    cur?.key === key ? { key, dir: cur.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: key === 'email' ? 'asc' : 'desc' });
+
   const shownUsers = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return q ? users.filter((u) => u.email.toLowerCase().includes(q)) : users;
-  }, [users, query]);
+    const list = q ? users.filter((u) => u.email.toLowerCase().includes(q)) : users;
+    if (!accountSort) return list;
+    const val = ACCOUNT_SORT_VALUE[accountSort.key];
+    const sign = accountSort.dir === 'asc' ? 1 : -1;
+    return [...list].sort((a, b) => {
+      const x = val(a), y = val(b);
+      if (x === null && y === null) return (a.email || '').localeCompare(b.email || '');
+      if (x === null) return 1;
+      if (y === null) return -1;
+      const c = typeof x === 'string' ? x.localeCompare(y as string) : (x as number) - (y as number);
+      return c !== 0 ? sign * c : (a.email || '').localeCompare(b.email || '');
+    });
+  }, [users, query, accountSort]);
+
+  /** A header cell that sorts the Accounts table. */
+  const sortHeader = (k: AccountSortKey, label: string, align: 'left' | 'right' = 'right', title?: string) => {
+    const active = accountSort?.key === k;
+    const Icon = !active ? ChevronsUpDown : accountSort!.dir === 'asc' ? ArrowUp : ArrowDown;
+    return (
+      <th key={k} className={`${align === 'left' ? 'text-left' : 'text-right'} font-semibold ${align === 'left' ? 'px-4' : 'px-3'} py-2`}
+        aria-sort={active ? (accountSort!.dir === 'asc' ? 'ascending' : 'descending') : 'none'} title={title}>
+        <button type="button" onClick={() => sortAccountsBy(k)} data-track={`Accounts: sort by ${label}`}
+          className={`inline-flex items-center gap-1 whitespace-nowrap uppercase tracking-wide ${align === 'right' ? 'flex-row-reverse' : ''} ${active ? 'text-violet-700' : 'hover:text-gray-800'}`}>
+          {label}<Icon className={`w-3 h-3 ${active ? '' : 'opacity-40'}`} />
+        </button>
+      </th>
+    );
+  };
 
   const deleteFirmware = async (fw: AdminFirmware) => {
     if (!window.confirm(`Delete firmware ${fw.version}? This removes the .bin and the release record.`)) return;
@@ -253,17 +297,18 @@ export function AdminPage() {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide">
                   <tr>
-                    <th className="text-left font-semibold px-4 py-2">Account</th>
-                    <th className="text-right font-semibold px-3 py-2">Reports</th>
-                    <th className="text-right font-semibold px-3 py-2">Audio</th>
-                    <th className="text-right font-semibold px-3 py-2">Recorders</th>
-                    <th className="text-right font-semibold px-3 py-2" title="Latest of: sign-in, session refresh (the app or web in use), last recording">Last active</th>
+                    {sortHeader('email', 'Account', 'left')}
+                    {sortHeader('joined', 'Joined', 'right', 'When the account was created')}
+                    {sortHeader('recordings', 'Reports')}
+                    {sortHeader('audio', 'Audio')}
+                    {sortHeader('devices', 'Recorders')}
+                    {sortHeader('last_active', 'Last active', 'right', 'Latest of: sign-in, session refresh (the app or web in use), last recording')}
                     <th className="px-3 py-2"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {shownUsers.length === 0 && (
-                    <tr><td colSpan={6} className="px-4 py-4 text-gray-500">{users.length ? 'No account matches.' : 'No accounts yet.'}</td></tr>
+                    <tr><td colSpan={7} className="px-4 py-4 text-gray-500">{users.length ? 'No account matches.' : 'No accounts yet.'}</td></tr>
                   )}
                   {shownUsers.map((u) => {
                     const notesOn = Boolean(grants?.[u.id]?.enabled);
@@ -280,9 +325,11 @@ export function AdminPage() {
                             {notesOn && <Badge tone="green">meeting notes</Badge>}
                           </div>
                           <div className="text-xs text-gray-400">
-                            joined {timeAgo(u.created_at)}
-                            {u.last_recording_at ? ` · last recording ${timeAgo(u.last_recording_at)}` : ''}
+                            {u.last_recording_at ? `last recording ${timeAgo(u.last_recording_at)}` : 'no recordings yet'}
                           </div>
+                        </td>
+                        <td className="px-3 py-2.5 text-right text-gray-500 whitespace-nowrap" title={u.created_at ? new Date(u.created_at).toLocaleString() : undefined}>
+                          {u.created_at ? timeAgo(u.created_at) : '—'}
                         </td>
                         <td className="px-3 py-2.5 text-right tabular-nums">{u.recordings ?? '—'}</td>
                         <td className="px-3 py-2.5 text-right tabular-nums">{u.audio_seconds != null ? fmtHours(u.audio_seconds) : '—'}</td>
