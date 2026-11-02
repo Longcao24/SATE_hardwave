@@ -181,8 +181,10 @@ const MainContent: React.FC<MainContentProps> = ({
       {/* Report Header - Only show when there's data */}
       {showControls && (
         <div className="p-6 border-b border-gray-200">
-          <div className="flex items-start justify-between group">
-            <div className="flex-1 flex flex-col">
+          {/* The control column may shrink and its buttons wrap: in edit mode (Undo, Redo, Save, Cancel)
+              the row was wider than the space and slid under the right sidebar, hiding Cancel. */}
+          <div className="flex flex-wrap items-start justify-between gap-4 group">
+            <div className="flex-1 min-w-[12rem] flex flex-col">
               <ReportHeader
                 recordingName={recordingName}
                 createdDate={createdDate}
@@ -207,7 +209,7 @@ const MainContent: React.FC<MainContentProps> = ({
             </div>
             
             {/* Control Panel */}
-            <div className="flex flex-col items-end gap-3">
+            <div className="flex flex-col items-end gap-3 min-w-0 shrink ml-auto">
               {/* First Row - Action Buttons */}
               <ActionButtonsPanel
                 isEditable={isEditable}

@@ -40,14 +40,15 @@ export const ActionButtonsPanel: React.FC<ActionButtonsPanelProps> = ({
 
   return (
     <>
-      <div className="flex items-center gap-3">
+      {/* Wraps as a row of whole buttons when the header is narrow; a label never breaks across lines. */}
+      <div className="flex flex-wrap items-center justify-end gap-2">
         {/* Undo/Redo Buttons - Only show in edit mode */}
         {isEditable && (
           <div className="flex items-center gap-1">
             <button
               onClick={undoRedo.undo}
               disabled={!undoRedo.canUndo}
-              className={`inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-lg focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none transition-all duration-200 shadow-sm ${
+              className={`inline-flex items-center gap-1.5 whitespace-nowrap px-3 py-2 text-sm font-medium rounded-lg focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none transition-all duration-200 shadow-sm ${
                 undoRedo.canUndo
                   ? 'text-blue-700 bg-white border border-blue-300 hover:bg-blue-50'
                   : 'text-gray-400 bg-gray-100 border border-gray-200 cursor-not-allowed'
@@ -60,7 +61,7 @@ export const ActionButtonsPanel: React.FC<ActionButtonsPanelProps> = ({
             <button
               onClick={undoRedo.redo}
               disabled={!undoRedo.canRedo}
-              className={`inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-lg focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none transition-all duration-200 shadow-sm ${
+              className={`inline-flex items-center gap-1.5 whitespace-nowrap px-3 py-2 text-sm font-medium rounded-lg focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none transition-all duration-200 shadow-sm ${
                 undoRedo.canRedo
                   ? 'text-blue-700 bg-white border border-blue-300 hover:bg-blue-50'
                   : 'text-gray-400 bg-gray-100 border border-gray-200 cursor-not-allowed'
@@ -76,7 +77,7 @@ export const ActionButtonsPanel: React.FC<ActionButtonsPanelProps> = ({
         {/* Export SALT Button */}
         <button
           onClick={() => setShowSaltExportPopup(true)}
-          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-green-700 bg-white border border-green-300 rounded-lg hover:bg-green-50 focus:ring-2 focus:ring-green-500 focus:ring-offset-2 focus:outline-none transition-all duration-200 shadow-sm"
+          className="inline-flex items-center gap-2 whitespace-nowrap px-4 py-2 text-sm font-medium text-green-700 bg-white border border-green-300 rounded-lg hover:bg-green-50 focus:ring-2 focus:ring-green-500 focus:ring-offset-2 focus:outline-none transition-all duration-200 shadow-sm"
           title="Export transcript to SALT format"
         >
           <Download className="w-4 h-4" />
@@ -86,7 +87,7 @@ export const ActionButtonsPanel: React.FC<ActionButtonsPanelProps> = ({
         {/* Generate SATE Report */}
         <button
           onClick={() => setShowSateReportPopup(true)}
-          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-teal-700 bg-white border border-teal-300 rounded-lg hover:bg-teal-50 focus:ring-2 focus:ring-teal-500 focus:ring-offset-2 focus:outline-none transition-all duration-200 shadow-sm"
+          className="inline-flex items-center gap-2 whitespace-nowrap px-4 py-2 text-sm font-medium text-teal-700 bg-white border border-teal-300 rounded-lg hover:bg-teal-50 focus:ring-2 focus:ring-teal-500 focus:ring-offset-2 focus:outline-none transition-all duration-200 shadow-sm"
           title="Generate a SATE clinical report (PDF / Word)"
         >
           <FileText className="w-4 h-4" />
@@ -108,7 +109,7 @@ export const ActionButtonsPanel: React.FC<ActionButtonsPanelProps> = ({
               // Clear history after successful save
               undoRedo.clearHistory();
             }}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 focus:ring-2 focus:ring-green-500 focus:ring-offset-2 focus:outline-none transition-all duration-200 shadow-sm"
+            className="inline-flex items-center gap-2 whitespace-nowrap px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 focus:ring-2 focus:ring-green-500 focus:ring-offset-2 focus:outline-none transition-all duration-200 shadow-sm"
             title="Save changes"
           >
             <Save className="w-4 h-4" />
@@ -125,7 +126,7 @@ export const ActionButtonsPanel: React.FC<ActionButtonsPanelProps> = ({
                 onCancelEdit?.();
               }
             }}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 focus:outline-none transition-all duration-200 shadow-sm"
+            className="inline-flex items-center gap-2 whitespace-nowrap px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 focus:outline-none transition-all duration-200 shadow-sm"
             title="Cancel editing"
           >
             <X className="w-4 h-4" />
@@ -136,7 +137,7 @@ export const ActionButtonsPanel: React.FC<ActionButtonsPanelProps> = ({
         <button
           onClick={() => onTranscriptChange && onTranscriptChange(transcriptData)}
           data-umami-event="edit_button_click"
-          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none transition-all duration-200 shadow-sm"
+          className="inline-flex items-center gap-2 whitespace-nowrap px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none transition-all duration-200 shadow-sm"
           title="Enable edit mode"
         >
           <Edit2 className="w-4 h-4" />
