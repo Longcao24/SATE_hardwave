@@ -54,6 +54,30 @@ const MONITORING_LINKS = [
 const TAB_IDS = ['accounts', 'managers', 'processing', 'usage', 'recorders', 'firmware', 'monitoring'] as const;
 type Tab = typeof TAB_IDS[number];
 
+/** Each section's heading in the content area. */
+const TAB_TITLES: Record<Tab, { title: string; sub: string }> = {
+  accounts: { title: 'Accounts', sub: 'Every account in the system: its reports, audio, recorders and last activity' },
+  managers: { title: 'Managers', sub: 'Who can view which accounts (read-only), and who gets new-report email' },
+  processing: { title: 'Processing', sub: 'The transcription queue, the AI service and every failure across all accounts' },
+  usage: { title: 'Usage', sub: 'How the web app is used: active time, pages, actions and screen recordings' },
+  recorders: { title: 'Recorders', sub: 'Every device that ever uploaded, and the live telemetry of SATE recorders' },
+  firmware: { title: 'Firmware', sub: 'Published recorder firmware and over-the-air releases' },
+  monitoring: { title: 'Monitoring', sub: 'Operations dashboards outside this app' },
+};
+/** The sidebar groups (same tabs as before, grouped by domain). */
+const NAV_GROUPS: { label: string; tabs: Tab[] }[] = [
+  { label: 'People', tabs: ['accounts', 'managers'] },
+  { label: 'Activity', tabs: ['usage', 'processing'] },
+  { label: 'Hardware', tabs: ['recorders', 'firmware'] },
+  { label: 'System', tabs: ['monitoring'] },
+];
+
+/** Accounts table filters (view only — nothing is changed on the server). */
+type RoleFilter = 'all' | 'admin' | 'manager' | 'member';
+type StatusFilter = 'all' | 'active30' | 'inactive30' | 'disabled';
+const DAY_MS = 86400_000;
+const lastActiveMs = (u: AdminUser) => { const t = Date.parse(u.last_active_at ?? u.last_sign_in_at ?? ''); return Number.isNaN(t) ? null : t; };
+
 function timeAgo(iso?: string | null): string {
   if (!iso) return '—';
   const secs = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
@@ -128,17 +152,32 @@ export function AdminPage() {
     sateReports: users.reduce((a, u) => a + (u.sate_reports || 0), 0),
     audio: users.reduce((a, u) => a + (u.audio_seconds || 0), 0),
     online: devices.filter((d) => d.online).length,
+    active30: users.filter((u) => { const t = lastActiveMs(u); return t !== null && Date.now() - t <= 30 * DAY_MS; }).length,
+    withRecordings: users.filter((u) => (u.recordings || 0) > 0).length,
   }), [users, devices]);
 
   // Click a header to sort by it; click again to reverse. Numbers and dates start biggest/newest first,
   // the email A→Z. Empty values (never active, no recordings) always go last, whichever way.
   const [accountSort, setAccountSort] = useState<{ key: AccountSortKey; dir: 'asc' | 'desc' } | null>(null);
+  const [roleFilter, setRoleFilter] = useState<RoleFilter>('all');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const sortAccountsBy = (key: AccountSortKey) => setAccountSort((cur) =>
     cur?.key === key ? { key, dir: cur.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: key === 'email' ? 'asc' : 'desc' });
 
   const shownUsers = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const list = q ? users.filter((u) => u.email.toLowerCase().includes(q)) : users;
+    const now = Date.now();
+    const list = users.filter((u) => {
+      if (q && !u.email.toLowerCase().includes(q)) return false;
+      if (roleFilter === 'admin' && !u.is_admin) return false;
+      if (roleFilter === 'manager' && !u.is_manager) return false;
+      if (roleFilter === 'member' && (u.is_admin || u.is_manager)) return false;
+      const la = lastActiveMs(u);
+      if (statusFilter === 'active30' && (u.disabled || la === null || now - la > 30 * DAY_MS)) return false;
+      if (statusFilter === 'inactive30' && (u.disabled || (la !== null && now - la <= 30 * DAY_MS))) return false;
+      if (statusFilter === 'disabled' && !u.disabled) return false;
+      return true;
+    });
     if (!accountSort) return list;
     const val = ACCOUNT_SORT_VALUE[accountSort.key];
     const sign = accountSort.dir === 'asc' ? 1 : -1;
@@ -150,7 +189,7 @@ export function AdminPage() {
       const c = typeof x === 'string' ? x.localeCompare(y as string) : (x as number) - (y as number);
       return c !== 0 ? sign * c : (a.email || '').localeCompare(b.email || '');
     });
-  }, [users, query, accountSort]);
+  }, [users, query, accountSort, roleFilter, statusFilter]);
 
   /** A header cell that sorts the Accounts table. */
   const sortHeader = (k: AccountSortKey, label: string, align: 'left' | 'right' = 'right', title?: string) => {
@@ -237,7 +276,7 @@ export function AdminPage() {
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
       <div className="bg-white border-b">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-4 flex items-center gap-3">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex items-center gap-3">
           <button onClick={() => navigate('/')} className="text-gray-500 hover:text-gray-800" title="Back to Dashboard">
             <ArrowLeft className="w-5 h-5" />
           </button>
@@ -256,17 +295,35 @@ export function AdminPage() {
           </Button>
         </div>
 
-        {/* KPIs */}
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 pb-4 grid grid-cols-2 md:grid-cols-5 gap-3">
-          <Kpi icon={<Users className="w-4 h-4" />} label="Accounts" value={totals.accounts} />
-          <Kpi icon={<FileAudio className="w-4 h-4" />} label="Reports" value={totals.reports} />
-          <Kpi icon={<ShieldCheck className="w-4 h-4" />} label="SATE reports" value={totals.sateReports} />
-          <Kpi icon={<Clock className="w-4 h-4" />} label="Total audio" value={fmtHours(totals.audio)} />
-          <Kpi icon={<Cpu className="w-4 h-4" />} label="Recorders online" value={`${totals.online} / ${devices.length}`} />
-        </div>
+      </div>
 
-        {/* Tabs */}
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 flex gap-1 overflow-x-auto">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 flex gap-6">
+        {/* Sidebar: the same sections as before, grouped by domain. */}
+        <aside className="hidden md:block w-52 shrink-0">
+          <nav className="sticky top-6 space-y-5" aria-label="Admin sections">
+            {NAV_GROUPS.map((g) => (
+              <div key={g.label}>
+                <div className="px-3 mb-1 text-[11px] font-semibold uppercase tracking-wider text-gray-400">{g.label}</div>
+                {g.tabs.map((id) => {
+                  const t = TABS.find((x) => x.id === id)!;
+                  const on = tab === id;
+                  return (
+                    <button key={id} onClick={() => setTab(id)} aria-current={on ? 'page' : undefined}
+                      className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors ${
+                        on ? 'bg-violet-600 text-white shadow-sm' : 'text-gray-600 hover:bg-white hover:text-gray-900'}`}>
+                      {t.icon}<span className="flex-1 text-left">{t.label}</span>
+                      {t.count != null && <span className={`text-xs tabular-nums ${on ? 'text-violet-100' : 'text-gray-400'}`}>{t.count}</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </nav>
+        </aside>
+
+        <main className="flex-1 min-w-0">
+        {/* Small screens: the sections as a scrolling tab row. */}
+        <div className="md:hidden -mx-4 px-4 mb-4 flex gap-1 overflow-x-auto border-b">
           {TABS.map((t) => (
             <button key={t.id} onClick={() => setTab(t.id)}
               className={`flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 -mb-px whitespace-nowrap ${
@@ -275,9 +332,21 @@ export function AdminPage() {
             </button>
           ))}
         </div>
-      </div>
 
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6">
+        <div className="mb-5">
+          <h2 className="text-2xl font-bold text-gray-900">{TAB_TITLES[tab].title}</h2>
+          <p className="text-sm text-gray-500 mt-0.5">{TAB_TITLES[tab].sub}</p>
+        </div>
+
+        {/* System totals */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 2xl:grid-cols-5 gap-3 mb-6">
+          <Kpi icon={<Users className="w-5 h-5" />} label="Accounts" value={totals.accounts} sub={`${totals.active30} active in 30 days`} />
+          <Kpi icon={<FileAudio className="w-5 h-5" />} label="Reports" value={totals.reports} sub={`from ${totals.withRecordings} accounts`} />
+          <Kpi icon={<ShieldCheck className="w-5 h-5" />} label="SATE reports" value={totals.sateReports} sub="generated" />
+          <Kpi icon={<Clock className="w-5 h-5" />} label="Total audio" value={fmtHours(totals.audio)} sub="transcribed" />
+          <Kpi icon={<Cpu className="w-5 h-5" />} label="Recorders online" value={`${totals.online} / ${devices.length}`} sub="SATE recorders" />
+        </div>
+
         {error && <div className="mb-4 rounded-lg bg-red-50 text-red-700 text-sm p-3">{error}</div>}
 
         {/* ---------------- Accounts ---------------- */}
@@ -289,6 +358,20 @@ export function AdminPage() {
                 <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search accounts by email"
                   className="w-full py-2 text-sm outline-none bg-transparent" />
               </div>
+              <select value={roleFilter} onChange={(e) => setRoleFilter(e.target.value as RoleFilter)} aria-label="Filter by role"
+                className="border rounded-md bg-white px-2.5 py-2 text-sm text-gray-700">
+                <option value="all">All roles</option>
+                <option value="admin">Admins</option>
+                <option value="manager">Managers</option>
+                <option value="member">Clinicians (no role)</option>
+              </select>
+              <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as StatusFilter)} aria-label="Filter by status"
+                className="border rounded-md bg-white px-2.5 py-2 text-sm text-gray-700">
+                <option value="all">All statuses</option>
+                <option value="active30">Active in 30 days</option>
+                <option value="inactive30">Not active in 30 days</option>
+                <option value="disabled">Disabled</option>
+              </select>
               <Button onClick={() => setCreating(true)} className="bg-violet-600 hover:bg-violet-700 text-white">
                 <UserPlus className="w-4 h-4 mr-2" /> Create account
               </Button>
@@ -308,7 +391,7 @@ export function AdminPage() {
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {shownUsers.length === 0 && (
-                    <tr><td colSpan={7} className="px-4 py-4 text-gray-500">{users.length ? 'No account matches.' : 'No accounts yet.'}</td></tr>
+                    <tr><td colSpan={7} className="px-4 py-4 text-gray-500">{users.length ? 'No account matches the search or filters.' : 'No accounts yet.'}</td></tr>
                   )}
                   {shownUsers.map((u) => {
                     const notesOn = Boolean(grants?.[u.id]?.enabled);
@@ -332,7 +415,7 @@ export function AdminPage() {
                           {u.created_at ? timeAgo(u.created_at) : '—'}
                         </td>
                         <td className="px-3 py-2.5 text-right tabular-nums">{u.recordings ?? '—'}</td>
-                        <td className="px-3 py-2.5 text-right tabular-nums">{u.audio_seconds != null ? fmtHours(u.audio_seconds) : '—'}</td>
+                        <td className="px-3 py-2.5 text-right tabular-nums whitespace-nowrap">{u.audio_seconds != null ? fmtHours(u.audio_seconds) : '—'}</td>
                         <td className="px-3 py-2.5 text-right tabular-nums">{u.devices}</td>
                         <td className="px-3 py-2.5 text-right text-gray-500 whitespace-nowrap"
                           title={`Last password sign-in: ${u.last_sign_in_at ? new Date(u.last_sign_in_at).toLocaleString() : 'never'}`}>
@@ -455,6 +538,7 @@ export function AdminPage() {
             ))}
           </div>
         )}
+        </main>
       </div>
 
       {openUser && (() => {
@@ -474,11 +558,15 @@ export function AdminPage() {
   );
 }
 
-function Kpi({ icon, label, value }: { icon: React.ReactNode; label: string; value: React.ReactNode }) {
+function Kpi({ icon, label, value, sub }: { icon: React.ReactNode; label: string; value: React.ReactNode; sub?: string }) {
   return (
-    <div className="rounded-lg border bg-gray-50 px-3 py-2">
-      <div className="text-xs text-gray-500 flex items-center gap-1">{icon}{label}</div>
-      <div className="text-lg font-semibold text-gray-900 tabular-nums">{value}</div>
+    <div className="rounded-xl border border-gray-200 bg-white p-4 flex items-start gap-3">
+      <div className="flex-1 min-w-0">
+        <div className="text-sm text-gray-500 leading-snug">{label}</div>
+        <div className="text-2xl font-semibold text-gray-900 tabular-nums mt-1">{value}</div>
+        {sub && <div className="text-xs text-gray-400 mt-1 leading-snug">{sub}</div>}
+      </div>
+      <div className="w-9 h-9 shrink-0 rounded-full bg-violet-50 text-violet-600 flex items-center justify-center">{icon}</div>
     </div>
   );
 }
