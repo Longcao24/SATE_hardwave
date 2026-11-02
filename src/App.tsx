@@ -21,6 +21,7 @@ import { NotesPage } from '@/components/Notes/NotesPage';
 import { AdminPage } from './components/Admin/AdminPage';
 import OversightPage from './components/Oversight/OversightPage';
 import { WebUploadAnnouncer } from './components/Uploads/WebUploadAnnouncer';
+import { WebNoticeBanner } from './components/Notice/WebNoticeBanner';
 
 // Protected Route component
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -47,6 +48,8 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 function App() {
   return (
     <>
+    {/* Site-wide notice (e.g. an AI outage), switched on/off in the sate_web_notice table. */}
+    <WebNoticeBanner />
     {/* Watches the user's web uploads on every page and announces "<file> is ready". */}
     <WebUploadAnnouncer />
     <Routes>

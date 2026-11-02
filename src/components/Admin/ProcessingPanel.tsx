@@ -6,10 +6,10 @@
 // with Retry). Retry is the owner's own Retry, done by an admin and written to the audit trail.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Clock, ExternalLink, Loader2, RefreshCw, RotateCcw, Timer, XCircle, Zap } from 'lucide-react';
+import { Activity, AlertTriangle, CheckCircle2, Clock, ExternalLink, Loader2, RefreshCw, RotateCcw, Timer, XCircle, Zap } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { deviceApiService } from '@/services/device/deviceApiService';
-import type { AdminProcessing } from '@/services/device/deviceTypes';
+import type { AdminProcessing, AiProbe } from '@/services/device/deviceTypes';
 
 const len = (sec?: number | null) => {
   const s = Math.round(sec || 0);
@@ -25,6 +25,86 @@ const ago = (iso?: string | null) => {
   return `${Math.round(s / 86400)}d`;
 };
 const pct = (x: number | null | undefined) => (x == null ? '—' : `${(x * 100).toFixed(1)}%`);
+
+/** The AI service, as the hourly self-test sees it: the status Worker sends 1 s of speech to
+ *  /process (its /health can say ok while /process fails) and mails the operator on a failure. */
+function AiServiceBox({ probes }: { probes?: AiProbe[] }) {
+  const [open, setOpen] = useState(false);
+  if (!probes) return null;   // device-api older than v43.7
+  const last = probes[0];
+  const okN = probes.filter((p) => p.ok).length;
+  const strip = [...probes].reverse().slice(-48);   // oldest → newest; while failing there are up to 4 an hour
+  // The Worker probes hourly; a result much older than that means it is not running or not reporting.
+  const stale = !!last && Date.now() - Date.parse(last.at) > 2.5 * 3600_000;
+  const when = (iso: string) => new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const result = (p: AiProbe) => (p.ok ? 'answered' : p.http_code ? `HTTP ${p.http_code}` : 'no answer');
+  const tone = !last ? 'border-gray-200 bg-white' : !last.ok ? 'border-red-300 bg-red-50' : stale ? 'border-amber-300 bg-amber-50' : 'border-emerald-200 bg-white';
+  return (
+    <div className={`rounded-xl border p-4 ${tone}`}>
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <Activity className={`w-4 h-4 ${!last ? 'text-gray-400' : !last.ok ? 'text-red-600' : stale ? 'text-amber-600' : 'text-emerald-600'}`} />
+        <span className="font-semibold text-gray-900">AI service</span>
+        {!last ? <span className="text-xs text-gray-500">no self-test in the last 3 days — it runs hourly from the status Worker</span> : (
+          <>
+            <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${!last.ok ? 'bg-red-100 text-red-800' : stale ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'}`}>
+              {!last.ok ? 'Failing' : stale ? 'No recent self-test' : 'Working'}
+            </span>
+            <span className="text-xs text-gray-500">
+              last self-test {ago(last.at)} ago · {result(last)}{last.latency_ms != null ? ` in ${(last.latency_ms / 1000).toFixed(1)} s` : ''}
+              {' '}· {okN}/{probes.length} passed in 3 days
+            </span>
+          </>
+        )}
+        {probes.length > 0 && (
+          <button onClick={() => setOpen(!open)} className="ml-auto text-xs text-violet-700 hover:underline">{open ? 'Hide log' : 'Show log'}</button>
+        )}
+      </div>
+      {last && !last.ok && (
+        <div className="mt-2 text-xs text-red-800">
+          1 s of speech sent to <code>/process</code> {result(last)}{last.detail ? ` (${last.detail})` : ''}. Restart the AI service; uploads wait in the queue
+          and lose no attempt. The operator was emailed. It is re-tested about every 15 min until it passes (never while a take
+          is queued or processing, so the AI is not given two calls at once).
+        </div>
+      )}
+      {stale && last?.ok && (
+        <div className="mt-2 text-xs text-amber-800">
+          The last self-test was {ago(last.at)} ago. It runs hourly but waits while takes are queued or processing; if the queue
+          is empty, the status Worker may not be running or reporting.
+        </div>
+      )}
+      {strip.length > 0 && (
+        <div className="mt-3 flex gap-px items-end h-5 overflow-hidden" aria-label="Self-test history, oldest to newest">
+          {strip.map((p) => (
+            <div key={p.at} title={`${when(p.at)} — ${result(p)}${p.detail ? ` · ${p.detail}` : ''}`}
+              className={`flex-1 min-w-[2px] max-w-[8px] h-full rounded-sm ${p.ok ? 'bg-emerald-400' : 'bg-red-500'}`} />
+          ))}
+        </div>
+      )}
+      {open && (
+        <div className="mt-3 max-h-64 overflow-auto rounded-md border bg-white">
+          <table className="w-full text-xs">
+            <thead className="bg-gray-50 text-gray-500 sticky top-0">
+              <tr><th className="text-left px-2 py-1 font-medium">Time</th><th className="text-left px-2 py-1 font-medium">Result</th>
+                <th className="text-right px-2 py-1 font-medium">Took</th><th className="text-right px-2 py-1 font-medium">Segments</th>
+                <th className="text-left px-2 py-1 font-medium">Detail</th></tr>
+            </thead>
+            <tbody>
+              {probes.map((p) => (
+                <tr key={p.at} className="border-t">
+                  <td className="px-2 py-1 whitespace-nowrap tabular-nums">{when(p.at)}</td>
+                  <td className={`px-2 py-1 whitespace-nowrap ${p.ok ? 'text-emerald-700' : 'text-red-700 font-medium'}`}>{p.ok ? '✓ ' : '✗ '}{result(p)}</td>
+                  <td className="px-2 py-1 text-right tabular-nums">{p.latency_ms != null ? `${(p.latency_ms / 1000).toFixed(1)} s` : '—'}</td>
+                  <td className="px-2 py-1 text-right tabular-nums">{p.segments ?? '—'}</td>
+                  <td className="px-2 py-1 text-gray-500">{p.detail || ''}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function ProcessingPanel() {
   const [days, setDays] = useState(7);
@@ -119,6 +199,8 @@ export function ProcessingPanel() {
               </div>
             </div>
           )}
+
+          <AiServiceBox probes={d!.ai_probes} />
 
           {/* Now processing — the one job the worker holds, at a glance */}
           {(() => {

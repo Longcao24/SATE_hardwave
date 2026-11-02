@@ -231,8 +231,15 @@ export interface ProcRecentRow {
   created_at: string; processing_started_at: string | null; finished_at: string;
   wait_s: number | null; processing_s: number | null; recording_id: string | null; process_error: string | null;
 }
+/** [v43.7-ai-probe] One hourly AI self-test (1 s of speech to /process, sent by the status Worker). */
+export interface AiProbe {
+  at: string; ok: boolean; http_code: number | null; latency_ms: number | null;
+  segments: number | null; detail: string | null;
+}
 export interface AdminProcessing {
   generated_at: string; days: number;
+  /** Last 3 days, newest first. Absent from a device-api older than v43.7-ai-probe. */
+  ai_probes?: AiProbe[];
   /** Absent from a device-api older than v43.2-jobs. */
   recent?: ProcRecentRow[];
   live: ProcLiveRow[]; errors: ProcErrorRow[]; error_reasons: { reason: string; n: number }[];

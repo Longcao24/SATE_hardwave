@@ -1,6 +1,7 @@
 import { supabase } from '@/lib/supabase';
 import type { TranscriptData, IssueCounts } from './types';
 import { countErrors } from './errorCounter';
+import { uploadsPausedMessage } from '@/services/webNotice';
 
 // A web upload is PROCESSED BY THE BACKEND, exactly like a device take (2026-10-28).
 //
@@ -142,6 +143,9 @@ export async function processOnServer(file: File, opts: ServerProcessingOptions 
   const { onProgress, onSession } = opts;
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) throw new ServerProcessingError('You are signed out. Please sign in again and re-upload.', null, false, 'Not signed in');
+  // Uploads paused site-wide (sate_web_notice): refuse before anything is sent.
+  const paused = await uploadsPausedMessage();
+  if (paused) throw new ServerProcessingError(paused, null, false, 'uploads paused (sate_web_notice)');
   const serial = `web-${session.user.id.replace(/-/g, '').slice(0, 8)}`;
   cancelled.delete(file);
   const checkCancelled = () => { if (cancelled.has(file)) throw new UploadCancelledError(); };

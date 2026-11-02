@@ -5,6 +5,7 @@ import {
   getErrorAnnotations 
 } from '@/services/dataService';
 import { audioStorageService } from '@/services/audioStorageService';
+import { uploadsPausedMessage } from '@/services/webNotice';
 import { normalizeSegments } from '@/components/Recording/ConversationView/utils/segmentOperations';
 import type { Segment, IssueCounts, SpeechAnalysis, ProcessingError, PendingRecordingData, RecordingMetadata } from './types';
 
@@ -51,6 +52,12 @@ interface FileUploadDeps {
  */
 export function useFileUpload(deps: FileUploadDeps) {
   const handleFileUpload = async (file: File, patientId?: string) => {
+    // Uploads paused site-wide (sate_web_notice, e.g. an AI outage): say so before the form opens.
+    const paused = await uploadsPausedMessage();
+    if (paused) {
+      deps.showErrorNotificationPopup({ type: 'server', message: paused, retryable: false });
+      return null;
+    }
     const processFile = async () => {
       let cachedUrl: string | null = null;
       
