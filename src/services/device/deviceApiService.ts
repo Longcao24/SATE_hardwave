@@ -230,7 +230,13 @@ export const deviceApiService = {
   /** [v44] The caller's plan and this month's usage against the free limits. Shown only — nothing is enforced. */
   getUsage: () => req<PlanUsage>('/account/usage'),
   /** [v43.12] Admin → Dashboard. `from` = start of the window (ISO); omitted = all time. */
-  adminDashboard: (from?: string) => req<AdminDashboard>(`/admin/dashboard${from ? `?from=${encodeURIComponent(from)}` : ''}`),
+  adminDashboard: (from?: string) => {
+    const q = new URLSearchParams();
+    if (from) q.set('from', from);
+    // Day bars are calendar days in the viewer's own time zone.
+    try { q.set('tz', Intl.DateTimeFormat().resolvedOptions().timeZone); } catch { /* server uses UTC */ }
+    return req<AdminDashboard>(`/admin/dashboard?${q}`);
+  },
   /** [v38] Every queued/processing take, unresolved errors, window stats. */
   adminProcessing: (days: number) => req<AdminProcessing>(`/admin/processing?days=${days}`),
   adminRetrySessions: (ids: string[]) =>

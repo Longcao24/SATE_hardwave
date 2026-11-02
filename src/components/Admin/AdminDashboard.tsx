@@ -212,7 +212,8 @@ const METRICS: { id: Metric; label: string; fmt: (v: number) => string }[] = [
 ];
 
 function bucketLabel(iso: string, bucket: Dash['bucket'], long = false) {
-  const d = new Date(iso);
+  // A day bucket is a calendar date (YYYY-MM-DD in the viewer's time zone): read it as local, not UTC.
+  const d = bucket === 'day' && /^\d{4}-\d{2}-\d{2}$/.test(iso) ? new Date(`${iso}T00:00:00`) : new Date(iso);
   if (bucket === 'hour') return d.toLocaleTimeString([], { hour: 'numeric' });
   if (bucket === 'day') return d.toLocaleDateString([], long ? { weekday: 'short', month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric' });
   return (long ? 'Week of ' : '') + d.toLocaleDateString([], { month: 'short', day: 'numeric', ...(long ? { year: 'numeric' } : {}) });

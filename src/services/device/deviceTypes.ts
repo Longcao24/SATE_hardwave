@@ -284,7 +284,7 @@ export interface AdminProcessing {
 }
 /** [device-api v43.12] GET /admin/dashboard[?from=ISO] — Admin → Dashboard for one window. */
 export interface AdminDashboard {
-  generated_at: string; from: string | null; bucket: 'hour' | 'day' | 'week';
+  generated_at: string; from: string | null; bucket: 'hour' | 'day' | 'week'; tz?: string;
   totals: {
     accounts: number; new_accounts: number; active_accounts: number; recording_accounts: number;
     recordings: number; audio_hours: number; sate_reports: number; patients: number;
