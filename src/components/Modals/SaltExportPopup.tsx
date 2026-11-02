@@ -2,6 +2,7 @@ import React, { useMemo, useState, useRef } from 'react';
 import { X, Download, FileText, BarChart3, Clock, MessageSquare, User } from 'lucide-react';
 import { type Segment } from '@/services/dataService';
 import { segmentsToSalt } from '@/services/saltService';
+import { trackAction } from '@/services/usage/tracker';
 
 interface SaltExportPopupProps {
   isOpen: boolean;
@@ -262,6 +263,7 @@ export const SaltExportPopup: React.FC<SaltExportPopupProps> = ({
   };
 
   const handleExport = () => {
+    trackAction('export:salt');
     const filename = `transcript_${new Date().toISOString().split('T')[0]}.slt`;
     
     // Create a blob with the edited content
@@ -285,7 +287,7 @@ export const SaltExportPopup: React.FC<SaltExportPopupProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+    <div data-usage-mask className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-lg shadow-xl max-w-6xl w-full max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-gray-200 flex-shrink-0">

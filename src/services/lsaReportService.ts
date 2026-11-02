@@ -9,6 +9,7 @@
 // with "Failed to fetch". One request holds a single LLM call, so it takes ~15-30 s.
 
 import { supabase } from '../lib/supabase';
+import { trackAction } from './usage/tracker';
 
 export interface LsaSample {
   file_name: string;                 // shown in the report footer — keep it non-identifying
@@ -105,7 +106,19 @@ export interface LsaReportResponse {
   pdf_base64?: string | null;
 }
 
+/** Usage analytics: one 'report:generate' per report produced, 'report:failed' otherwise. */
 export async function generateLsaReport(req: LsaReportRequest): Promise<LsaReportResponse> {
+  try {
+    const r = await requestLsaReport(req);
+    trackAction('report:generate');
+    return r;
+  } catch (e) {
+    trackAction('report:failed');
+    throw e;
+  }
+}
+
+async function requestLsaReport(req: LsaReportRequest): Promise<LsaReportResponse> {
   const { data, error } = await supabase.functions.invoke('lsa-report', { body: req });
 
   if (error) {

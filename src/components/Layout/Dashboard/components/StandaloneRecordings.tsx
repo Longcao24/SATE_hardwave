@@ -173,7 +173,7 @@ const StandaloneRecordings: React.FC<StandaloneRecordingsProps> = ({
   };
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-gray-200 mt-8">
+    <div data-usage-mask className="bg-white rounded-xl shadow-sm border border-gray-200 mt-8">
       <div className="p-6 border-b border-gray-200">
         <div className="flex items-center gap-2">
           <h2 className="text-xl font-semibold text-gray-900">{standalone ? 'Standalone Recordings' : 'Recent Recordings'}</h2>

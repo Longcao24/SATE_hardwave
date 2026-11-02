@@ -216,7 +216,7 @@ export function DeviceSessionStatus({ sessions }: DeviceSessionStatusProps) {
   };
 
   return (
-    <div className="mt-6">
+    <div data-usage-mask className="mt-6">
       <h3 className="text-sm font-bold text-gray-900 mb-1">
         Sessions{sessions.length > 0 && <span className="ml-1.5 font-medium text-gray-400">{sessions.length}</span>}
       </h3>

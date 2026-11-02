@@ -111,12 +111,12 @@ const MobileLinkModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
 
           {data && !loading && !error && (
             <>
-              <div className={`p-4 bg-white rounded-xl border border-gray-200 ${expired ? 'opacity-30' : ''}`}>
+              <div data-usage-block className={`p-4 bg-white rounded-xl border border-gray-200 ${expired ? 'opacity-30' : ''}`}>
                 <QRCodeSVG value={data.code} size={196} level="M" />
               </div>
 
               <div className="mt-4 text-center">
-                <p className="text-2xl font-mono font-bold tracking-widest text-gray-900">
+                <p data-usage-block className="text-2xl font-mono font-bold tracking-widest text-gray-900">
                   {data.code}
                 </p>
                 {expired ? (

@@ -152,10 +152,11 @@ export function NotesPage() {
             No recordings yet. They appear here automatically.
           </p>
         ) : (
-          <ul className="flex-1 overflow-y-auto min-h-0">
+          <ul data-usage-mask className="flex-1 overflow-y-auto min-h-0">
             {notes.map((n) => (
               <li key={n.id}>
                 <button
+                  data-track="Open note"
                   onClick={() => openNote(n.id)}
                   className={`w-full text-left px-5 py-3.5 border-b border-gray-100 transition ${
                     open?.id === n.id ? 'bg-blue-50' : 'hover:bg-gray-50'

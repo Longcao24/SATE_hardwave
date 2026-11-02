@@ -132,9 +132,9 @@ export default function OversightPage() {
               {me.role === 'admin' ? `${me.targets.length} accounts` : `${me.targets.length} assigned to you`}
             </p>
           </div>
-          <div className="overflow-y-auto flex-1">
+          <div data-usage-mask className="overflow-y-auto flex-1">
             {shown.map((t) => (
-              <button key={t.id} onClick={() => { navigate(`/oversight/${t.id}`); setTab('recordings'); }}
+              <button key={t.id} data-track="Open account" onClick={() => { navigate(`/oversight/${t.id}`); setTab('recordings'); }}
                 className={`w-full text-left px-3 py-2 text-sm border-b hover:bg-gray-50 ${target?.id === t.id ? 'bg-violet-50 font-medium' : ''}`}>
                 {t.email || t.id}
               </button>
@@ -149,7 +149,7 @@ export default function OversightPage() {
           {target && (
             <>
               <div className="flex items-center gap-3 mb-4">
-                <h2 className="text-lg font-semibold">{target.email}</h2>
+                <h2 data-usage-mask className="text-lg font-semibold">{target.email}</h2>
                 {loading && <Loader2 className="w-4 h-4 animate-spin text-gray-400" />}
               </div>
               {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
@@ -242,7 +242,7 @@ export default function OversightPage() {
 
 function Table({ head, children }: { head: string[]; children: React.ReactNode }) {
   return (
-    <div className="bg-white border rounded-lg overflow-hidden">
+    <div data-usage-mask className="bg-white border rounded-lg overflow-hidden">
       <table className="w-full text-sm">
         <thead className="bg-gray-50 text-gray-600 text-left">
           <tr>{head.map((h) => <th key={h} className="py-2 px-3 font-medium">{h}</th>)}</tr>

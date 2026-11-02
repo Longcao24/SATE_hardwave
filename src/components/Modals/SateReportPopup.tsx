@@ -21,6 +21,7 @@ import {
   type LsaReportEdits,
 } from '@/services/lsaReportService';
 import { buildNormedMetrics, NoNormsError } from '@/services/lsaMetricsService';
+import { trackAction } from '@/services/usage/tracker';
 
 // ---------------------------------------------------------------------------
 // SATE Report — a single-sample clinical report for THIS recording.
@@ -946,6 +947,7 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
 
   const exportPdf = () => {
     if (!body) return;
+    trackAction('export:report-pdf');
     // Print via a hidden iframe (Save as PDF) — preserves the exact layout/colors.
     const iframe = document.createElement('iframe');
     iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
@@ -963,6 +965,7 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
 
   const exportWord = () => {
     if (!body) return;
+    trackAction('export:report-word');
     const blob = new Blob(['﻿', fullHtmlDoc(body, true)], { type: 'application/msword' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -977,7 +980,7 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={requestClose}>
+    <div data-usage-mask className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={requestClose}>
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col"
            onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">

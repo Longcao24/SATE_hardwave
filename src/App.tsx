@@ -23,6 +23,7 @@ import OversightPage from './components/Oversight/OversightPage';
 import { WebUploadAnnouncer } from './components/Uploads/WebUploadAnnouncer';
 import { WebNoticeBanner } from './components/Notice/WebNoticeBanner';
 import StandaloneRecordingsPage from './components/Recording/StandaloneRecordingsPage';
+import { UsageTracker } from './components/Usage/UsageTracker';
 
 // Protected Route component
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -53,6 +54,8 @@ function App() {
     <WebNoticeBanner />
     {/* Watches the user's web uploads on every page and announces "<file> is ready". */}
     <WebUploadAnnouncer />
+    {/* Usage analytics for Admin → Usage: signed-in accounts only, renders nothing. */}
+    <UsageTracker />
     <Routes>
       {/* Public routes */}
       <Route path="/login" element={<LoginPage />} />

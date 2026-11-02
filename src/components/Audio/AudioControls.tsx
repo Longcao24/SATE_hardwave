@@ -194,9 +194,12 @@ const AudioControls: React.FC<AudioControlsProps> = ({
                   const row = rows[i];
                   const offsetY = row === 0 ? 0 : row % 2 === 1 ? -14 : 14;
 
+                  // data-usage-mask: the tick's tooltip is the clinician's free-text flag note,
+                  // which must not reach usage analytics as a click label or in a screen recording.
                   return (
                     <div
                       key={`flag-${i}-${sec}`}
+                      data-usage-mask
                       className="absolute -translate-x-1/2 z-10 group/tick"
                       style={{
                         left: `${(sec / duration) * 100}%`,
@@ -208,6 +211,7 @@ const AudioControls: React.FC<AudioControlsProps> = ({
                       {/* Tick body */}
                       <button
                         type="button"
+                        data-track="Flag tick"
                         title={`${formatTime(sec)}${note ? ` · ${note}` : ''}`}
                         onClick={(e) => {
                           e.stopPropagation();
@@ -223,6 +227,7 @@ const AudioControls: React.FC<AudioControlsProps> = ({
                       {isEditable && onDeleteFlag && (
                         <button
                           type="button"
+                          data-track="Remove flag"
                           title="Remove flag"
                           onClick={(e) => { e.stopPropagation(); onDeleteFlag(rawMs); setFlagPopup(null); }}
                           className="absolute -top-3 left-1/2 -translate-x-1/2 w-4 h-4 rounded-full bg-red-500 text-white flex items-center justify-center opacity-0 group-hover/tick:opacity-100 transition-opacity"

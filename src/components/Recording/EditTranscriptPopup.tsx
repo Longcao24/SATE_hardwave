@@ -863,7 +863,7 @@ const EditTranscriptPopup: React.FC<EditTranscriptPopupProps> = ({
   if (!isOpen || !segment) return null;
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+    <div data-usage-mask className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden">
         {/* Header */}
         <div className={`px-6 py-4 border-b flex items-center justify-between transition-colors ${

@@ -23,7 +23,7 @@ export const PatientSection: React.FC<PatientSectionProps> = ({
   onClearFilter
 }) => {
   return (
-    <div className="px-6 pt-6 pb-6 border-t border-gray-200 flex-shrink-0">
+    <div data-usage-mask className="px-6 pt-6 pb-6 border-t border-gray-200 flex-shrink-0">
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
           <Users className="w-4 h-4" /> 
@@ -31,7 +31,7 @@ export const PatientSection: React.FC<PatientSectionProps> = ({
         </h3>
         {selectedFilterPatientId && !currentPatient && (
           <button
-            onClick={onClearFilter}
+            data-track="Clear patient filter" onClick={onClearFilter}
             className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1"
             title="Show all recordings"
           >
@@ -63,7 +63,7 @@ export const PatientSection: React.FC<PatientSectionProps> = ({
           </div>
           <div className="flex space-x-2">
             <Button
-              onClick={() => onNavigate(`/patients/${currentPatient.id}`)}
+              data-track="Open patient" onClick={() => onNavigate(`/patients/${currentPatient.id}`)}
               variant="outline"
               size="sm"
               className="flex-1 text-xs bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
@@ -72,7 +72,7 @@ export const PatientSection: React.FC<PatientSectionProps> = ({
               Details
             </Button>
             <Button
-              onClick={() => onNavigate('/patients')}
+              data-track="All patients" onClick={() => onNavigate('/patients')}
               variant="outline"
               size="sm"
               className="flex-1 text-xs"
@@ -87,7 +87,7 @@ export const PatientSection: React.FC<PatientSectionProps> = ({
           {/* Action Buttons */}
           <div className="space-y-2 mb-4">
             <Button
-              onClick={() => onNavigate('/patients')}
+              data-track="All patients" onClick={() => onNavigate('/patients')}
               variant="outline"
               className="w-full text-sm bg-green-50 border-green-200 text-green-700 hover:bg-green-100 hover:border-green-300 flex items-center justify-center gap-2"
             >
@@ -96,7 +96,7 @@ export const PatientSection: React.FC<PatientSectionProps> = ({
             </Button>
             
             <Button
-              onClick={() => onNavigate('/patients/new')}
+              data-track="New patient" onClick={() => onNavigate('/patients/new')}
               variant="outline"
               className="w-full text-sm bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100 hover:border-blue-300 flex items-center justify-center gap-2"
             >
@@ -119,7 +119,7 @@ export const PatientSection: React.FC<PatientSectionProps> = ({
                   return (
                     <button
                       key={patient.id}
-                      onClick={() => onPatientClick(patient.id)}
+                      data-track="Filter by patient" onClick={() => onPatientClick(patient.id)}
                       className={`w-full text-left p-2 rounded-md transition-colors group ${
                         isSelected 
                           ? 'bg-blue-100 border border-blue-300' 

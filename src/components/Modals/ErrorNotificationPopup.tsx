@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { AlertTriangle, RefreshCw, X, Wifi, Server, AlertCircle } from 'lucide-react';
 import { Button } from '../ui/button';
 import { reportClientError } from '@/services/DataService/serverProcessing';
+import { trackError } from '@/services/usage/tracker';
 
 interface ErrorNotificationPopupProps {
   isOpen: boolean;
@@ -35,6 +36,9 @@ const ErrorNotificationPopup: React.FC<ErrorNotificationPopupProps> = ({
       null,
       `[${error.type}] ${error.message}${error.originalError ? ` — ${error.originalError}` : ''}`,
     );
+    // …and onto the account's usage timeline, so Admin → Usage shows WHICH error a user hit
+    // in the middle of what they were doing (the tracker scrubs names/ids out of it).
+    trackError(`[${error.type}] ${error.message}${error.originalError ? ` — ${error.originalError}` : ''}`);
   }, [isOpen, error]);
 
   if (!isOpen) return null;
@@ -150,7 +154,7 @@ const ErrorNotificationPopup: React.FC<ErrorNotificationPopupProps> = ({
               <summary className="cursor-pointer text-gray-600 hover:text-gray-800 font-medium">
                 Technical Details
               </summary>
-              <div className="mt-2 p-3 bg-gray-100 rounded border text-xs font-mono text-gray-700 max-h-32 overflow-y-auto">
+              <div data-usage-mask className="mt-2 p-3 bg-gray-100 rounded border text-xs font-mono text-gray-700 max-h-32 overflow-y-auto">
                 {error.originalError}
               </div>
             </details>

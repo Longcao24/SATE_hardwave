@@ -3,6 +3,7 @@ import { queryClient } from '@/lib/react-query';
 import type { TranscriptData, IssueCounts, SpeechAnalysis, FlagNotes } from './types';
 import { countErrors } from './errorCounter';
 import { calculateSpeechAnalysis } from './speechAnalysis';
+import { trackAction } from '@/services/usage/tracker';
 
 // Save recording with audio file and comprehensive analysis to Supabase
 export const saveRecording = async (
@@ -310,6 +311,7 @@ export const updateRecording = async (
 
     if (updateError) {
       if (updateError.code === 'PT409') {
+        trackAction('transcript:conflict');
         return {
           success: false,
           conflict: true,
@@ -322,6 +324,7 @@ export const updateRecording = async (
 
     const saved = Array.isArray(data) ? data[0] : data;
     if (saved?.version != null) lastSeenVersion.set(recordingId, Number(saved.version));
+    trackAction('transcript:save');
 
     // Refresh recordings list in React Query cache
     queryClient.invalidateQueries({ queryKey: ['recordings', userId] });

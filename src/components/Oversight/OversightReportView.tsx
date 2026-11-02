@@ -20,6 +20,7 @@ import { metricsBySpeaker, metricsCsv } from '@/services/languageMetrics';
 import { oversightService, type OversightRecordingRow } from '@/services/oversightService';
 import { recordingLabel } from '@/services/recordingName';
 import { gapSeconds, readTranscriptGaps } from '@/services/transcriptGaps';
+import { trackAction } from '@/services/usage/tracker';
 
 const EMPTY_COUNTS: IssueCounts = {
   pause: 0, filler: 0, repetition: 0, mispronunciation: 0, morpheme: 0,
@@ -86,8 +87,8 @@ export function OversightReportView({ ownerId, ownerEmail, rec, patient, onBack,
   };
 
   return (
-    <div className="fixed inset-0 z-40 bg-white flex flex-col">
-      <audio ref={audioPlayer.audioRef} preload="metadata" />
+    <div data-usage-mask className="fixed inset-0 z-40 bg-white flex flex-col">
+      <audio data-usage-block ref={audioPlayer.audioRef} preload="metadata" />
 
       <div className="flex items-center gap-3 px-4 py-2 bg-violet-50 border-b border-violet-200 text-sm">
         <button onClick={onBack} className="inline-flex items-center gap-1 text-violet-700 hover:text-violet-900">
@@ -288,6 +289,7 @@ function ExportMenu({ ownerId, rec, patient, hasLsa }: {
   const base = safeName(recordingLabel(rec.recording_name || rec.file_name) || rec.id);
 
   const run = async (kind: 'audio' | 'lsa' | 'metrics' | 'transcript') => {
+    trackAction(`export:oversight-${kind}`);
     setBusy(kind); setErr(null);
     try {
       if (kind === 'audio') {
