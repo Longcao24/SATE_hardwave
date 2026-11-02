@@ -249,6 +249,11 @@ export interface ProcProblem {
   seconds: number | null; bytes: number | null; attempts: number | null; created_at: string;
   storage_path?: string; reason: string;
   action: 'retry' | 'requeue' | 'register' | 'reupload' | null;
+  /** [device-api v43.10] Whether an admin may dismiss it, and whether one has. Absent from an older device-api. */
+  dismissible?: boolean;
+  dismissed?: boolean;
+  dismissed_at?: string;
+  dismissed_by?: string | null;
 }
 /** [v43.7-ai-probe] One hourly AI self-test (1 s of speech to /process, sent by the status Worker). */
 export interface AiProbe {
@@ -262,6 +267,8 @@ export interface AdminProcessing {
   /** Absent from a device-api older than v43.4-problems. */
   problems?: ProcProblem[];
   problem_counts?: Partial<Record<ProcProblemKind, number>>;
+  /** [device-api v43.10] Problems hidden by an admin (still in `problems`, marked `dismissed`). */
+  dismissed_count?: number;
   storage_scan?: { folders?: number; orphans?: number; duplicates?: number; error?: string } | null;
   /** Absent from a device-api older than v43.2-jobs. */
   recent?: ProcRecentRow[];

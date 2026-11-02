@@ -236,6 +236,9 @@ export const deviceApiService = {
   adminRequeueStuck: (ids: string[]) =>
     req<{ requeued: string[]; skipped: { id: string; reason: string }[] }>('/admin/sessions/requeue-stuck', { method: 'POST', body: JSON.stringify({ ids }) }),
   /** [v43.4-problems] Create the session an upload in Storage never got, so the worker processes it. */
+  /** [v43.10] Dismiss (or, with undo, restore) Processing problems by key. Nothing is deleted. */
+  adminDismissProblems: (keys: string[], undo = false) =>
+    req<{ dismissed?: string[]; restored?: string[] }>('/admin/problems/dismiss', { method: 'POST', body: JSON.stringify({ keys, undo }) }),
   adminRegisterOrphans: (paths: string[]) =>
     req<{ registered: { path: string; id: string }[]; skipped: { id: string; reason: string }[] }>('/admin/sessions/register-orphan', { method: 'POST', body: JSON.stringify({ paths }) }),
   /** [v38] Every device anywhere (incl. app-only hardware) with its holder and every account that used it. */

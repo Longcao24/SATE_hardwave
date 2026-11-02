@@ -149,6 +149,7 @@ export function ProcessingPanel() {
   const [note, setNote] = useState<string | null>(null);
   const [recentFilter, setRecentFilter] = useState<'all' | 'done' | 'failed'>('all');
   const [problemKind, setProblemKind] = useState<ProcProblemKind | null>(null);
+  const [showDismissed, setShowDismissed] = useState(false);
   const navigate = useNavigate();
 
   const load = useCallback(() => {
@@ -175,13 +176,21 @@ export function ProcessingPanel() {
   const recent = useMemo(() => (d?.recent || []).filter((r) =>
     recentFilter === 'all' ? true : recentFilter === 'failed' ? (r.status === 'error' || r.no_text) : (r.status === 'done' && !r.no_text)), [d, recentFilter]);
   const errors = useMemo(() => (d?.errors || []).filter((e) => !reason || reasonOf(e.process_error) === reason), [d, reason]);
-  const problems = useMemo(() => (d?.problems || []).filter((p) => !problemKind || p.kind === problemKind), [d, problemKind]);
+  // Dismissed problems (looked at, nothing left to do) are hidden unless asked for; nothing is deleted.
+  const openProblems = useMemo(() => (d?.problems || []).filter((p) => !p.dismissed), [d]);
+  const problems = useMemo(() => (d?.problems || []).filter((p) =>
+    (showDismissed || !p.dismissed) && (!problemKind || p.kind === problemKind)), [d, problemKind, showDismissed]);
+  const dismissible = problems.filter((p) => p.dismissible && !p.dismissed);
+  const dismiss = (keys: string[], undo = false) => act(async () => {
+    await deviceApiService.adminDismissProblems(keys, undo);
+    return { [undo ? 'restored' : 'dismissed']: keys, skipped: [] } as any;
+  }, undo ? 'restored' : 'dismissed');
 
   const act = async (fn: () => Promise<{ skipped: { id: string; reason: string }[] } & Record<string, any>>, verb: string) => {
     setBusy(true); setNote(null);
     try {
       const r = await fn();
-      const okN = (r.retried || r.requeued || r.registered || []).length;
+      const okN = (r.retried || r.requeued || r.registered || r.dismissed || r.restored || []).length;
       setNote(`${okN} ${verb}${r.skipped.length ? ` · ${r.skipped.length} skipped (${[...new Set(r.skipped.map((x) => x.reason))].join(', ')})` : ''}`);
       setSelected(new Set());
       load();
@@ -292,8 +301,9 @@ export function ProcessingPanel() {
             <Kpi icon={<AlertTriangle className="w-4 h-4 text-red-600" />} label="Unresolved errors" value={st.unresolved_errors}
               sub="all time, waiting for a retry" tone={st.unresolved_errors ? 'red' : undefined} />
             {d!.problems && (
-              <Kpi icon={<CloudOff className="w-4 h-4 text-red-600" />} label="Problems" value={d!.problems.length}
-                sub="every failure class, this window" tone={d!.problems.length ? 'red' : undefined} />
+              <Kpi icon={<CloudOff className="w-4 h-4 text-red-600" />} label="Problems" value={openProblems.length}
+                sub={d!.dismissed_count ? `open · ${d!.dismissed_count} dismissed` : 'every failure class, this window'}
+                tone={openProblems.length ? 'red' : undefined} />
             )}
             <Kpi icon={<Timer className="w-4 h-4 text-gray-600" />} label="Upload → ready" value={st.turnaround_p50_s == null ? '—' : len(st.turnaround_p50_s)}
               sub={`median · p90 ${st.turnaround_p90_s == null ? '—' : len(st.turnaround_p90_s)}`} />
@@ -305,7 +315,7 @@ export function ProcessingPanel() {
 
           {/* Problems — every way a take failed to become a recording */}
           {d!.problems && (
-            <Section title={`Problems — ${d!.problems.length}`}
+            <Section title={`Problems — ${openProblems.length}`}
               hint={`Everything that did not become a processed recording in this window (failed takes of any age), web uploads included. ${
                 d!.storage_scan?.error ? `Storage scan failed: ${d!.storage_scan.error}.` : d!.storage_scan
                   ? `Storage scanned: ${d!.storage_scan.orphans ?? 0} unregistered upload(s), ${d!.storage_scan.duplicates ?? 0} stray duplicate copy(ies) ignored.` : ''}`}>
@@ -318,31 +328,62 @@ export function ProcessingPanel() {
                     {d!.problem_counts![k]} × {KIND[k].label}
                   </button>
                 ))}
+                <span className="flex-1" />
+                {!!d!.dismissed_count && (
+                  <label className="inline-flex items-center gap-1.5 text-xs text-gray-600">
+                    <input type="checkbox" checked={showDismissed} onChange={(e) => setShowDismissed(e.target.checked)} />
+                    Show dismissed ({d!.dismissed_count})
+                  </label>
+                )}
+                {dismissible.length > 0 && (
+                  <button disabled={busy} onClick={() => {
+                    if (window.confirm(`Dismiss ${dismissible.length} problem(s) shown? They are hidden, not deleted — "Show dismissed" brings them back.`)) dismiss(dismissible.map((p) => p.key));
+                  }} className="text-xs px-2 py-1 rounded-md border bg-white hover:bg-gray-50 disabled:opacity-40">
+                    Dismiss all shown ({dismissible.length})
+                  </button>
+                )}
               </div>
-              <Table head={['When', 'Problem', 'Account', 'Source', 'Length / size', 'Reason', '']}>
-                {problems.length === 0 && <Empty cols={7} text="No problems in this window." />}
+              <Table head={['When', 'Problem', 'Account / source', 'Length / size', 'Reason']}>
+                {problems.length === 0 && <Empty cols={5} text={d!.dismissed_count && !showDismissed ? 'No open problems — the rest are dismissed.' : 'No problems in this window.'} />}
                 {problems.map((p) => {
                   const a = problemAction(p);
                   return (
-                    <tr key={p.key} className="border-t align-top">
+                    <tr key={p.key} className={`border-t align-top ${p.dismissed ? 'opacity-50' : ''}`}>
                       <td className="px-3 py-2 text-gray-500 whitespace-nowrap" title={new Date(p.created_at).toLocaleString()}>{ago(p.created_at)} ago</td>
                       <td className="px-3 py-2 whitespace-nowrap">
                         <span className={`text-xs px-2 py-0.5 rounded-full border ${KIND[p.kind]?.tone || ''}`} title={KIND[p.kind]?.hint}>{KIND[p.kind]?.label || p.kind}</span>
                       </td>
-                      <td className="px-3 py-2 truncate max-w-[200px]">{p.email || '—'}</td>
-                      <td className="px-3 py-2"><Src r={p} /></td>
+                      <td className="px-3 py-2 max-w-[220px]">
+                        <div className="truncate" title={p.email || undefined}>{p.email || '—'}</div>
+                        <div className="text-xs mt-0.5"><Src r={p} /></div>
+                      </td>
                       <td className="px-3 py-2 tabular-nums whitespace-nowrap">{p.seconds ? len(p.seconds) : '—'}<div className="text-[11px] text-gray-400">{mb(p.bytes)}</div></td>
-                      <td className="px-3 py-2 text-xs text-gray-700 max-w-[380px] break-words">{p.reason}</td>
-                      <td className="px-3 py-2 text-right whitespace-nowrap">
+                      {/* Reason, then the actions under it: a separate action column was pushed off-screen
+                          once the admin sidebar took some of the width. */}
+                      <td className="px-3 py-2 text-xs text-gray-700 min-w-[240px] break-words">
+                        <div>{p.reason}</div>
+                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                         {a && <button disabled={busy} onClick={a.run}
                           className="text-xs px-2 py-1 rounded-md border hover:bg-gray-50 disabled:opacity-40">{a.label}</button>}
-                        {p.action === 'reupload' && <span className="text-[11px] text-fuchsia-700">Ask the user to re-upload</span>}
+                        {p.action === 'reupload' && !p.dismissed && <span className="text-[11px] text-fuchsia-700">Ask the user to re-upload</span>}
+                        {p.dismissible && !p.dismissed && (
+                          <button disabled={busy} onClick={() => dismiss([p.key])} title="Hide it from the open list (not deleted)"
+                            className="text-xs px-2 py-1 rounded-md border hover:bg-gray-50 disabled:opacity-40">Dismiss</button>
+                        )}
+                        {p.dismissed && (
+                          <span className="text-[11px] text-gray-500">
+                            dismissed{p.dismissed_by ? ` by ${p.dismissed_by}` : ''}{p.dismissed_at ? ` ${ago(p.dismissed_at)} ago` : ''}
+                            <button disabled={busy} onClick={() => dismiss([p.key], true)}
+                              className="ml-1 text-xs px-2 py-1 rounded-md border hover:bg-gray-50 disabled:opacity-40">Restore</button>
+                          </span>
+                        )}
                         {p.recording_id && p.user_id && (
                           <button onClick={() => navigate(`/oversight/${p.user_id}/${p.recording_id}`)} title="Open (read-only)"
                             className="ml-1 inline-flex items-center gap-1 text-xs px-2 py-1 rounded-md border hover:bg-gray-50">
                             <ExternalLink className="w-3.5 h-3.5" /> Open
                           </button>
                         )}
+                      </div>
                       </td>
                     </tr>
                   );
