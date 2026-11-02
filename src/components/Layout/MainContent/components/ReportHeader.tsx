@@ -36,7 +36,7 @@ export const ReportHeader: React.FC<ReportHeaderProps> = ({
       <div className="flex items-center gap-2 mb-2">
         {isEditing ? (
           <div className="flex items-center gap-2 flex-1">
-            <input
+            <input data-usage-mask
               type="text"
               value={editedName}
               onChange={(e) => onEditedNameChange(e.target.value)}

@@ -6,8 +6,10 @@
 //   - It must never hurt the app. Nothing here throws, awaits on the UI path, or retries hot:
 //     failures back off, the buffer is capped, and rrweb is loaded lazily, off the critical path.
 //   - It must never carry patient data. Labels and errors go through ./usageLabels (masked or
-//     scrubbed); the recording masks every input and all text under [data-usage-mask], blocks
-//     [data-usage-block] and media, and strips descriptive attributes rrweb would keep verbatim.
+//     scrubbed); the recording masks all text and every input under [data-usage-mask], every
+//     password-like input anywhere, blocks [data-usage-block] and media, and strips descriptive
+//     attributes rrweb would keep verbatim. Other inputs are recorded as typed (2026-11-02: users
+//     consented to the recording; patient data stays masked — option B).
 //   - One tracker per tab. State is module-level and start is idempotent per account, because
 //     React StrictMode mounts effects twice — a component-owned tracker would double every
 //     listener, timer and recorder in development and mint a second tab id.
@@ -302,6 +304,19 @@ function stopRecorder(r: Replay) {
   try { stop?.(); } catch { /* ignore */ }
 }
 
+/** Inputs whose value must never be recorded: patient areas, passwords and other secrets. Unknown → masked. */
+const SECRET_HINT = /pass|secret|token|api.?key|otp|one.?time|invite|claim|code/i;
+function maskInput(el?: HTMLElement | null): boolean {
+  try {
+    if (!el || typeof el.closest !== 'function') return true;
+    if (el.closest('[data-usage-mask]')) return true;
+    const type = (el.getAttribute('type') || '').toLowerCase();
+    if (type === 'password' || type === 'hidden') return true;
+    const hints = ['autocomplete', 'name', 'id', 'placeholder', 'aria-label'].map((a) => el.getAttribute(a) || '').join(' ');
+    return SECRET_HINT.test(hints);
+  } catch { return true; }
+}
+
 function startRecorder(s: State, r: Replay) {
   const record = r.record;
   if (!record || r.stop || r.dead) return;
@@ -326,7 +341,10 @@ function startRecorder(s: State, r: Replay) {
           if (r.bytes >= REPLAY_FLUSH_BYTES) void replayFlush(s, r);
         } catch { /* one unserializable event is not worth breaking the app over */ }
       },
+      // Every input goes through maskInputFn (rrweb only calls it for masked types, hence true):
+      // it returns the typed text for an ordinary input and stars for patient or secret ones.
       maskAllInputs: true,
+      maskInputFn: (text: string, el?: HTMLElement) => (maskInput(el) ? '*'.repeat(text.length) : text),
       maskTextSelector: '[data-usage-mask], [data-usage-mask] *',
       // Media is blocked outright as well as by attribute: a recording's audio is clinical data.
       // iframe: the SATE Report's print frame holds the whole report + transcript, and rrweb serializes a

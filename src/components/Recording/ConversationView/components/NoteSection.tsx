@@ -52,7 +52,7 @@ const NoteSection: React.FC<NoteSectionProps> = ({
       <div className={styles.noteLabel}>Note</div>
       {isEditingNote ? (
         <div className={styles.noteEditContainer}>
-          <textarea
+          <textarea data-usage-mask
             className={styles.noteTextarea}
             value={noteText}
             onChange={(e) => setNoteText(e.target.value)}

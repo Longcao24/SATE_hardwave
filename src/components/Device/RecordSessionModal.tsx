@@ -74,7 +74,7 @@ export function RecordSessionModal({ isOpen, onClose }: RecordSessionModalProps)
             </label>
             <div className="relative">
               <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-              <input
+              <input data-usage-mask
                 type="text"
                 value={patientId}
                 onChange={(e) => setPatientId(e.target.value)}
@@ -90,7 +90,7 @@ export function RecordSessionModal({ isOpen, onClose }: RecordSessionModalProps)
             <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
               Name
             </label>
-            <input
+            <input data-usage-mask
               type="text"
               value={patientName}
               onChange={(e) => setPatientName(e.target.value)}
@@ -106,7 +106,7 @@ export function RecordSessionModal({ isOpen, onClose }: RecordSessionModalProps)
             </label>
             <div className="relative">
               <Activity className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-              <input
+              <input data-usage-mask
                 type="text"
                 value={sessionType}
                 onChange={(e) => setSessionType(e.target.value)}

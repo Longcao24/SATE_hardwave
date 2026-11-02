@@ -231,11 +231,11 @@ function ReportList({ ownerEmail, recordings, patientName, currentId, onOpen, op
         <div className="text-xs text-gray-500">{recordings.length} report{recordings.length === 1 ? '' : 's'}</div>
         <div className="flex items-center gap-2 border rounded-md px-2">
           <Search className="w-4 h-4 text-gray-400" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a report"
+          <input data-usage-mask value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a report"
             className="w-full py-1.5 text-sm outline-none" />
         </div>
         {patients.length > 1 && (
-          <select value={pid} onChange={(e) => setPid(e.target.value)}
+          <select data-usage-mask value={pid} onChange={(e) => setPid(e.target.value)}
             className="w-full border rounded-md px-2 py-1.5 text-sm bg-white">
             <option value="all">All patients</option>
             {patients.map((p) => <option key={p.id || 'none'} value={p.id}>{p.name}</option>)}

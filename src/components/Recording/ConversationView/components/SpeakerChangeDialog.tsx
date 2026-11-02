@@ -170,7 +170,7 @@ const SpeakerChangeDialog: React.FC<SpeakerChangeDialogProps> = ({
             
             {/* Pure text input */}
             <div className="speaker-input-wrapper">
-              <input
+              <input data-usage-mask
                 type="text"
                 id="new-speaker"
                 placeholder=""
@@ -281,7 +281,7 @@ const SpeakerChangeDialog: React.FC<SpeakerChangeDialogProps> = ({
                   color: '#374151'
                 }}
               >
-                <input
+                <input data-usage-mask
                   type="checkbox"
                   checked={speakerChangeData.applyToAll}
                   onChange={(e) => handleApplyToAllChange(e.target.checked)}

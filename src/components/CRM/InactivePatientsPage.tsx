@@ -180,7 +180,7 @@ const InactivePatientsPage: React.FC = () => {
         <Card className="p-6 mb-8 bg-white shadow-sm border-0">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
-            <input
+            <input data-usage-mask
               type="text"
               placeholder="Search inactive patients by name or diagnosis..."
               value={searchTerm}

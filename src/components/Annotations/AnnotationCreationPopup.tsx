@@ -266,7 +266,7 @@ const AnnotationCreationPopup: React.FC<AnnotationCreationPopupProps> = ({
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Mark Location (word index)
               </label>
-              <select
+              <select data-usage-mask
                 value={formData.markLocation || ''}
                 onChange={(e) => setFormData({...formData, markLocation: parseInt(e.target.value)})}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
@@ -289,7 +289,7 @@ const AnnotationCreationPopup: React.FC<AnnotationCreationPopupProps> = ({
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Correct Form
               </label>
-              <input
+              <input data-usage-mask
                 type="text"
                 value={formData.correctForm || ''}
                 onChange={(e) => setFormData({...formData, correctForm: e.target.value})}
@@ -307,7 +307,7 @@ const AnnotationCreationPopup: React.FC<AnnotationCreationPopupProps> = ({
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Pause Position
               </label>
-              <select
+              <select data-usage-mask
                 value={formData.pausePosition || 'before'}
                 onChange={(e) => setFormData({...formData, pausePosition: e.target.value})}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
@@ -320,7 +320,7 @@ const AnnotationCreationPopup: React.FC<AnnotationCreationPopupProps> = ({
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Duration (seconds)
               </label>
-              <input
+              <input data-usage-mask
                 type="number"
                 step="0.1"
                 min="0.1"
@@ -350,7 +350,7 @@ const AnnotationCreationPopup: React.FC<AnnotationCreationPopupProps> = ({
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Lemma (root word)
               </label>
-              <input
+              <input data-usage-mask
                 type="text"
                 value={formData.lemma || ''}
                 onChange={(e) => setFormData({...formData, lemma: e.target.value})}
@@ -362,7 +362,7 @@ const AnnotationCreationPopup: React.FC<AnnotationCreationPopupProps> = ({
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Missing Morpheme
               </label>
-              <input
+              <input data-usage-mask
                 type="text"
                 value={formData.inflectionalMorpheme || ''}
                 onChange={(e) => setFormData({...formData, inflectionalMorpheme: e.target.value})}
@@ -374,7 +374,7 @@ const AnnotationCreationPopup: React.FC<AnnotationCreationPopupProps> = ({
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Morpheme Form
               </label>
-              <input
+              <input data-usage-mask
                 type="text"
                 value={formData.morphemeForm || ''}
                 onChange={(e) => setFormData({...formData, morphemeForm: e.target.value})}
@@ -392,7 +392,7 @@ const AnnotationCreationPopup: React.FC<AnnotationCreationPopupProps> = ({
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Revision Content
               </label>
-              <textarea
+              <textarea data-usage-mask
                 value={formData.revisionContent || ''}
                 onChange={(e) => setFormData({...formData, revisionContent: e.target.value})}
                 placeholder="What was the revision/correction?"
@@ -410,7 +410,7 @@ const AnnotationCreationPopup: React.FC<AnnotationCreationPopupProps> = ({
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Description
               </label>
-              <textarea
+              <textarea data-usage-mask
                 value={formData.description || ''}
                 onChange={(e) => setFormData({...formData, description: e.target.value})}
                 placeholder="Additional notes about the error"
