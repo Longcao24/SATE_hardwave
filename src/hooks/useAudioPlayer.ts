@@ -12,6 +12,16 @@ interface UseAudioPlayerProps {
   refreshAudioUrl?: () => Promise<string | null>;
 }
 
+/**
+ * Any playback the user asked for (play/pause, a seek, a segment or word play). A word click waits a
+ * moment to tell a single click from a double one; this tells every such pending click that something
+ * else was asked for meanwhile, so a late word play never overrides it (TranscriptSegment listens).
+ */
+export const PLAYBACK_INTENT = 'sate:playback-intent';
+export function announcePlaybackIntent() {
+  try { window.dispatchEvent(new Event(PLAYBACK_INTENT)); } catch { /* not in a browser */ }
+}
+
 export function useAudioPlayer({ transcriptData = [], refreshAudioUrl }: UseAudioPlayerProps = {}) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [currentTime, setCurrentTime] = useState(0);
@@ -23,6 +33,8 @@ export function useAudioPlayer({ transcriptData = [], refreshAudioUrl }: UseAudi
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
   const [segmentEndTime, setSegmentEndTime] = useState<number | null>(null);
   const isAutoPausingRef = useRef(false);
+  // Bumped by every playSegment(): an older segment's frame loop sees a newer token and stops.
+  const segmentTokenRef = useRef(0);
   const audioUrlRef = useRef<string | null>(null);
   const resumeAtRef = useRef<number | null>(null);
   const refreshedUrlRef = useRef<string | null>(null);
@@ -227,6 +239,7 @@ export function useAudioPlayer({ transcriptData = [], refreshAudioUrl }: UseAudi
 
   // Audio controls
   const togglePlayPause = async () => {
+    announcePlaybackIntent();
     const audio = audioRef.current;
     
     if (!audio) {
@@ -253,6 +266,14 @@ export function useAudioPlayer({ transcriptData = [], refreshAudioUrl }: UseAudi
     }
   };
 
+  // A seek the user made ends a bounded word/segment playback: playing on from the new spot must
+  // not stop at the old segment's end (or at once, when the seek went past it).
+  const endSegmentPlayback = () => {
+    segmentTokenRef.current++;
+    setSegmentEndTime(null);
+    announcePlaybackIntent();
+  };
+
   const seekTo = (time: number) => {
     const audio = audioRef.current;
     if (!audio || !audioLoaded) return;
@@ -262,6 +283,7 @@ export function useAudioPlayer({ transcriptData = [], refreshAudioUrl }: UseAudi
     const targetTime = validation.adjustedTimestamp || time;
     
     const clampedTime = Math.max(0, Math.min(targetTime, duration));
+    endSegmentPlayback();
     audio.currentTime = clampedTime;
     setCurrentTime(clampedTime);
   };
@@ -274,6 +296,7 @@ export function useAudioPlayer({ transcriptData = [], refreshAudioUrl }: UseAudi
     const audio = audioRef.current;
     if (!audio || !audioLoaded) return;
     const clampedTime = Math.max(0, Math.min(time, duration));
+    endSegmentPlayback();
     audio.currentTime = clampedTime;
     setCurrentTime(clampedTime);
   };
@@ -306,6 +329,7 @@ export function useAudioPlayer({ transcriptData = [], refreshAudioUrl }: UseAudi
 
   // Play a specific segment (from start to end)
   const playSegment = async (startTime: number, endTime: number) => {
+    announcePlaybackIntent();
     const audio = audioRef.current;
     if (!audio || !audioLoaded) return;
     
@@ -319,7 +343,26 @@ export function useAudioPlayer({ transcriptData = [], refreshAudioUrl }: UseAudi
       setCurrentTime(clampedStart);
       
       // Start playing
+      const token = ++segmentTokenRef.current;
       await audio.play();
+      // Stop AT the end. `timeupdate` (the check above) fires only ~4 times a second, so one word —
+      // often under 0.3 s — overran into the next one; a frame loop stops within ~16 ms.
+      const tick = () => {
+        const a = audioRef.current;
+        if (token !== segmentTokenRef.current || !a || a.paused) return;
+        if (a.currentTime >= endTime) {
+          isAutoPausingRef.current = true;
+          a.pause();
+          const stay = Math.max(clampedStart, endTime - 0.01);
+          a.currentTime = stay;
+          setCurrentTime(stay);
+          setSegmentEndTime(null);
+          isAutoPausingRef.current = false;
+          return;
+        }
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
     } catch (error) {
       console.error('Error playing segment:', error);
       setSegmentEndTime(null);
