@@ -48,7 +48,7 @@ export function AdminDashboard({ range, onRange, onGo, recordersOnline, recorder
   const load = useCallback(async () => {
     const my = ++seq.current;
     setBusy(true); setErr(null);
-    const [a, b] = await Promise.allSettled([deviceApiService.adminDashboard(windowStart(range)), deviceApiService.adminProcessing(1)]);
+    const [a, b] = await Promise.allSettled([deviceApiService.adminDashboard(windowStart(range)), deviceApiService.adminProcessing(7)]);
     if (my !== seq.current) return;   // a newer range was picked meanwhile
     if (a.status === 'fulfilled') setD(a.value);
     else {
@@ -170,7 +170,7 @@ function LiveStrip({ proc, onGo, recordersOnline, recordersTotal }: { proc: Admi
   const open = proc?.problems ? proc.problems.filter((p) => !p.dismissed).length : null;
   const failed = proc?.problems ? proc.problems.filter((p) => !p.dismissed && p.kind === 'failed').length : 0;
   const probs = open == null ? { tone: 'gray', text: '—', sub: 'not available' }
-    : { tone: failed ? 'red' : open ? 'amber' : 'green', text: open ? `${open} open` : 'None', sub: failed ? `${failed} failed` : open ? 'need a look' : 'nothing to act on' };
+    : { tone: failed ? 'red' : open ? 'amber' : 'green', text: open ? `${open} open` : 'None', sub: `${failed ? `${failed} failed · ` : ''}last 7 days, as on Processing` };
   const rec = { tone: recordersTotal ? (recordersOnline ? 'green' : 'gray') : 'gray', text: `${recordersOnline} / ${recordersTotal} online`, sub: 'SATE recorders' };
 
   const item = (icon: React.ReactNode, label: string, s: { tone: string; text: string; sub: string }, tab: Parameters<Go>[0]) => {
