@@ -109,7 +109,7 @@ const ConversationView: React.FC<ConversationViewProps> = ({
   const editModes = useEditModes();
   const speakerManagement = useSpeakerManagement(transcriptData, onTranscriptChange, clearCheckedSegments);
   const segmentOps = useSegmentOperations(transcriptData, onTranscriptChange, handleSegmentError);
-  const annotations = useAnnotations(transcriptData, onTranscriptChange, activeFilters, isSimpleAnnotationMode, isPlaying, onTogglePlayPause);
+  const annotations = useAnnotations(transcriptData, onTranscriptChange, activeFilters, isSimpleAnnotationMode);
   const dragAndDrop = useDragAndDrop(
     Boolean(isEditable) && !editModes.selectionMode && !editModes.mergeMode && !editModes.annotationMode && !editModes.excludeMode, 
     transcriptData, 
@@ -571,7 +571,7 @@ const ConversationView: React.FC<ConversationViewProps> = ({
                 setClickedWord({ segmentIndex, wordIndex, timestamp: word.start });
               }
               
-              const result = annotations.handleAnnotationClick(segment, wordIndex, event, onSeek);
+              const result = annotations.handleAnnotationClick(segment, wordIndex, event);
               if (result) {
                 if (Array.isArray(result)) {
                   // Multiple annotations
@@ -586,7 +586,7 @@ const ConversationView: React.FC<ConversationViewProps> = ({
             }}
             onPauseClick={(pause, event) => {
               
-              const details = annotations.handlePauseClick(pause, event, onSeek);
+              const details = annotations.handlePauseClick(pause, event);
              
               if (details) {
                 
@@ -696,6 +696,7 @@ const ConversationView: React.FC<ConversationViewProps> = ({
           setSelectedAnnotation(null);
           setSelectedAnnotations(null);
         }}
+        onPlay={(start, end) => handlePlaySegment(start, end)}
       />
 
       <EditTranscriptPopup

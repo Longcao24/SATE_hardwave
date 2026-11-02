@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { X } from 'lucide-react';
+import { Play, X } from 'lucide-react';
 
 export interface AnnotationDetails {
   type: string;
@@ -24,6 +24,8 @@ interface AnnotationPopupProps {
   annotations?: AnnotationDetails[]; // Support for multiple annotations
   onClose: () => void;
   onSeek: (timestamp: string) => void;
+  /** Plays [start, end] and stops there. Clicking an annotation never plays; this button does. */
+  onPlay?: (start: number, end: number) => void;
 }
 
 const AnnotationPopup: React.FC<AnnotationPopupProps> = ({ 
@@ -31,6 +33,7 @@ const AnnotationPopup: React.FC<AnnotationPopupProps> = ({
   annotations,
   onClose, 
   // onSeek // Currently unused but kept for future functionality
+  onPlay,
 }) => {
   const popupRef = useRef<HTMLDivElement>(null);
   const [adjustedPosition, setAdjustedPosition] = useState<{x: number, y: number} | null>(null);
@@ -197,6 +200,24 @@ const AnnotationPopup: React.FC<AnnotationPopupProps> = ({
     );
   };
 
+  // Play the annotated span. A span with no usable end (a word without timing) gets a short window.
+  const renderPlay = () => {
+    if (!onPlay || !currentAnnotation) return null;
+    const start = Number(currentAnnotation.start) || 0;
+    const end = Number(currentAnnotation.end) > start ? Number(currentAnnotation.end) : start + 0.6;
+    return (
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); onPlay(start, end); }}
+        data-track="Annotation: play"
+        className="mb-3 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 transition-colors"
+        title={`Play ${start.toFixed(2)}s – ${end.toFixed(2)}s`}
+      >
+        <Play className="w-3.5 h-3.5" /> Play
+      </button>
+    );
+  };
+
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
@@ -291,6 +312,7 @@ const AnnotationPopup: React.FC<AnnotationPopupProps> = ({
 
           {/* Multiple annotation tabs */}
           {renderAnnotationTabs()}
+          {renderPlay()}
 
           {/* Duration Display */}
           <div className="mb-3">
@@ -359,6 +381,7 @@ const AnnotationPopup: React.FC<AnnotationPopupProps> = ({
 
           {/* Multiple annotation tabs */}
           {renderAnnotationTabs()}
+          {renderPlay()}
 
           {/* Maze Components Display - only show if there are components */}
           {filteredMazeComponents.length > 0 && (
@@ -434,6 +457,7 @@ const AnnotationPopup: React.FC<AnnotationPopupProps> = ({
 
           {/* Multiple annotation tabs */}
           {renderAnnotationTabs()}
+          {renderPlay()}
 
           {/* Revision Content Display */}
           <div className="mb-3">
@@ -501,6 +525,7 @@ const AnnotationPopup: React.FC<AnnotationPopupProps> = ({
 
           {/* Multiple annotation tabs */}
           {renderAnnotationTabs()}
+          {renderPlay()}
 
           {/* Word and Missing Morpheme Display */}
           <div className="mb-3">
@@ -575,6 +600,7 @@ const AnnotationPopup: React.FC<AnnotationPopupProps> = ({
 
           {/* Multiple annotation tabs */}
           {renderAnnotationTabs()}
+          {renderPlay()}
 
           {/* Morpheme Components Display */}
           {currentAnnotation.additionalInfo?.lemma && currentAnnotation.additionalInfo?.morphemeForm && (
@@ -648,6 +674,7 @@ const AnnotationPopup: React.FC<AnnotationPopupProps> = ({
 
         {/* Multiple annotation tabs */}
         {renderAnnotationTabs()}
+          {renderPlay()}
 
         {/* Compact Timing Information */}
         {currentAnnotation && (

@@ -23,6 +23,8 @@ export function useAudioPlayer({ transcriptData = [], refreshAudioUrl }: UseAudi
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
   const [segmentEndTime, setSegmentEndTime] = useState<number | null>(null);
   const isAutoPausingRef = useRef(false);
+  // Bumped by every playSegment(): an older segment's frame loop sees a newer token and stops.
+  const segmentTokenRef = useRef(0);
   const audioUrlRef = useRef<string | null>(null);
   const resumeAtRef = useRef<number | null>(null);
   const refreshedUrlRef = useRef<string | null>(null);
@@ -253,6 +255,13 @@ export function useAudioPlayer({ transcriptData = [], refreshAudioUrl }: UseAudi
     }
   };
 
+  // A seek the user made ends a bounded word/segment playback: playing on from the new spot must
+  // not stop at the old segment's end (or at once, when the seek went past it).
+  const endSegmentPlayback = () => {
+    segmentTokenRef.current++;
+    setSegmentEndTime(null);
+  };
+
   const seekTo = (time: number) => {
     const audio = audioRef.current;
     if (!audio || !audioLoaded) return;
@@ -262,6 +271,7 @@ export function useAudioPlayer({ transcriptData = [], refreshAudioUrl }: UseAudi
     const targetTime = validation.adjustedTimestamp || time;
     
     const clampedTime = Math.max(0, Math.min(targetTime, duration));
+    endSegmentPlayback();
     audio.currentTime = clampedTime;
     setCurrentTime(clampedTime);
   };
@@ -274,6 +284,7 @@ export function useAudioPlayer({ transcriptData = [], refreshAudioUrl }: UseAudi
     const audio = audioRef.current;
     if (!audio || !audioLoaded) return;
     const clampedTime = Math.max(0, Math.min(time, duration));
+    endSegmentPlayback();
     audio.currentTime = clampedTime;
     setCurrentTime(clampedTime);
   };
@@ -319,7 +330,26 @@ export function useAudioPlayer({ transcriptData = [], refreshAudioUrl }: UseAudi
       setCurrentTime(clampedStart);
       
       // Start playing
+      const token = ++segmentTokenRef.current;
       await audio.play();
+      // Stop AT the end. `timeupdate` (the check above) fires only ~4 times a second, so one word —
+      // often under 0.3 s — overran into the next one; a frame loop stops within ~16 ms.
+      const tick = () => {
+        const a = audioRef.current;
+        if (token !== segmentTokenRef.current || !a || a.paused) return;
+        if (a.currentTime >= endTime) {
+          isAutoPausingRef.current = true;
+          a.pause();
+          const stay = Math.max(clampedStart, endTime - 0.01);
+          a.currentTime = stay;
+          setCurrentTime(stay);
+          setSegmentEndTime(null);
+          isAutoPausingRef.current = false;
+          return;
+        }
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
     } catch (error) {
       console.error('Error playing segment:', error);
       setSegmentEndTime(null);

@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useRef } from "react";
 import {
   Play,
   Edit2,
@@ -75,6 +75,9 @@ interface TranscriptSegmentProps {
   onNoteChange?: (segmentIndex: number, note: string) => void;
 }
 
+/** How long a click on a word waits for a second click before playing just that word. */
+const WORD_CLICK_MS = 220;
+
 const TranscriptSegment: React.FC<TranscriptSegmentProps> = ({
   segment,
   segmentIndex,
@@ -109,12 +112,27 @@ const TranscriptSegment: React.FC<TranscriptSegmentProps> = ({
   onCancelInlineEdit,
   editableRef,
   dragHandlers,
-  isPlaying,
-  onTogglePlayPause,
   clickedWord,
   onWordClick,
   onNoteChange,
 }) => {
+  // One click on a word plays THAT word; a double click plays the whole segment (2026-11-02). The
+  // browser fires two clicks before the dblclick, so a single click waits WORD_CLICK_MS to see whether
+  // a second one follows — playing at once would start the word and then jump to the segment start.
+  const wordClickTimer = useRef<number | null>(null);
+  const cancelWordClick = () => {
+    if (wordClickTimer.current !== null) { window.clearTimeout(wordClickTimer.current); wordClickTimer.current = null; }
+  };
+  useEffect(() => cancelWordClick, []);
+  const wordSpan = (wordIndex: number): [number, number] | null => {
+    const w = segment.words[wordIndex];
+    if (!w || w.start === undefined || w.start === null) return null;
+    const next = segment.words[wordIndex + 1]?.start;
+    // A word without an end plays to the next word's start, or a short window.
+    const end = w.end != null && w.end > w.start ? w.end : next != null && next > w.start ? next : w.start + 0.5;
+    return [w.start, end];
+  };
+
   // Check if segment is currently active
   const isSegmentActive = (segment: Segment) => {
     return currentTime >= segment.start && currentTime <= segment.end;
@@ -910,19 +928,27 @@ const TranscriptSegment: React.FC<TranscriptSegmentProps> = ({
                           word.start !== undefined &&
                           word.start !== null
                         ) {
-                          
                           if (onWordClick) {
                             onWordClick(segmentIndex, wordIndex, word);
                           }
-                          
-                          
-                          onSeek(word.start.toString());
-                          
-                          
-                          if (!isPlaying && onTogglePlayPause) {
-                            onTogglePlayPause();
+                          cancelWordClick();
+                          // The second click of a double click: onDoubleClick plays the segment.
+                          if (e.detail >= 2) return;
+                          const span = wordSpan(wordIndex);
+                          if (span) {
+                            wordClickTimer.current = window.setTimeout(() => {
+                              wordClickTimer.current = null;
+                              onPlaySegment(span[0], span[1]);
+                            }, WORD_CLICK_MS);
                           }
                         }
+                      }}
+                      onDoubleClick={(e) => {
+                        // In edit mode a double click opens inline editing (the segment text's handler).
+                        if (isEditable || editModes.annotationMode) return;
+                        e.stopPropagation();
+                        cancelWordClick();
+                        if (annotations.length === 0) onPlaySegment(segment.start, segment.end);
                       }}
                       onContextMenu={(e) => {
                         if (isEditable) {
@@ -976,7 +1002,9 @@ const TranscriptSegment: React.FC<TranscriptSegmentProps> = ({
                               .map((a) => a.type)
                               .join(", ")} - Click to view details`
                           : word.start
-                          ? "Click to play from here"
+                          ? isEditable
+                            ? "Click to play this word"
+                            : "Click to play this word · double-click to play the whole segment"
                           : ""
                       }
                     >

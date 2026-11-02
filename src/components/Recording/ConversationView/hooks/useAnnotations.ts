@@ -116,8 +116,6 @@ export const useAnnotations = (
   onTranscriptChange?: (updatedSegments: Segment[]) => void,
   activeFilters: string[] = [],
   isSimpleAnnotationMode: boolean = true,
-  isPlaying?: boolean,
-  onTogglePlayPause?: () => void
 ) => {
   const [selectedWords, setSelectedWords] = useState<SelectedWord[]>([]);
   const [showAnnotationCreationPopup, setShowAnnotationCreationPopup] = useState(false);
@@ -473,10 +471,9 @@ export const useAnnotations = (
     segment: Segment,
     wordIndex: number,
     event: React.MouseEvent,
-    onSeek: (timestamp: string) => void
   ) => {
     event.stopPropagation();
-    
+
     const word = segment.words[wordIndex];
     const rect = (event.target as HTMLElement).getBoundingClientRect();
     const position = {
@@ -498,14 +495,8 @@ export const useAnnotations = (
       }
     }
 
-    // Seek to the word's start time
-    if (word.start !== undefined && word.start !== null) {
-      onSeek(word.start.toString());
-
-      if (!isPlaying && onTogglePlayPause) {
-        onTogglePlayPause();
-      }
-    }
+    // Clicking an annotation only SHOWS it — playback starts from the popup's Play button (2026-11-02:
+    // it used to seek and start playing, so reading an annotation also played the audio).
 
     // In simple mode, group all maze annotations into a single "Maze" annotation
     if (isSimpleAnnotationMode && annotationDetailsList.length > 0) {
@@ -554,12 +545,11 @@ export const useAnnotations = (
     }
 
     // Return multiple annotations if found, otherwise just the first one (advanced mode)
-    return annotationDetailsList.length > 1 ? annotationDetailsList : annotationDetailsList[0] || null;  }, [createAnnotationDetails, getWordAnnotations, isSimpleAnnotationMode, isPlaying, onTogglePlayPause]);
+    return annotationDetailsList.length > 1 ? annotationDetailsList : annotationDetailsList[0] || null;  }, [createAnnotationDetails, getWordAnnotations, isSimpleAnnotationMode]);
 
   const handlePauseClick = useCallback((
     pause: { duration: number; start?: number; end?: number; color: string },
     event: React.MouseEvent,
-    onSeek: (timestamp: string) => void
   ): AnnotationDetails => {
     
     event.stopPropagation();
@@ -580,17 +570,10 @@ export const useAnnotations = (
 
     
 
-    if (pause.start !== undefined && pause.start !== null) {
-      
-      onSeek(pause.start.toString());
-      if (!isPlaying && onTogglePlayPause) {
-        
-        onTogglePlayPause();
-      }
-    } 
+    // Showing a pause never plays it; the popup's Play button does (2026-11-02).
     
     return annotationDetails;
-  }, [isPlaying, onTogglePlayPause]);
+  }, []);
 
   // Apply an annotation edit to a single segment and publish the result
   const applyAnnotationChange = useCallback((
