@@ -1,6 +1,8 @@
 // AdminPage — system-wide management for SATE admins (users in sate_admins).
 //
 // One page, several tabs, so each job has room instead of one long scroll:
+//   Dashboard  — the main tab: live state (AI service, queue, problems, recorders) and the system's
+//                numbers for Today / 7 days / 30 days / All time (AdminDashboard, device-api v43.12).
 //   Accounts   — every account with its numbers; create one; open an account to see its stats,
 //                view it read-only, set a password, disable or delete it, and turn per-account
 //                features on (AccountModal). The Meeting notes switch is in that popup: it is how
@@ -25,12 +27,13 @@ import { ManagersCard } from '@/components/Admin/ManagersCard';
 import { ProcessingPanel } from '@/components/Admin/ProcessingPanel';
 import { AllRecordersPanel } from '@/components/Admin/AllRecordersPanel';
 import { UsagePanel } from '@/components/Admin/Usage/UsagePanel';
+import { AdminDashboard, DASH_RANGES, type DashRange } from '@/components/Admin/AdminDashboard';
 import { AccountModal, Badge, fmtHours } from '@/components/Admin/AccountModal';
 import { Button } from '@/components/ui/button';
 import {
   ArrowLeft, ShieldCheck, Trash2, RefreshCw, Cpu, HardDrive, Loader2,
   Activity, ExternalLink, Users, Search, UserPlus, Eye, FileAudio, Clock, UserCog, X, Zap, BarChart3,
-  ArrowUp, ArrowDown, ChevronsUpDown,
+  ArrowUp, ArrowDown, ChevronsUpDown, LayoutDashboard,
 } from 'lucide-react';
 
 /** Sortable columns of the Accounts table. */
@@ -51,11 +54,12 @@ const MONITORING_LINKS = [
   { title: 'Docs', desc: 'Engineering documentation', href: 'https://sate-docs.pages.dev' },
 ];
 
-const TAB_IDS = ['accounts', 'managers', 'processing', 'usage', 'recorders', 'firmware', 'monitoring'] as const;
+const TAB_IDS = ['dashboard', 'accounts', 'managers', 'processing', 'usage', 'recorders', 'firmware', 'monitoring'] as const;
 type Tab = typeof TAB_IDS[number];
 
 /** Each section's heading in the content area. */
 const TAB_TITLES: Record<Tab, { title: string; sub: string }> = {
+  dashboard: { title: 'Dashboard', sub: 'The whole system at a glance: what is happening now, and how SATE is being used' },
   accounts: { title: 'Accounts', sub: 'Every account in the system: its reports, audio, recorders and last activity' },
   managers: { title: 'Managers', sub: 'Who can view which accounts (read-only), and who gets new-report email' },
   processing: { title: 'Processing', sub: 'The transcription queue, the AI service and every failure across all accounts' },
@@ -66,6 +70,7 @@ const TAB_TITLES: Record<Tab, { title: string; sub: string }> = {
 };
 /** The sidebar groups (same tabs as before, grouped by domain). */
 const NAV_GROUPS: { label: string; tabs: Tab[] }[] = [
+  { label: 'Overview', tabs: ['dashboard'] },
   { label: 'People', tabs: ['accounts', 'managers'] },
   { label: 'Activity', tabs: ['usage', 'processing'] },
   { label: 'Hardware', tabs: ['recorders', 'firmware'] },
@@ -100,9 +105,12 @@ export function AdminPage() {
   const navigate = useNavigate();
   const [allowed, setAllowed] = useState<boolean | null>(null);
   const [params, setParams] = useSearchParams();
-  const tab: Tab = (TAB_IDS as readonly string[]).includes(params.get('tab') || '') ? params.get('tab') as Tab : 'accounts';
+  const tab: Tab = (TAB_IDS as readonly string[]).includes(params.get('tab') || '') ? params.get('tab') as Tab : 'dashboard';
   // Switching tab drops the Usage sub-state (user/replay/view) — it belongs to that tab only.
-  const setTab = (t: Tab) => setParams(t === 'accounts' ? {} : { tab: t });
+  // The Dashboard is the main tab: it has the bare URL (and ?range= for its window).
+  const setTab = (t: Tab) => setParams(t === 'dashboard' ? {} : { tab: t });
+  const dashRange: DashRange = (DASH_RANGES.some((r) => r.id === params.get('range')) ? params.get('range') : '7d') as DashRange;
+  const setDashRange = (r: DashRange) => setParams(r === '7d' ? {} : { range: r });
   const [devices, setDevices] = useState<AdminDevice[]>([]);
   const [firmware, setFirmware] = useState<AdminFirmware[]>([]);
   const [users, setUsers] = useState<AdminUser[]>([]);
@@ -263,6 +271,7 @@ export function AdminPage() {
   }
 
   const TABS: { id: Tab; label: string; icon: React.ReactNode; count?: number }[] = [
+    { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-4 h-4" /> },
     { id: 'accounts', label: 'Accounts', icon: <Users className="w-4 h-4" />, count: users.length },
     { id: 'managers', label: 'Managers', icon: <UserCog className="w-4 h-4" /> },
     { id: 'processing', label: 'Processing', icon: <Zap className="w-4 h-4" /> },
@@ -338,16 +347,21 @@ export function AdminPage() {
           <p className="text-sm text-gray-500 mt-0.5">{TAB_TITLES[tab].sub}</p>
         </div>
 
-        {/* System totals */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 2xl:grid-cols-5 gap-3 mb-6">
+        {/* System totals (the Dashboard has its own, by window) */}
+        {tab !== 'dashboard' && <div className="grid grid-cols-2 sm:grid-cols-3 2xl:grid-cols-5 gap-3 mb-6">
           <Kpi icon={<Users className="w-5 h-5" />} label="Accounts" value={totals.accounts} sub={`${totals.active30} active in 30 days`} />
           <Kpi icon={<FileAudio className="w-5 h-5" />} label="Reports" value={totals.reports} sub={`from ${totals.withRecordings} accounts`} />
           <Kpi icon={<ShieldCheck className="w-5 h-5" />} label="SATE reports" value={totals.sateReports} sub="generated" />
           <Kpi icon={<Clock className="w-5 h-5" />} label="Total audio" value={fmtHours(totals.audio)} sub="transcribed" />
           <Kpi icon={<Cpu className="w-5 h-5" />} label="Recorders online" value={`${totals.online} / ${devices.length}`} sub="SATE recorders" />
-        </div>
+        </div>}
 
         {error && <div className="mb-4 rounded-lg bg-red-50 text-red-700 text-sm p-3">{error}</div>}
+
+        {tab === 'dashboard' && (
+          <AdminDashboard range={dashRange} onRange={setDashRange} onGo={setTab}
+            recordersOnline={totals.online} recordersTotal={devices.length} />
+        )}
 
         {/* ---------------- Accounts ---------------- */}
         {tab === 'accounts' && (

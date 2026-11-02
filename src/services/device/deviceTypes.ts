@@ -282,6 +282,23 @@ export interface AdminProcessing {
   per_day: { day: string; done: number; error: number; no_text: number; seconds: number }[];
   per_family: { family: string; done: number; error: number; pending: number; seconds: number; success_rate: number | null }[];
 }
+/** [device-api v43.12] GET /admin/dashboard[?from=ISO] — Admin → Dashboard for one window. */
+export interface AdminDashboard {
+  generated_at: string; from: string | null; bucket: 'hour' | 'day' | 'week';
+  totals: {
+    accounts: number; new_accounts: number; active_accounts: number; recording_accounts: number;
+    recordings: number; audio_hours: number; sate_reports: number; patients: number;
+    transcript_edits: number; audited_accesses: number; ready_p50_s: number | null; ready_p90_s: number | null;
+  };
+  outcomes: { done: number; no_speech: number; failed: number; waiting: number; success_rate: number | null };
+  series: { start: string; recordings: number; accounts: number; hours: number }[];
+  sources: { source: string; recordings: number; hours: number }[];
+  processing: {
+    points: { min: number; ready_min: number; source: string }[];
+    bands: { from_min: number; to_min: number; n: number; median_min: number | null; p90_min: number | null }[];
+    incidents_over_1h: number;
+  };
+}
 export interface AdminRecorder {
   serial: string; family: string; kind: string | null; name: string | null; hw_serial: string | null;
   online: boolean; last_seen: string | null; fw: string | null;
