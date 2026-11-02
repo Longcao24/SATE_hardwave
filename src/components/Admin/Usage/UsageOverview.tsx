@@ -127,10 +127,11 @@ export function UsageOverview({ data, users, onOpenUser }: {
         </div>
       </Section>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <Section title="Top pages" hint="By active time; views = times the page was opened.">
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-4">
+        <Section title="Top pages" hint="By active time; views = times the page was opened." className="min-w-0">
           {data.pages.length === 0 ? <p className="text-sm text-gray-500">Nothing yet.</p> : (
-            <table className="w-full text-sm">
+            <table className="w-full text-sm table-fixed">
+              <colgroup><col /><col className="w-14" /><col className="w-14" /><col className="w-14" /></colgroup>
               <thead className="text-gray-500 text-xs">
                 <tr><th className="text-left font-medium pb-1">Page</th><th className="text-right font-medium pb-1">Time</th>
                   <th className="text-right font-medium pb-1 pl-3">Views</th><th className="text-right font-medium pb-1 pl-3">Users</th></tr>
@@ -139,7 +140,7 @@ export function UsageOverview({ data, users, onOpenUser }: {
                 {data.pages.map((p) => (
                   <tr key={p.page}>
                     <td className="py-1 pr-3">
-                      <PageLabel page={p.page} className="text-gray-800" />
+                      <PageLabel page={p.page} className="text-gray-800 block truncate" />
                       <ShareBar value={p.min} max={maxPageMin} />
                     </td>
                     <td className="py-1 text-right tabular-nums align-top">{fmtMin(p.min)}</td>
@@ -151,9 +152,12 @@ export function UsageOverview({ data, users, onOpenUser }: {
             </table>
           )}
         </Section>
-        <Section title="Top events" hint="Clicks, app actions and errors across all accounts.">
+        <Section title="Top events" hint="Clicks, app actions and errors across all accounts." className="min-w-0">
           {data.events.length === 0 ? <p className="text-sm text-gray-500">Nothing yet.</p> : (
-            <table className="w-full text-sm">
+            // table-fixed: an auto-layout table grew to fit the longest label, pushing its bars and the
+            // Count/Users columns past the card's edge. Fixed columns let a long label truncate instead.
+            <table className="w-full text-sm table-fixed">
+              <colgroup><col /><col className="w-14" /><col className="w-14" /></colgroup>
               <thead className="text-gray-500 text-xs">
                 <tr><th className="text-left font-medium pb-1">Event</th><th className="text-right font-medium pb-1">Count</th>
                   <th className="text-right font-medium pb-1 pl-3">Users</th></tr>

@@ -76,6 +76,7 @@ const PAGE_NAMES: Record<string, string> = {
   '/patients/:id/edit': 'Edit patient',
   '/patients/inactive': 'Inactive patients',
   '/report/:id': 'Report',
+  '/recordings/standalone': 'Standalone recordings',
   '/sample': 'Sample report',
   '/devices': 'Devices',
   '/notes': 'Meeting notes',
