@@ -117,8 +117,9 @@ const TranscriptSegment: React.FC<TranscriptSegmentProps> = ({
   onWordClick,
   onNoteChange,
 }) => {
-  // One click on a word plays THAT word at once; a double click plays the whole segment (2026-11-02). No
-  // waiting window: the dblclick event (OS double-click speed) simply replaces the word with the segment.
+  // One click on a word plays its whole SEGMENT; a double click plays just THAT word (2026-11-03, swapped at
+  // the user's request). No waiting window: the segment starts at once, and the browser's dblclick — at the
+  // OS double-click speed, however slow — replaces it with the word.
   const wordSpan = (wordIndex: number): [number, number] | null => {
     const w = segment.words[wordIndex];
     if (!w || w.start === undefined || w.start === null) return null;
@@ -923,25 +924,25 @@ const TranscriptSegment: React.FC<TranscriptSegmentProps> = ({
                           word.start !== undefined &&
                           word.start !== null
                         ) {
-                          if (onWordClick) {
-                            onWordClick(segmentIndex, wordIndex, word);
-                          }
-                          // Cancels this and every other segment's pending word play.
+                          // Any other playback in flight (another segment, a bounded word) gives way.
                           announcePlaybackIntent();
-                          // The second click of a double click: onDoubleClick plays the segment.
+                          // The second click of a double click: onDoubleClick plays the word.
                           if (e.detail >= 2) return;
-                          // Play the word at once (no waiting window): if this turns out to be the first
-                          // click of a double click, the browser's dblclick — which follows the OS double-
-                          // click speed, however slow — replaces it with the whole segment.
-                          const span = wordSpan(wordIndex);
-                          if (span) onPlaySegment(span[0], span[1]);
+                          // One click: the whole segment, from its start (the clicked word is not singled out).
+                          onPlaySegment(segment.start, segment.end);
                         }
                       }}
                       onDoubleClick={(e) => {
                         // In edit mode a double click opens inline editing (the segment text's handler).
                         if (isEditable || editModes.annotationMode) return;
                         e.stopPropagation();
-                        if (annotations.length === 0) onPlaySegment(segment.start, segment.end);
+                        if (annotations.length > 0) return;
+                        // Double click: just this word (highlighted while it plays).
+                        const span = wordSpan(wordIndex);
+                        if (!span) return;
+                        announcePlaybackIntent();
+                        if (onWordClick) onWordClick(segmentIndex, wordIndex, word);
+                        onPlaySegment(span[0], span[1]);
                       }}
                       onContextMenu={(e) => {
                         if (isEditable) {
