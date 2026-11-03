@@ -132,6 +132,14 @@ export function InFlightUploads({ patientId, variant = 'sidebar', className = 'm
               )}
             </>
           )}
+          {kind === 'no_audio' && (
+            <span
+              title="This file has no audio track, so there is nothing to transcribe."
+              className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-semibold text-amber-800 bg-amber-50 rounded-md"
+            >
+              <MicOff className="w-3 h-3" /> No sound in file
+            </span>
+          )}
           {kind === 'no_speech' && (
             <span
               title="The AI found no words in this audio, so no transcript or report was made."
@@ -145,6 +153,11 @@ export function InFlightUploads({ patientId, variant = 'sidebar', className = 'm
         {kind === 'failed' && (
           <p className="mt-1 text-xs text-gray-500 break-words" title={u.process_error || undefined}>
             {shortError(u.process_error)}
+          </p>
+        )}
+        {kind === 'no_audio' && (
+          <p className="mt-1 text-xs text-gray-500">
+            This file has no audio track (for example a video recorded without sound). Upload the audio recording instead.
           </p>
         )}
         {kind === 'no_speech' && (

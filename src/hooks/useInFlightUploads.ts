@@ -28,7 +28,13 @@ export interface InFlightUpload {
   not_before: string | null;
 }
 
-export type InFlightKind = 'queued' | 'processing' | 'failed' | 'no_speech';
+export type InFlightKind = 'queued' | 'processing' | 'failed' | 'no_speech' | 'no_audio';
+
+/** cf-processor's tag for a file with no audio track at all (a video without sound…): no retry can help. */
+export const NO_AUDIO_PREFIX = 'NO_AUDIO:';
+/** Also the wording cf-processor used before the tag existed (ffmpeg found no audio stream). */
+export const isNoAudioError = (e: string | null | undefined) =>
+  !!e && (e.startsWith(NO_AUDIO_PREFIX) || /does not contain any stream|no audio track/i.test(e));
 
 /** A web upload that just finished WITH a recording — the indicator announces these. */
 export interface ReadyUpload {
@@ -50,6 +56,7 @@ export function kindOf(u: InFlightUpload): InFlightKind {
   if (u.status === 'queued') return 'queued';
   if (u.status === 'processing') return 'processing';
   if (u.status === 'done' && u.no_text) return 'no_speech';
+  if (u.status === 'error' && isNoAudioError(u.process_error)) return 'no_audio';
   // 'error' (a done row without a recording is a deleted report and is not fetched at all).
   return 'failed';
 }

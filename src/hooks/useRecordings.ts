@@ -1,3 +1,4 @@
+import { isNoAudioError } from '@/hooks/useInFlightUploads';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthProvider';
@@ -29,7 +30,7 @@ export interface Recording {
 }
 
 /** Where a Save-first report stands. 'failed' offers Retry; details are for admins only. */
-export type RecordingProcessing = 'queued' | 'processing' | 'failed' | 'no_speech' | 'removed';
+export type RecordingProcessing = 'queued' | 'processing' | 'failed' | 'no_audio' | 'no_speech' | 'removed';
 
 const tsMs = (iso?: string | null) => {
   const t = iso ? Date.parse(iso) : NaN;
@@ -105,14 +106,16 @@ export const useRecordings = () => {
       for (let i = 0; i < waiting.length; i += 100) {
         // A failed read must not turn every waiting report into "removed": throw, so React Query keeps the
         // previous data and retries (audit 2026-11-02).
-        const { data: ss, error: ssErr } = await supabase.from('sate_device_sessions').select('id, status').in('id', waiting.slice(i, i + 100));
+        const { data: ss, error: ssErr } = await supabase.from('sate_device_sessions').select('id, status, process_error').in('id', waiting.slice(i, i + 100));
         if (ssErr) throw ssErr;
-        for (const x of ss || []) status.set(x.id, x.status);
+        // A failure because the file has NO audio track is its own state: no Retry can help (cf-processor NO_AUDIO:).
+        for (const x of ss || []) status.set(x.id, x.status === 'error' && isNoAudioError(x.process_error) ? 'no_audio' : x.status);
       }
       const processingOf = (r: Row): RecordingProcessing | null => {
         if (r.t_no_speech === true) return 'no_speech';
         if (r.t_pending !== true) return null;
         const st = r.source_session_id ? status.get(r.source_session_id) : undefined;
+        if (st === 'no_audio') return 'no_audio';
         if (st === 'error') return 'failed';
         if (st === 'processing') return 'processing';
         if (st === 'queued') return 'queued';

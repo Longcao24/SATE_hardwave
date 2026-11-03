@@ -8,6 +8,19 @@ Version rules: `npm version patch --no-git-tag-version` for fixes, `minor` for n
 change that needs users to relearn something. The version shows in the sidebar badge and at
 `https://sate-hardware.vercel.app/version.json`. Each release is tagged `web-<version>` in git.
 
+## 1.6.3 — 2026-11-03
+
+**For clinicians**
+- A file with **no sound at all** (for example a video recorded without audio, or renamed to .mp3) now says
+  **"No sound in this file"** on its report, in the lists and under Processing — with what to do (upload the audio
+  recording instead) — instead of "Processing failed" and a Retry that could never work.
+
+**Technical**
+- Needs cf-processor with the `NO_AUDIO:` check (`_audio_stream_count` via ffprobe) for new uploads; the web also
+  recognises the old wording ("Output file does not contain any stream") so existing failures show correctly.
+  `isNoAudioError()` in `useInFlightUploads.ts` is the one test; states `no_audio` in the in-flight list,
+  `RecordingProcessing` / `ProcessingChip` and `PendingReport`.
+
 ## 1.6.2 — 2026-11-03
 
 **For clinicians**

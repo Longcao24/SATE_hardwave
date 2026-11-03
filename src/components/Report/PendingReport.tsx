@@ -3,6 +3,7 @@ import { AlertCircle, Clock, Loader2, MicOff, RotateCcw } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useQueryClient } from '@tanstack/react-query';
 import { retrySessionOnServer } from '@/services/DataService/serverProcessing';
+import { isNoAudioError } from '@/hooks/useInFlightUploads';
 
 /**
  * A report saved before its upload finished processing (Save-first, 2026-11-02). The row exists with the
@@ -21,7 +22,7 @@ export interface PendingReportInfo {
   noSpeech: boolean;
 }
 
-type Stage = 'queued' | 'processing' | 'failed' | 'no_speech' | 'removed' | 'ready' | 'loading';
+type Stage = 'queued' | 'processing' | 'failed' | 'no_audio' | 'no_speech' | 'removed' | 'ready' | 'loading';
 
 const POLL_MS = 4000;
 
@@ -37,7 +38,7 @@ export function PendingReport({ info, onReady }: { info: PendingReportInfo; onRe
     const [{ data: rec, error: recErr }, sess] = await Promise.all([
       supabase.from('recordings').select('pending:transcript->pending, no_speech:transcript->no_speech').eq('id', info.id).maybeSingle(),
       info.sessionId
-        ? supabase.from('sate_device_sessions').select('status, created_at, processing_started_at').eq('id', info.sessionId).maybeSingle()
+        ? supabase.from('sate_device_sessions').select('status, created_at, processing_started_at, process_error').eq('id', info.sessionId).maybeSingle()
         : Promise.resolve({ data: null, error: null }),
     ]);
     // A read that failed says nothing about the report: keep the stage and try again on the next poll.
@@ -49,14 +50,15 @@ export function PendingReport({ info, onReady }: { info: PendingReportInfo; onRe
       if (!readyFired.current) { readyFired.current = true; onReady(); }
       return;
     }
-    const s = (sess as { data: { status: string; created_at: string; processing_started_at: string | null } | null }).data;
+    const s = (sess as { data: { status: string; created_at: string; processing_started_at: string | null; process_error: string | null } | null }).data;
     if (!s) { setStage('removed'); return; }
-    if (s.status === 'error') setStage('failed');
+    if (s.status === 'error' && isNoAudioError(s.process_error)) setStage('no_audio');
+    else if (s.status === 'error') setStage('failed');
     else if (s.status === 'processing' || s.status === 'done') { setStage('processing'); setSince(s.processing_started_at); }
     else { setStage('queued'); setSince(s.created_at); }
   }, [info.id, info.sessionId, onReady]);
 
-  const final = stage === 'no_speech' || stage === 'removed' || stage === 'ready';
+  const final = stage === 'no_speech' || stage === 'no_audio' || stage === 'removed' || stage === 'ready';
   useEffect(() => {
     if (info.noSpeech || final) return;
     void check();
@@ -94,6 +96,8 @@ export function PendingReport({ info, onReady }: { info: PendingReportInfo; onRe
       text: `Transcribing and analysing${elapsed ? ` (${elapsed})` : ''}. This page fills in by itself when it is done; you can leave it in the meantime.` },
     failed: { tone: 'border-red-200 bg-red-50', icon: <AlertCircle className="w-5 h-5 text-red-600" />, title: 'Processing failed',
       text: 'Your recording is saved. The SATE team has been notified. Press Retry to process it again.' },
+    no_audio: { tone: 'border-amber-200 bg-amber-50', icon: <MicOff className="w-5 h-5 text-amber-600" />, title: 'No sound in this file',
+      text: 'The uploaded file has no audio track (for example a video recorded without sound), so there is nothing to transcribe. Upload the audio recording instead, then delete this report.' },
     no_speech: { tone: 'border-slate-200 bg-slate-50', icon: <MicOff className="w-5 h-5 text-slate-500" />, title: 'No speech detected',
       text: 'Processing finished but found no speech in this recording, so there is no transcript. The SATE team has been notified.' },
     removed: { tone: 'border-slate-200 bg-slate-50', icon: <AlertCircle className="w-5 h-5 text-slate-500" />, title: 'Upload removed',
