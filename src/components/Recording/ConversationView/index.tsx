@@ -96,14 +96,27 @@ const ConversationView: React.FC<ConversationViewProps> = ({
     setCheckedSegments(new Set());
   }, []);
 
+  // The clicked word's highlight ends with its playback (audit 2026-11-02): bounded playback stops ON the
+  // last frame, which can be a hair before word.end, so a strict >= left two words looking active.
   useEffect(() => {
     if (clickedWord) {
       const word = transcriptData[clickedWord.segmentIndex]?.words[clickedWord.wordIndex];
-      if (word && word.end && currentTime >= word.end) {
+      if (word && word.end && currentTime >= word.end - 0.08) {
         setClickedWord(null);
       }
     }
   }, [currentTime, clickedWord, transcriptData]);
+  // ...and when playback stops after the click, or (an annotation click plays nothing) after a moment.
+  const wasPlaying = useRef(false);
+  useEffect(() => {
+    if (clickedWord && wasPlaying.current && !isPlaying) setClickedWord(null);
+    wasPlaying.current = !!isPlaying;
+  }, [isPlaying, clickedWord]);
+  useEffect(() => {
+    if (!clickedWord || isPlaying) return;
+    const t = window.setTimeout(() => setClickedWord(null), 2500);
+    return () => window.clearTimeout(t);
+  }, [clickedWord, isPlaying]);
 
   // Use custom hooks for complex state management
   const editModes = useEditModes();

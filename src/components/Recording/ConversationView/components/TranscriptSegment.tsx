@@ -1,5 +1,5 @@
-import React, { useEffect, useRef } from "react";
-import { PLAYBACK_INTENT, announcePlaybackIntent } from "@/hooks/useAudioPlayer";
+import React from "react";
+import { announcePlaybackIntent } from "@/hooks/useAudioPlayer";
 import {
   Play,
   Edit2,
@@ -78,7 +78,6 @@ interface TranscriptSegmentProps {
 
 /** How long a click on a word waits for a second click before playing just that word. Long enough for
  *  an ordinary double click (220 ms was not: the word played, then jumped to the segment). */
-const WORD_CLICK_MS = 350;
 
 const TranscriptSegment: React.FC<TranscriptSegmentProps> = ({
   segment,
@@ -118,18 +117,8 @@ const TranscriptSegment: React.FC<TranscriptSegmentProps> = ({
   onWordClick,
   onNoteChange,
 }) => {
-  // One click on a word plays THAT word; a double click plays the whole segment (2026-11-02). The
-  // browser fires two clicks before the dblclick, so a single click waits WORD_CLICK_MS to see whether
-  // a second one follows — playing at once would start the word and then jump to the segment start.
-  const wordClickTimer = useRef<number | null>(null);
-  const cancelWordClick = () => {
-    if (wordClickTimer.current !== null) { window.clearTimeout(wordClickTimer.current); wordClickTimer.current = null; }
-  };
-  useEffect(() => {
-    // Anything else the user plays meanwhile (another word, the play button, a seek) wins.
-    window.addEventListener(PLAYBACK_INTENT, cancelWordClick);
-    return () => { window.removeEventListener(PLAYBACK_INTENT, cancelWordClick); cancelWordClick(); };
-  }, []);
+  // One click on a word plays THAT word at once; a double click plays the whole segment (2026-11-02). No
+  // waiting window: the dblclick event (OS double-click speed) simply replaces the word with the segment.
   const wordSpan = (wordIndex: number): [number, number] | null => {
     const w = segment.words[wordIndex];
     if (!w || w.start === undefined || w.start === null) return null;
@@ -941,20 +930,17 @@ const TranscriptSegment: React.FC<TranscriptSegmentProps> = ({
                           announcePlaybackIntent();
                           // The second click of a double click: onDoubleClick plays the segment.
                           if (e.detail >= 2) return;
+                          // Play the word at once (no waiting window): if this turns out to be the first
+                          // click of a double click, the browser's dblclick — which follows the OS double-
+                          // click speed, however slow — replaces it with the whole segment.
                           const span = wordSpan(wordIndex);
-                          if (span) {
-                            wordClickTimer.current = window.setTimeout(() => {
-                              wordClickTimer.current = null;
-                              onPlaySegment(span[0], span[1]);
-                            }, WORD_CLICK_MS);
-                          }
+                          if (span) onPlaySegment(span[0], span[1]);
                         }
                       }}
                       onDoubleClick={(e) => {
                         // In edit mode a double click opens inline editing (the segment text's handler).
                         if (isEditable || editModes.annotationMode) return;
                         e.stopPropagation();
-                        cancelWordClick();
                         if (annotations.length === 0) onPlaySegment(segment.start, segment.end);
                       }}
                       onContextMenu={(e) => {

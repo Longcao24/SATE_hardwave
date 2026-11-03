@@ -56,15 +56,22 @@ const inflight = new WeakMap<File, XMLHttpRequest>();
 // recordings — this tab just stops watching it. Only an explicit discard would withdraw it.
 const detached = new WeakSet<File>();
 
-/** The clinician closed the form: keep uploading and processing, stop watching in this tab. */
-export function detachUpload(file: File) {
+/**
+ * The clinician closed the form ('closed') or saved the report before processing ended ('saved'): keep
+ * uploading and processing, stop watching in this tab. Analytics records WHICH, once — these used to be
+ * counted as 'upload:cancel', so every Save-first looked like an abandoned upload (audit 2026-11-02).
+ * The processing outcome itself is the backend's (device-api usage digest), not this tab's.
+ */
+export function detachUpload(file: File, why: 'closed' | 'saved' = 'closed') {
+  if (!detached.has(file)) trackAction(why === 'saved' ? 'upload:saved-first' : 'upload:form-closed');
   detached.add(file);
 }
 
 /** Thrown when the clinician cancelled; not an error to show. */
 export class UploadCancelledError extends Error {
   readonly cancelled = true;
-  constructor() { super('Upload cancelled'); }
+  /** true = this tab stopped watching (form closed / saved first); the upload itself carries on. */
+  constructor(readonly detached = false) { super(detached ? 'Upload detached' : 'Upload cancelled'); }
 }
 
 /** The clinician cancelled this upload: abort what is in flight; a later step withdraws it. */
@@ -160,7 +167,7 @@ async function trackOutcome(p: Promise<ServerProcessingResult>): Promise<ServerP
     trackAction('upload:done');
     return r;
   } catch (e) {
-    if (e instanceof UploadCancelledError) trackAction('upload:cancel');
+    if (e instanceof UploadCancelledError) { if (!e.detached) trackAction('upload:cancel'); }
     else if (e instanceof ServerProcessingError && e.original === 'no_text') trackAction('upload:no-speech');
     else if (!(e instanceof ServerProcessingError && /watch limit/.test(e.original))) trackAction('upload:failed');
     throw e;
@@ -244,7 +251,7 @@ async function handOverAndWatch(file: File, opts: ServerProcessingOptions): Prom
   notifyWebUploadsChanged();
   trackAction('upload:handed-over');
   // Form closed during the hand-over: the file is safely on the server and queued. Stop here.
-  if (detached.has(file)) throw new UploadCancelledError();
+  if (detached.has(file)) throw new UploadCancelledError(true);
   onSession?.(sessionId);
   onProgress?.(42);
   return watch(sessionId, opts, file);
@@ -283,7 +290,8 @@ async function watch(sessionId: string, opts: ServerProcessingOptions, file: Fil
   let warned = false;
   for (;;) {
     await sleep(POLL_MS);
-    if (cancelled.has(file) || detached.has(file)) throw new UploadCancelledError();
+    if (cancelled.has(file)) throw new UploadCancelledError();
+    if (detached.has(file)) throw new UploadCancelledError(true);
     const { data: row, error } = await supabase.from('sate_device_sessions')
       .select('status, recording_id, no_text, process_error')
       .eq('id', sessionId).maybeSingle();
@@ -335,7 +343,7 @@ export async function saveBeforeProcessed(
   const r = await api<{ recording_id: string }>(`/sessions/${encodeURIComponent(sessionId)}/recording`, {
     name: meta.name, protocol: meta.protocol || '', note: meta.note || '', patient_id: meta.patientId || null,
   });
-  if (file) detachUpload(file);
+  if (file) detachUpload(file, 'saved');
   notifyWebUploadsChanged();
   return r.recording_id;
 }

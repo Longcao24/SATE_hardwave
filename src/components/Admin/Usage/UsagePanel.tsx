@@ -6,8 +6,8 @@
 // The view is in the URL (/admin?tab=usage&user=<uid>&replay=<tab_id>, &report=<recording id> for a report) so a person or a recording
 // can be linked to and the browser's Back button walks back through what was opened.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useCallback, useEffect, useState } from 'react';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { BarChart3, PlayCircle, RefreshCw } from 'lucide-react';
 import type { AdminUser } from '@/services/device/deviceTypes';
 import { analyticsApi } from '@/services/usage/analyticsApi';
@@ -25,9 +25,11 @@ export function UsagePanel({ users }: { users: AdminUser[] }) {
   const replay = params.get('replay');
   const reportId = params.get('report');
   const view = params.get('view') === 'recordings' ? 'recordings' : 'overview';
-  // How many history entries WE pushed: while any, Back = browser back; a deep-linked page has
-  // nothing of ours to go back to, so Back just drops the last param instead of leaving /admin.
-  const pushed = useRef(0);
+  // Every history entry WE push carries state.usageNav. In-app Back goes back in history only from such
+  // an entry — its previous entry is then one of ours too, inside /admin. A deep link, or an entry reached
+  // with the browser's own Back/Forward, has no marker, so Back just drops the param and never leaves
+  // /admin (a counter could not tell: the browser's Back never decremented it — audit 2026-11-02).
+  const location = useLocation();
 
   const setQ = useCallback((patch: Record<string, string | null>, replace = false) => {
     setParams((prev) => {
@@ -35,11 +37,11 @@ export function UsagePanel({ users }: { users: AdminUser[] }) {
       n.set('tab', 'usage');
       for (const [k, v] of Object.entries(patch)) (v == null ? n.delete(k) : n.set(k, v));
       return n;
-    }, { replace });
-    if (!replace) pushed.current += 1;
-  }, [setParams]);
+      // A replaced entry keeps the marker it had: its predecessor did not change.
+    }, { replace, state: replace ? location.state : { usageNav: true } });
+  }, [setParams, location.state]);
   const back = (drop: string[]) => {
-    if (pushed.current > 0) { pushed.current -= 1; navigate(-1); return; }
+    if ((location.state as { usageNav?: boolean } | null)?.usageNav) { navigate(-1); return; }
     setParams((prev) => { const n = new URLSearchParams(prev); drop.forEach((k) => n.delete(k)); return n; }, { replace: true });
   };
 
