@@ -24,6 +24,8 @@ change that needs users to relearn something. The version shows in the sidebar b
   mode on). Report tasks open a report first when none is open. First-sign-in flag in the account's
   `user_metadata.sate_onboarding_done` (holds across browsers); only accounts created from 2026-11-03 get it
   automatically. The old `FirstTimeGuide` is removed. Tested end to end on a new local account (6/6).
+  A step already done when it starts moves on without navigating (it used to jump to the Dashboard and explain
+  the report there); leaving the step's page closes the tour quietly; scrolling to a target is instant.
 
 ## 1.6.6 — 2026-11-03
 

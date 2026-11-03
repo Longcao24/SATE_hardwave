@@ -145,11 +145,30 @@ function TourOverlay({ tour, index, pathname, navigate, onIndex, onFinish }: {
   const next = useCallback(() => (last ? onFinish(true) : onIndex(index + 1)), [last, index, onIndex, onFinish]);
   const back = () => { if (index > 0) onIndex(index - 1); };
 
-  // Go to the step's page (unless it is a "wait for route" step: then the USER navigates).
+  // Already done when the step starts (e.g. "open a report" while a report is open): move on at once, and do NOT
+  // navigate — going to the step's page first is what made the tour jump to the Dashboard and then show
+  // "This is a report" there (2026-11-03).
+  const doneAtStart = useRef(
+    (step.advance instanceof RegExp && step.advance.test(pathname))
+    || (typeof step.advance === 'function' && (() => { try { return (step.advance as () => boolean)(); } catch { return false; } })()),
+  );
   useEffect(() => {
+    if (doneAtStart.current) { next(); return; }
     if (step.route && !step.route.test(pathname) && step.goTo) navigate(step.goTo);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // The user left the page this step is about (e.g. "Back to Dashboard" in the middle of a report task): the tour
+  // closes quietly instead of explaining a screen that is no longer there.
+  const arrived = useRef(false);
+  useEffect(() => {
+    if (!step.route || doneAtStart.current) return;
+    if (step.route.test(pathname)) { arrived.current = true; return; }
+    if (arrived.current || !step.goTo) {
+      const t = window.setTimeout(() => onFinish(false), 1200);
+      return () => window.clearTimeout(t);
+    }
+  }, [pathname, step.route, step.goTo, onFinish]);
 
   // Find the target (it may appear after a navigation or an animation), then keep its rectangle current.
   useEffect(() => {
@@ -160,7 +179,12 @@ function TourOverlay({ tour, index, pathname, navigate, onIndex, onFinish }: {
       const cur = findTarget(step.target);
       if (cur !== found) { found = cur; setEl(cur); }
       if (cur) {
-        if (!scrolled) { scrolled = true; cur.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' }); }
+        if (!scrolled) {
+          scrolled = true;
+          // Only when it is off screen, and at once: a smooth scroll made the card slide around with it.
+          const r = cur.getBoundingClientRect();
+          if (r.top < 0 || r.bottom > window.innerHeight) cur.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'auto' });
+        }
         setRect(cur.getBoundingClientRect()); setSearching(false);
       } else if (Date.now() - t0 > 4000) {
         setSearching(false);
@@ -177,7 +201,7 @@ function TourOverlay({ tour, index, pathname, navigate, onIndex, onFinish }: {
   const fired = useRef(false);   // one success per step, however many signals arrive
   const succeed = useCallback(() => { if (fired.current) return; fired.current = true; setSuccess(true); window.setTimeout(next, 900); }, [next]);
   useEffect(() => {
-    if (step.advance instanceof RegExp && step.advance.test(pathname)) succeed();
+    if (!doneAtStart.current && step.advance instanceof RegExp && step.advance.test(pathname)) succeed();
   }, [pathname, step.advance, succeed]);
   // … or when something the user did shows on the page (audio playing, a popup open, edit mode on).
   useEffect(() => {
