@@ -34,8 +34,9 @@ export const SidebarHeader: React.FC<SidebarHeaderProps> = ({
             className="px-2 py-1 text-xs font-medium text-gray-600 bg-gray-200 rounded-full whitespace-nowrap" 
             href="https://doc.sate.agency" 
             target="_blank"
+            title={`SATE web ${__APP_VERSION__}${__APP_COMMIT__ ? ` (${__APP_COMMIT__})` : ''} · built ${new Date(__APP_BUILT__).toLocaleString()}`}
           >
-            v1.5.9
+            v{__APP_VERSION__}
           </a>
         )}
         <button

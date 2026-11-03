@@ -29,3 +29,6 @@ node_modules
 dist
 .cursor
 *backup*
+
+# The release log is versioned (npm run release:prod requires an entry).
+!CHANGELOG.md

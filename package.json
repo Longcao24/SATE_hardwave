@@ -2,7 +2,7 @@
   "name": "sate-react",
   "description": "SATE - Speech Annotation and Transcription Enhancer",
   "private": true,
-  "version": "1.5.9",
+  "version": "1.6.0",
   "type": "module",
   "engines": {
     "node": ">=20.0.0",
@@ -12,7 +12,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "release:prod": "node scripts/release-prod.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.1.1",
