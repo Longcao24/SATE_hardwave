@@ -8,6 +8,22 @@ Version rules: `npm version patch --no-git-tag-version` for fixes, `minor` for n
 change that needs users to relearn something. The version shows in the sidebar badge and at
 `https://sate-hardware.vercel.app/version.json`. Each release is tagged `web-<version>` in git.
 
+## 1.6.1 — 2026-11-03
+
+**For clinicians**
+- A file the server refuses as too large now says so ("larger than SATE can accept right now") instead of asking you
+  to check your connection, and offers no pointless retry.
+
+**For admins**
+- Admin → Monitoring no longer shows the **Status page** card (that page is no longer online). Service health is on
+  Admin → Dashboard and Admin → Processing.
+
+**Technical**
+- A failed upload is reported to the operator ONCE: the error popup no longer re-reports a message that repeats the
+  cause the upload path just logged (`reportClientError` de-duplicates within 15 s).
+- Same day, status Worker `104ab249` (backend branch): DOWN only after two failed checks in a row, alert mails list only
+  new problems, a "back up" mail when a service recovers, a Storage 413 is mailed as STORAGE SIZE LIMIT.
+
 ## 1.6.0 — 2026-11-03
 
 **For clinicians**

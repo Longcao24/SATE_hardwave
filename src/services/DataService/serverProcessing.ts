@@ -148,8 +148,17 @@ export async function retrySessionOnServer(sessionId: string): Promise<void> {
   }
 }
 
+const recentReports: { at: number; message: string }[] = [];
+
 /** Best-effort record of a failure that happened before the backend had the file. */
 export function reportClientError(context: string, file: File | null, message: string) {
+  // One failure, one row (2026-11-03): the upload path reports the cause, then the error popup reports the
+  // message that CONTAINS it — every failed upload became two operator alerts. A message that repeats one
+  // reported in the last 15 s is the same failure.
+  const now = Date.now();
+  while (recentReports.length && now - recentReports[0].at > 15_000) recentReports.shift();
+  if (recentReports.some((r) => message.includes(r.message))) return;
+  recentReports.push({ at: now, message });
   supabase.from('sate_client_errors')
     .insert({ context, file_name: file?.name ?? null, bytes: file?.size ?? null, message: message.slice(0, 1000) })
     .then(() => {}, () => {});
@@ -242,6 +251,13 @@ async function handOverAndWatch(file: File, opts: ServerProcessingOptions): Prom
     }
     const msg = e instanceof Error ? e.message : String(e);
     reportClientError('web upload', file, msg);
+    // Storage refused it as too large (413): a connection problem it is not, and retrying will not help
+    // until the server limit is raised (2026-11-02: the project limit had dropped to 50 MiB).
+    if (/\b413\b|payload too large|exceeded the maximum allowed size/i.test(msg)) {
+      throw new ServerProcessingError(
+        'This file is larger than SATE can accept right now. It was not uploaded, and the SATE team has been notified — keep the file and upload it again once they tell you it is fixed.',
+        null, false, msg);
+    }
     throw new ServerProcessingError(
       'The file could not be uploaded to SATE. Please check your connection and try again. The SATE team has been notified.',
       null, true, msg);

@@ -50,7 +50,6 @@ const ACCOUNT_SORT_VALUE: Record<AccountSortKey, (u: AdminUser) => string | numb
 // Ops surfaces linked from the admin page (open in a new tab).
 const MONITORING_LINKS = [
   { title: 'Service monitor', desc: 'Live pipeline, fleet & versions', href: 'https://sate-monitor.pages.dev' },
-  { title: 'Status page', desc: 'Uptime & 90-day history', href: 'https://sate-status.longcao.workers.dev' },
   { title: 'Docs', desc: 'Engineering documentation', href: 'https://sate-docs.pages.dev' },
 ];
 

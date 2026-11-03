@@ -83,7 +83,8 @@ export const processAudioFile = async (
         else erroredSession.delete(audioFile);
         const err = new Error(e.message);
         (err as any).errorDetails = {
-          type: e.sessionId ? 'server' : 'network',
+          // Not retryable without a session = refused by the server (e.g. Storage 413), not a connection problem.
+          type: e.sessionId || !e.retryable ? 'server' : 'network',
           message: e.message,
           originalError: e.original,
           retryable: e.retryable,
