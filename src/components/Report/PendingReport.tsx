@@ -34,12 +34,14 @@ export function PendingReport({ info, onReady }: { info: PendingReportInfo; onRe
   const queryClient = useQueryClient();
 
   const check = useCallback(async () => {
-    const [{ data: rec }, sess] = await Promise.all([
+    const [{ data: rec, error: recErr }, sess] = await Promise.all([
       supabase.from('recordings').select('pending:transcript->pending, no_speech:transcript->no_speech').eq('id', info.id).maybeSingle(),
       info.sessionId
         ? supabase.from('sate_device_sessions').select('status, created_at, processing_started_at').eq('id', info.sessionId).maybeSingle()
-        : Promise.resolve({ data: null }),
+        : Promise.resolve({ data: null, error: null }),
     ]);
+    // A read that failed says nothing about the report: keep the stage and try again on the next poll.
+    if (recErr || (sess as { error?: unknown }).error) return;
     if (!rec) { setStage('removed'); return; }
     if (rec.no_speech === true) { setStage('no_speech'); return; }
     if (rec.pending !== true) {
@@ -54,15 +56,16 @@ export function PendingReport({ info, onReady }: { info: PendingReportInfo; onRe
     else { setStage('queued'); setSince(s.created_at); }
   }, [info.id, info.sessionId, onReady]);
 
+  const final = stage === 'no_speech' || stage === 'removed' || stage === 'ready';
   useEffect(() => {
-    if (info.noSpeech) return;
+    if (info.noSpeech || final) return;
     void check();
     const t = window.setInterval(() => { if (!document.hidden) void check(); }, POLL_MS);
     const tick = window.setInterval(() => setNow(Date.now()), 1000);
     const onVis = () => { if (!document.hidden) void check(); };
     document.addEventListener('visibilitychange', onVis);
     return () => { window.clearInterval(t); window.clearInterval(tick); document.removeEventListener('visibilitychange', onVis); };
-  }, [check, info.noSpeech]);
+  }, [check, info.noSpeech, final]);
 
   const retry = async () => {
     if (!info.sessionId) return;

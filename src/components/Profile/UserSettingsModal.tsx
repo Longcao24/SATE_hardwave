@@ -862,7 +862,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({ isOpen, on
                           <div className="flex items-start justify-between">
                             <div className="flex-1">
                               <div className="flex items-center gap-3 mb-2">
-                                <code className="text-lg font-mono font-bold text-gray-900 bg-gray-100 px-3 py-1 rounded">
+                                <code data-usage-block className="text-lg font-mono font-bold text-gray-900 bg-gray-100 px-3 py-1 rounded">
                                   {code.code}
                                 </code>
                                 <span

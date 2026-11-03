@@ -27,7 +27,7 @@ const EMPTY_COUNTS: IssueCounts = {
   'morpheme-omission': 0, revision: 0, 'utterance-error': 0,
 };
 
-export function OversightReportView({ ownerId, ownerEmail, rec, patient, onBack, recordings, patientName, onOpen, opening, error }: {
+export function OversightReportView({ ownerId, ownerEmail, rec, patient, onBack, recordings, patientName, onOpen, opening, error, allowGenerate = true }: {
   ownerId: string;
   ownerEmail: string | null;
   rec: Record<string, any> & { audio_url: string | null };
@@ -40,6 +40,9 @@ export function OversightReportView({ ownerId, ownerEmail, rec, patient, onBack,
   /** Id of a report being loaded from the sidebar, if any. */
   opening?: string | null;
   error?: string | null;
+  /** [2026-11-02] false = strictly read-only (Admin → Usage → Reports): no "Generate SATE Report", the one
+   *  write oversight otherwise allows. Default true keeps /oversight as it was. */
+  allowGenerate?: boolean;
 }) {
   const segments: Segment[] = useMemo(
     () => normalizeSegments(Array.isArray(rec.transcript?.segments) ? rec.transcript.segments : []),
@@ -146,12 +149,12 @@ export function OversightReportView({ ownerId, ownerEmail, rec, patient, onBack,
             readOnly
             lsaReport={lsa}
             // [v43] The one write oversight allows: a SATE Report where there is none.
-            lsaAllowGenerate={!lsa}
-            onSaveLsaReport={async (stored) => {
+            lsaAllowGenerate={allowGenerate && !lsa}
+            onSaveLsaReport={allowGenerate ? async (stored) => {
               const r = await oversightService.saveLsaReport(ownerId, rec.id, stored);
               setLsa(r.lsa_report as StoredLsaReport);
               return r.lsa_report as StoredLsaReport;
-            }}
+            } : undefined}
           />
 
           {sidebar.rightSidebarVisible ? (

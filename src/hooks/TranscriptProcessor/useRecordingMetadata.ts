@@ -162,6 +162,13 @@ export function useRecordingMetadata(user: User | null) {
       queryClient.invalidateQueries({ queryKey: ['recordings', user.id] });
       navigate(`/report/${id}`);
     } catch (e) {
+      // 409 = processing finished a moment ago (this tab has not noticed yet): keep what was typed; the
+      // normal save runs as soon as the result arrives (audit 2026-11-02).
+      if (/HTTP 409/.test(e instanceof Error ? e.message : String(e))) {
+        setFormMetadata(metadata);
+        setShouldNavigateAfterSave(true);
+        return;
+      }
       window.alert(`Could not save the report yet: ${e instanceof Error ? e.message : e}. Please try Save again.`);
     } finally {
       setIsSavingRecording(false);

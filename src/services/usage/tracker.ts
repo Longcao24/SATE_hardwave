@@ -311,7 +311,7 @@ function maskInput(el?: HTMLElement | null): boolean {
     if (!el || typeof el.closest !== 'function') return true;
     if (el.closest('[data-usage-mask]')) return true;
     const type = (el.getAttribute('type') || '').toLowerCase();
-    if (type === 'password' || type === 'hidden') return true;
+    if (type === 'password' || type === 'hidden' || type === 'file') return true;
     const hints = ['autocomplete', 'name', 'id', 'placeholder', 'aria-label'].map((a) => el.getAttribute(a) || '').join(' ');
     return SECRET_HINT.test(hints);
   } catch { return true; }
@@ -343,7 +343,14 @@ function startRecorder(s: State, r: Replay) {
       },
       // Every input goes through maskInputFn (rrweb only calls it for masked types, hence true):
       // it returns the typed text for an ordinary input and stars for patient or secret ones.
-      maskAllInputs: true,
+      // Explicit so `file` is included: rrweb's maskAllInputs list leaves it out, and a file input's value
+      // is the picked file's name (C:\fakepath\<child's name>.wav) — audit 2026-11-02. Our maskInputFn
+      // still masks a file input (see maskInput).
+      maskInputOptions: {
+        color: true, date: true, 'datetime-local': true, email: true, month: true, number: true, range: true,
+        search: true, tel: true, text: true, time: true, url: true, week: true, textarea: true, select: true,
+        password: true, file: true,
+      } as Record<string, boolean>,
       maskInputFn: (text: string, el?: HTMLElement) => (maskInput(el) ? '*'.repeat(text.length) : text),
       maskTextSelector: '[data-usage-mask], [data-usage-mask] *',
       // Media is blocked outright as well as by attribute: a recording's audio is clinical data.

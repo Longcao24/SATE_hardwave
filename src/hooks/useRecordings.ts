@@ -103,7 +103,10 @@ export const useRecordings = () => {
       const waiting = rows.filter((r) => r.t_pending === true && r.source_session_id).map((r) => r.source_session_id as string);
       const status = new Map<string, string>();
       for (let i = 0; i < waiting.length; i += 100) {
-        const { data: ss } = await supabase.from('sate_device_sessions').select('id, status').in('id', waiting.slice(i, i + 100));
+        // A failed read must not turn every waiting report into "removed": throw, so React Query keeps the
+        // previous data and retries (audit 2026-11-02).
+        const { data: ss, error: ssErr } = await supabase.from('sate_device_sessions').select('id, status').in('id', waiting.slice(i, i + 100));
+        if (ssErr) throw ssErr;
         for (const x of ss || []) status.set(x.id, x.status);
       }
       const processingOf = (r: Row): RecordingProcessing | null => {

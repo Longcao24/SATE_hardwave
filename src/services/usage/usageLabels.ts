@@ -219,6 +219,12 @@ export function scrubHref(href: unknown): string {
 export function scrubReplayEvent(e: RrwebLike, isMaskedId: (id: number) => boolean): void {
   if (e.type === 4 && e.data) { e.data.href = scrubHref(e.data.href); return; }
   if (e.type === 2 && e.data?.node) { scrubSerialized(e.data.node, false); return; }
+  // Input events (source 5): a masked or file input's text never leaves the browser, whatever rrweb decided.
+  if (e.type === 3 && e.data?.source === 5) {
+    const d = e.data as { id?: number; text?: unknown };
+    if (typeof d.text === 'string' && (d.id == null || isMaskedId(d.id) || /fakepath/i.test(d.text))) d.text = '*'.repeat(Math.min(d.text.length, 32));
+    return;
+  }
   if (e.type !== 3 || e.data?.source !== 0) return;
   for (const a of e.data.adds ?? []) scrubSerialized(a.node, isMaskedId(a.parentId));
   for (const a of e.data.attributes ?? []) {

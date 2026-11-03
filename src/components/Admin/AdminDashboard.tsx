@@ -43,6 +43,8 @@ export function AdminDashboard({ range, onRange, onGo, recordersOnline, recorder
   const [proc, setProc] = useState<AdminProcessing | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** The window the numbers on screen belong to; dimmed while another one loads. */
+  const [shown, setShown] = useState<DashRange | null>(null);
   const seq = useRef(0);
 
   const load = useCallback(async () => {
@@ -50,7 +52,7 @@ export function AdminDashboard({ range, onRange, onGo, recordersOnline, recorder
     setBusy(true); setErr(null);
     const [a, b] = await Promise.allSettled([deviceApiService.adminDashboard(windowStart(range)), deviceApiService.adminProcessing(7)]);
     if (my !== seq.current) return;   // a newer range was picked meanwhile
-    if (a.status === 'fulfilled') setD(a.value);
+    if (a.status === 'fulfilled') { setD(a.value); setShown(range); }
     else {
       setD(null);
       const m = String(a.reason?.message || a.reason);
@@ -91,7 +93,7 @@ export function AdminDashboard({ range, onRange, onGo, recordersOnline, recorder
       {err && <div className="rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm p-3">{err}</div>}
 
       {d && (
-        <>
+        <div className={`space-y-5 transition-opacity ${shown !== range ? 'opacity-40 pointer-events-none' : ''}`} aria-busy={shown !== range}>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <Stat icon={<Users className="w-5 h-5" />} label="Active accounts" value={n(d.totals.active_accounts)}
               sub={`of ${n(d.totals.accounts)} accounts · ${inWindow}`} onClick={() => onGo('accounts')} />
@@ -113,7 +115,7 @@ export function AdminDashboard({ range, onRange, onGo, recordersOnline, recorder
           </div>
 
           <ProcessingCard d={d} />
-        </>
+        </div>
       )}
       {!d && !err && <div className="h-40 flex items-center justify-center text-gray-400"><Loader2 className="w-5 h-5 animate-spin" /></div>}
     </div>
@@ -216,7 +218,8 @@ function bucketLabel(iso: string, bucket: Dash['bucket'], long = false) {
   const d = bucket === 'day' && /^\d{4}-\d{2}-\d{2}$/.test(iso) ? new Date(`${iso}T00:00:00`) : new Date(iso);
   if (bucket === 'hour') return d.toLocaleTimeString([], { hour: 'numeric' });
   if (bucket === 'day') return d.toLocaleDateString([], long ? { weekday: 'short', month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric' });
-  return (long ? 'Week of ' : '') + d.toLocaleDateString([], { month: 'short', day: 'numeric', ...(long ? { year: 'numeric' } : {}) });
+  // Week starts are Monday 00:00 UTC: label them in UTC, or a viewer west of UTC sees the Sunday before.
+  return (long ? 'Week of ' : '') + d.toLocaleDateString([], { timeZone: 'UTC', month: 'short', day: 'numeric', ...(long ? { year: 'numeric' } : {}) });
 }
 
 /** One measure at a time over the window (one axis). */

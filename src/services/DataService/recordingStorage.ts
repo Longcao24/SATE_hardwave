@@ -221,7 +221,7 @@ export const deleteRecording = async (
     // 1. Get recording details first to get file path
     const { data: recording, error: fetchError } = await supabase
       .from('recordings')
-      .select('file_path, source_session_id, pending:transcript->pending')
+      .select('file_path, source_session_id, pending:transcript->pending, no_speech:transcript->no_speech')
       .eq('id', recordingId)
       .eq('user_id', userId) // Ensure user can only delete their own recordings
       .single();
@@ -234,7 +234,10 @@ export const deleteRecording = async (
     // A Save-first report still waiting for processing: delete the UPLOAD (device-api removes the session,
     // its audio and this report together). Deleting only this row would let processing finish and insert
     // the report again.
-    if ((recording as { pending?: boolean }).pending === true && recording.source_session_id) {
+    // A "No speech" Save-first report has no audio of its own either (file_path ''): deleting it deletes its
+    // upload too, or the upload comes back in the in-flight list (audit 2026-11-02).
+    const rr = recording as { pending?: boolean; no_speech?: boolean; file_path?: string | null };
+    if ((rr.pending === true || (rr.no_speech === true && !rr.file_path)) && recording.source_session_id) {
       const r = await deleteUploadChecked(recording.source_session_id);
       if (!r.ok) return { success: false, error: `Could not delete the upload: ${r.error}` };
       // The server deleted the placeholder with the session; make sure no row is left either way.

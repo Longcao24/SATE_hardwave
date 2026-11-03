@@ -30,6 +30,7 @@ export function UsageReports({ uid, email, openId, onOpen, onClose, onCount }: {
   const [rec, setRec] = useState<(Record<string, any> & { audio_url: string | null }) | null>(null);
   const [opening, setOpening] = useState<string | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
   // Oversight never serves the viewer's own account (that is the app's job), so don't ask it to.
   const { user } = useAuth();
   const own = !!user && user.id === uid;
@@ -54,7 +55,7 @@ export function UsageReports({ uid, email, openId, onOpen, onClose, onCount }: {
       .catch((e) => { if (!cancelled) setOpenError(friendlyError(e)); })
       .finally(() => { if (!cancelled) setOpening(null); });
     return () => { cancelled = true; };
-  }, [uid, openId, own]);
+  }, [uid, openId, own, retryKey]);
 
   const patientName = useMemo(() => {
     const m = new Map<string, string>();
@@ -83,7 +84,7 @@ export function UsageReports({ uid, email, openId, onOpen, onClose, onCount }: {
       <OversightReportView ownerId={uid} ownerEmail={email} rec={rec}
         patient={rec.patient_id ? patientName.get(rec.patient_id) : undefined}
         onBack={onClose} recordings={recs || []} patientName={patientName}
-        onOpen={onOpen} opening={opening} error={openError} />
+        onOpen={onOpen} opening={opening} error={openError} allowGenerate={false} />
     );
   }
 
@@ -103,7 +104,7 @@ export function UsageReports({ uid, email, openId, onOpen, onClose, onCount }: {
       </div>
 
       {error && <ErrorBox error={error} onRetry={load} />}
-      {openError && !opening && <ErrorBox error={openError} onRetry={() => openId && onOpen(openId)} />}
+      {openError && !opening && <ErrorBox error={openError} onRetry={() => setRetryKey((k) => k + 1)} />}
       {!recs && !error && <Spinner label="Loading this account's reports…" />}
       {opening && <div className="text-sm text-gray-500 flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Opening the report…</div>}
 
