@@ -15,6 +15,8 @@ change that needs users to relearn something. The version shows in the sidebar b
   - **video files are refused** — `.mp4`, `.mov`, `.m4v`, `.avi`, `.mkv`, and any file that contains a picture
     whatever its name (a video renamed `.mp3` too). Please upload the audio recording.
   - a file with **no audio track at all** (a silent screen recording) is refused: there is nothing to transcribe.
+  - a **damaged or unreadable** audio file (corrupted, cut short so it cannot open, a WAV with no audio data) is
+    refused at once — nothing is uploaded or saved.
   - still accepted: **WAV, MP3, M4A (iPhone recordings), FLAC, OGG, AAC, WebM audio**.
 - A recording that HAS sound but no speech is still uploaded — only transcription can tell that (it then says
   "No speech detected").
@@ -24,7 +26,10 @@ change that needs users to relearn something. The version shows in the sidebar b
   also at the end of the file; WebM/MKV: TrackType) — a few KB, never the whole file; anything it cannot read is
   allowed and cf-processor's `NO_AUDIO` check remains the second line. Tested on 10 files (m4a both layouts, mp3, wav,
   webm audio allowed; mp4, mov, video-only webm, a video renamed .mp3 and the real s-5e048220 file refused).
-  Refusals are counted in analytics (`upload:refused-video`, `upload:refused-no-audio`).
+  Second step: an `<audio>` element on a blob URL must open the file (metadata only) with a duration > 0 — blocks on
+  a decode/read error, only for formats the browser says it plays (others pass to the server), 15 s timeout = allow;
+  WAV is also checked for an empty `data` chunk. Tested in Chrome on 12 files (5 good allowed; video, silent video,
+  random-byte mp3/wav/m4a, header-only wav, half an m4a refused). Refusals counted as `upload:refused-<reason>`.
 
 ## 1.6.3 — 2026-11-03
 

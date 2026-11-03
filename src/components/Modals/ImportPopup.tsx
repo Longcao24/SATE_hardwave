@@ -105,7 +105,7 @@ const ImportPopup: React.FC<ImportPopupProps> = ({
     // Whether the audio contains SPEECH cannot be known before transcription — that is still the server's job.
     const verdict = await checkAudioFile(file);
     if (!verdict.ok) {
-      trackAction(verdict.reason === 'video' ? 'upload:refused-video' : 'upload:refused-no-audio');
+      trackAction(`upload:refused-${verdict.reason}`);   // video | no_audio | damaged
       alert(verdict.message);
       return;
     }
