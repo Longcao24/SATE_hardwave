@@ -3,7 +3,7 @@
 // Reads the analytics Worker (Cloudflare D1 + R2), never device-api — analytics is a separate
 // service on purpose, so an outage there leaves this tab saying so and the rest of /admin working.
 //
-// The view is in the URL (/admin?tab=usage&user=<uid>&replay=<tab_id>) so a person or a recording
+// The view is in the URL (/admin?tab=usage&user=<uid>&replay=<tab_id>, &report=<recording id> for a report) so a person or a recording
 // can be linked to and the browser's Back button walks back through what was opened.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -23,19 +23,20 @@ export function UsagePanel({ users }: { users: AdminUser[] }) {
   const navigate = useNavigate();
   const uid = params.get('user');
   const replay = params.get('replay');
+  const reportId = params.get('report');
   const view = params.get('view') === 'recordings' ? 'recordings' : 'overview';
   // How many history entries WE pushed: while any, Back = browser back; a deep-linked page has
   // nothing of ours to go back to, so Back just drops the last param instead of leaving /admin.
   const pushed = useRef(0);
 
-  const setQ = useCallback((patch: Record<string, string | null>) => {
+  const setQ = useCallback((patch: Record<string, string | null>, replace = false) => {
     setParams((prev) => {
       const n = new URLSearchParams(prev);
       n.set('tab', 'usage');
       for (const [k, v] of Object.entries(patch)) (v == null ? n.delete(k) : n.set(k, v));
       return n;
-    });
-    pushed.current += 1;
+    }, { replace });
+    if (!replace) pushed.current += 1;
   }, [setParams]);
   const back = (drop: string[]) => {
     if (pushed.current > 0) { pushed.current -= 1; navigate(-1); return; }
@@ -92,7 +93,10 @@ export function UsagePanel({ users }: { users: AdminUser[] }) {
     return (
       <UsagePerson uid={uid} email={emailOf(uid)} report={report?.user_id === uid ? report : null}
         error={rError} loading={rLoading} days={pDays} setDays={setPDays} reload={loadReport}
-        onBack={() => back(['user'])} onPlay={(tab) => setQ({ replay: tab })} />
+        onBack={() => back(['user', 'report'])} onPlay={(tab) => setQ({ replay: tab })}
+        // Switching from one report to another replaces the entry, so Back (or the report's own
+        // Back) always lands on the list, not on the report before.
+        openReport={reportId} onOpenReport={(rid) => setQ({ report: rid }, !!reportId)} onCloseReport={() => back(['report'])} />
     );
   }
 

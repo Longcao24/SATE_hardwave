@@ -1,5 +1,6 @@
 // Admin → Usage → one account: when they use the app, where, what they do, each visit step by step,
-// the raw event log and their screen recordings.
+// the raw event log, their screen recordings, and their reports (Reports tab: read-only, audited, via
+// device-api's oversight routes — see UsageReports).
 //
 // Every time here is in the ACCOUNT's zone (reported by its own browser), labelled, because "used it
 // at 2 AM" means something very different from "used it at 2 AM in New York for someone in Seattle".
@@ -11,10 +12,11 @@ import type { ReplaySummary, UsageEvent, UsageKind, UsageReport, UsageVisit } fr
 import { ago, dayLabel, fmtMin, fmtSpan, spanSec, zoned } from './format';
 import { DAY_OPTIONS, ErrorBox, KindBadge, Kpi, PageLabel, Section, Segmented, ShareBar, Spinner, friendlyError, stepText } from './ui';
 import { ReplayList } from './UsageReplays';
+import { UsageReports } from './UsageReports';
 
-type PTab = 'activity' | 'visits' | 'events' | 'recordings';
+type PTab = 'activity' | 'visits' | 'events' | 'recordings' | 'reports';
 
-export function UsagePerson({ uid, email, report, error, loading, days, setDays, reload, onBack, onPlay }: {
+export function UsagePerson({ uid, email, report, error, loading, days, setDays, reload, onBack, onPlay, openReport, onOpenReport, onCloseReport }: {
   uid: string;
   /** From device-api's account list, for an account the analytics Worker has never seen. */
   email?: string | null;
@@ -22,8 +24,18 @@ export function UsagePerson({ uid, email, report, error, loading, days, setDays,
   days: number; setDays: (n: number) => void; reload: () => void;
   onBack: () => void;
   onPlay: (tabId: string) => void;
+  /** The report open in the URL (&report=<id>), and how to open / close one. */
+  openReport: string | null;
+  onOpenReport: (rid: string) => void;
+  onCloseReport: () => void;
 }) {
-  const [tab, setTab] = useState<PTab>('activity');
+  const [tab, setTab] = useState<PTab>(openReport ? 'reports' : 'activity');
+  const [reportCount, setReportCount] = useState<number | null>(null);
+  // A deep link (or Back) to a report shows the Reports tab.
+  useEffect(() => { if (openReport) setTab('reports'); }, [openReport]);
+  const hasUsage = !!(report && report.first_seen);
+  // An account that was never tracked still has reports: that tab is the only one then.
+  const shownTab: PTab = hasUsage ? tab : 'reports';
   const z = zoned(report?.tz);
   const name = report?.email || email || '(no email)';
 
@@ -56,10 +68,10 @@ export function UsagePerson({ uid, email, report, error, loading, days, setDays,
       {error && <ErrorBox error={error} onRetry={reload} />}
       {!report && !error && <Spinner label="Loading this account…" />}
       {report && !report.first_seen && (
-        <div className="rounded-lg border border-gray-200 bg-white p-4 text-sm text-gray-500">This account has not opened the web app since usage tracking began.</div>
+        <div className="rounded-lg border border-gray-200 bg-white p-4 text-sm text-gray-500">This account has not opened the web app since usage tracking began. Its reports are below.</div>
       )}
 
-      {report && report.first_seen && (
+      {hasUsage && report && (
         <>
           <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3">
             <Kpi icon={<Clock className="w-4 h-4 text-blue-600" />} label="Active time" value={fmtMin(report.totals.active_min)}
@@ -74,21 +86,30 @@ export function UsagePerson({ uid, email, report, error, loading, days, setDays,
             <Kpi icon={<AlertTriangle className="w-4 h-4 text-red-600" />} label="Errors" value={report.totals.errors} tone={report.totals.errors ? 'red' : undefined} />
           </div>
 
-          <div className="flex gap-1 border-b border-gray-200">
-            {([['activity', 'Activity'], ['visits', `Visits (${report.visits.length})`], ['events', 'Event log'],
-              ['recordings', `Recordings (${report.totals.replays})`]] as [PTab, string][]).map(([id, label]) => (
-              <button key={id} onClick={() => setTab(id)}
-                className={`px-3 py-2 text-sm border-b-2 -mb-px whitespace-nowrap ${tab === id ? 'border-violet-600 text-violet-700 font-medium' : 'border-transparent text-gray-500 hover:text-gray-800'}`}>
+        </>
+      )}
+
+      {(hasUsage || report || error) && (
+        <div className="flex gap-1 border-b border-gray-200 overflow-x-auto">
+          {((hasUsage && report ? [['activity', 'Activity'], ['visits', `Visits (${report.visits.length})`], ['events', 'Event log'],
+            ['recordings', `Recordings (${report.totals.replays})`]] : []) as [PTab, string][])
+            .concat([['reports', `Reports${reportCount != null ? ` (${reportCount})` : ''}`]])
+            .map(([id, label]) => (
+              <button key={id} onClick={() => { setTab(id); if (id !== 'reports' && openReport) onCloseReport(); }}
+                className={`px-3 py-2 text-sm border-b-2 -mb-px whitespace-nowrap ${shownTab === id ? 'border-violet-600 text-violet-700 font-medium' : 'border-transparent text-gray-500 hover:text-gray-800'}`}>
                 {label}
               </button>
             ))}
-          </div>
+        </div>
+      )}
 
-          {tab === 'activity' && <Activity report={report} />}
-          {tab === 'visits' && <Visits report={report} onPlay={onPlay} />}
-          {tab === 'events' && <EventLog uid={uid} tz={report.tz} />}
-          {tab === 'recordings' && <ReplayList uid={uid} tz={report.tz} onPlay={(r: ReplaySummary) => onPlay(r.tab_id)} />}
-        </>
+      {hasUsage && report && shownTab === 'activity' && <Activity report={report} />}
+      {hasUsage && report && shownTab === 'visits' && <Visits report={report} onPlay={onPlay} />}
+      {hasUsage && report && shownTab === 'events' && <EventLog uid={uid} tz={report.tz} />}
+      {hasUsage && report && shownTab === 'recordings' && <ReplayList uid={uid} tz={report.tz} onPlay={(r: ReplaySummary) => onPlay(r.tab_id)} />}
+      {(report || error) && shownTab === 'reports' && (
+        <UsageReports uid={uid} email={report?.email || email || null} openId={openReport}
+          onOpen={onOpenReport} onClose={onCloseReport} onCount={setReportCount} />
       )}
     </div>
   );
