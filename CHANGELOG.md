@@ -13,11 +13,17 @@ change that needs users to relearn something. The version shows in the sidebar b
 **For clinicians**
 - An upload whose report you deleted no longer reappears under **Processing** as "Processing failed" (with a Retry
   that could not work). Only uploads that are waiting, processing, failed or had no speech are listed.
+- **Deleting a report made from a file you uploaded now deletes everything**: the report, its audio, the upload
+  and the original file. Before, the upload and the original file stayed on the server (that is what made the
+  upload come back as "Processing failed"). Reports from a SATE recorder or other device keep the device's own
+  session (it is part of the device's history on the Devices page).
 
 **Technical**
 - `useInFlightUploads` no longer fetches `status='done'` rows without a recording: finalize-session always links the
   recording (or sets no_text) in the same update, so such a row is a report deleted afterwards
   (`sessions.recording_id` is ON DELETE SET NULL). Seen on one upload in production (s-55f5ee7a).
+- `deleteRecording`: a report whose source session is a `web-*` upload is deleted through device-api
+  `DELETE /sessions/:id` (session + device-sessions object + recording + its object + `sate_session_audit` row).
 
 ## 1.6.1 — 2026-11-03
 

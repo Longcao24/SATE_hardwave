@@ -236,8 +236,19 @@ export const deleteRecording = async (
     // the report again.
     // A "No speech" Save-first report has no audio of its own either (file_path ''): deleting it deletes its
     // upload too, or the upload comes back in the in-flight list (audit 2026-11-02).
+    // ANY report made from a WEB upload (2026-11-03): deleting it deletes the upload too — the session and the
+    // original file in device-sessions. Deleting only the report row left both behind; the session then read as
+    // "done without a recording" and came back under Processing as "Processing failed" (Home-2.wav). The upload
+    // exists only to make this report, so the report's delete is the upload's delete. Hardware sessions are NOT
+    // touched: they belong to the device's history (Devices page) and are deleted from there.
     const rr = recording as { pending?: boolean; no_speech?: boolean; file_path?: string | null };
-    if ((rr.pending === true || (rr.no_speech === true && !rr.file_path)) && recording.source_session_id) {
+    let webUpload = false;
+    if (recording.source_session_id) {
+      const { data: sess } = await supabase.from('sate_device_sessions').select('device_serial')
+        .eq('id', recording.source_session_id).maybeSingle();
+      webUpload = typeof sess?.device_serial === 'string' && sess.device_serial.startsWith('web-');
+    }
+    if ((webUpload || rr.pending === true || (rr.no_speech === true && !rr.file_path)) && recording.source_session_id) {
       const r = await deleteUploadChecked(recording.source_session_id);
       if (!r.ok) return { success: false, error: `Could not delete the upload: ${r.error}` };
       // The server deleted the placeholder with the session; make sure no row is left either way.
