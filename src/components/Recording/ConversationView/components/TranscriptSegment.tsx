@@ -117,8 +117,8 @@ const TranscriptSegment: React.FC<TranscriptSegmentProps> = ({
   onWordClick,
   onNoteChange,
 }) => {
-  // One click on a word plays its whole SEGMENT; a double click plays just THAT word (2026-11-03, swapped at
-  // the user's request). No waiting window: the segment starts at once, and the browser's dblclick — at the
+  // One click on a word plays from THAT word to the end of its segment; a double click plays just that word
+  // (2026-11-03, at the user's request). No waiting window: the segment starts at once, and the browser's dblclick — at the
   // OS double-click speed, however slow — replaces it with the word.
   const wordSpan = (wordIndex: number): [number, number] | null => {
     const w = segment.words[wordIndex];
@@ -928,8 +928,8 @@ const TranscriptSegment: React.FC<TranscriptSegmentProps> = ({
                           announcePlaybackIntent();
                           // The second click of a double click: onDoubleClick plays the word.
                           if (e.detail >= 2) return;
-                          // One click: the whole segment, from its start (the clicked word is not singled out).
-                          onPlaySegment(segment.start, segment.end);
+                          // One click: from THIS word to the end of the segment.
+                          onPlaySegment(word.start, segment.end);
                         }
                       }}
                       onDoubleClick={(e) => {
