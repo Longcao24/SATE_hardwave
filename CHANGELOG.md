@@ -8,6 +8,16 @@ Version rules: `npm version patch --no-git-tag-version` for fixes, `minor` for n
 change that needs users to relearn something. The version shows in the sidebar badge and at
 `https://sate-hardware.vercel.app/version.json`. Each release is tagged `web-<version>` in git.
 
+## 1.6.5 — 2026-11-03
+
+**For clinicians**
+- **Protocol is now optional** when saving an uploaded recording — only the recording name is required. Leave it
+  empty if it does not apply; it can be added later.
+
+**Technical**
+- `RecordingMetadataForm` no longer validates protocol; an empty protocol is stored as NULL (also in the
+  first-time device-recording review, which used to store '').
+
 ## 1.6.4 — 2026-11-03
 
 **For clinicians**

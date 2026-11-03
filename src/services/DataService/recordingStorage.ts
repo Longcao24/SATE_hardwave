@@ -413,7 +413,7 @@ export const updateRecordingMetadata = async (
       .from('recordings')
       .update({
         recording_name: metadata.name,
-        protocol: metadata.protocol,
+        protocol: metadata.protocol || null,   // optional: empty = none, not ''
         notes: metadata.note || null,
         needs_review: false,
         updated_at: new Date().toISOString()

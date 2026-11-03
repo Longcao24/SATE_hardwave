@@ -48,9 +48,7 @@ const RecordingMetadataForm: React.FC<RecordingMetadataFormProps> = ({
       newErrors.name = 'Recording name is required';
     }
 
-    if (!formData.protocol.trim()) {
-      newErrors.protocol = 'Protocol is required';
-    }
+    // Protocol is optional (owner's decision 2026-11-03): only the name is required.
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -220,7 +218,7 @@ const RecordingMetadataForm: React.FC<RecordingMetadataFormProps> = ({
           <div>
             <label className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-2">
               <Clipboard className="w-4 h-4" />
-              Protocol *
+              Protocol <span className="text-xs font-normal text-gray-400">(optional)</span>
             </label>
             <input
               type="text"
