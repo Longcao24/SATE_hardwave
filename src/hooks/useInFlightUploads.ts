@@ -50,8 +50,7 @@ export function kindOf(u: InFlightUpload): InFlightKind {
   if (u.status === 'queued') return 'queued';
   if (u.status === 'processing') return 'processing';
   if (u.status === 'done' && u.no_text) return 'no_speech';
-  // 'error', and the odd 'done' row with no recording and no no_text flag: either way there is
-  // nothing to open, and calling it "no speech" would be a claim the server did not make.
+  // 'error' (a done row without a recording is a deleted report and is not fetched at all).
   return 'failed';
 }
 
@@ -86,7 +85,11 @@ async function fetchInFlight(uid: string): Promise<InFlightUpload[]> {
     .eq('user_id', uid)
     .like('device_serial', 'web-%')
     .gte('created_at', since)
-    .or('status.in.(queued,processing,error),and(status.eq.done,or(no_text.is.true,recording_id.is.null))')
+    // 'done' WITHOUT a recording is not listed (2026-11-03): finalize-session always sets done together with
+    // the recording link (or no_text), so a done row whose link is empty is one whose REPORT WAS DELETED later
+    // (recordings → sessions.recording_id is ON DELETE SET NULL). Listing it said "Processing failed" with a
+    // Retry the server refuses (retry accepts only 'error') — e.g. Home-2.wav, s-55f5ee7a.
+    .or('status.in.(queued,processing,error),and(status.eq.done,no_text.is.true)')
     .order('created_at', { ascending: false })
     .limit(50);
   if (error) throw error;

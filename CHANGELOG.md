@@ -8,6 +8,17 @@ Version rules: `npm version patch --no-git-tag-version` for fixes, `minor` for n
 change that needs users to relearn something. The version shows in the sidebar badge and at
 `https://sate-hardware.vercel.app/version.json`. Each release is tagged `web-<version>` in git.
 
+## 1.6.2 — 2026-11-03
+
+**For clinicians**
+- An upload whose report you deleted no longer reappears under **Processing** as "Processing failed" (with a Retry
+  that could not work). Only uploads that are waiting, processing, failed or had no speech are listed.
+
+**Technical**
+- `useInFlightUploads` no longer fetches `status='done'` rows without a recording: finalize-session always links the
+  recording (or sets no_text) in the same update, so such a row is a report deleted afterwards
+  (`sessions.recording_id` is ON DELETE SET NULL). Seen on one upload in production (s-55f5ee7a).
+
 ## 1.6.1 — 2026-11-03
 
 **For clinicians**
