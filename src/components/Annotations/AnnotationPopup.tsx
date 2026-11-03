@@ -200,7 +200,8 @@ const AnnotationPopup: React.FC<AnnotationPopupProps> = ({
     );
   };
 
-  // Play the annotated span. A span with no usable end (a word without timing) gets a short window.
+  // Play from the annotated word on (ConversationView plays to the end of its segment). A span with no usable
+  // end (a word without timing) gets a short window.
   const renderPlay = () => {
     if (!onPlay || !currentAnnotation) return null;
     const start = Number(currentAnnotation.start) || 0;
@@ -213,7 +214,7 @@ const AnnotationPopup: React.FC<AnnotationPopupProps> = ({
         onClick={(e) => { e.stopPropagation(); onPlay(start, end); }}
         data-track="Annotation: play"
         className="mb-3 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 transition-colors"
-        title={`Play ${start.toFixed(2)}s – ${end.toFixed(2)}s`}
+        title={`Play from ${start.toFixed(2)}s to the end of the line`}
       >
         <Play className="w-3.5 h-3.5" /> Play
       </button>

@@ -709,7 +709,11 @@ const ConversationView: React.FC<ConversationViewProps> = ({
           setSelectedAnnotation(null);
           setSelectedAnnotations(null);
         }}
-        onPlay={(start, end) => handlePlaySegment(start, end)}
+        // Play from the annotated word to the end of its segment, like one click on a word (2026-11-03).
+        onPlay={(start, end) => {
+          const seg = transcriptData.find((x) => start >= x.start - 0.01 && start <= x.end + 0.01);
+          handlePlaySegment(start, seg ? Math.max(seg.end, end) : end);
+        }}
       />
 
       <EditTranscriptPopup
