@@ -104,7 +104,7 @@ const CreateRecordingPopup: React.FC<CreateRecordingPopupProps> = ({
           </div>
         ) : (
           /* Patient Selection Interface */
-          <div className="px-6 py-3">
+          <div className="px-6 py-3" data-tour="assign-patient">
             <div className="flex items-center gap-2 mb-2">
               <Users className="w-4 h-4 text-blue-600" />
               <h3 className="text-sm font-medium text-gray-900">Assign to Patient</h3>

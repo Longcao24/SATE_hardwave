@@ -19,7 +19,7 @@ const DashboardHeader: React.FC<DashboardHeaderProps> = ({ onShowGuide }) => {
         className="flex items-center gap-2"
       >
         <HelpCircle className="w-4 h-4" />
-        Show Guide
+        Guidelines
       </Button>
     </div>
   );

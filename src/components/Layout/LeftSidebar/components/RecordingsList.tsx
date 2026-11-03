@@ -80,7 +80,7 @@ export const RecordingsList: React.FC<RecordingsListProps> = ({
   }
   
   return (
-    <div data-usage-mask className="flex-1 border-t border-gray-200 min-h-0 flex flex-col">
+    <div data-usage-mask data-tour="recordings-list" className="flex-1 border-t border-gray-200 min-h-0 flex flex-col">
       <div className="p-6 pb-4 flex-shrink-0">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2">

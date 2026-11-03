@@ -533,6 +533,7 @@ const ConversationView: React.FC<ConversationViewProps> = ({
   return (
     <div 
       ref={autoScroll.scrollContainerRef}
+      data-tour="transcript"
       className={`${styles.conversationView} ${editModes.annotationMode ? 'annotation-mode-active' : ''} ${editModes.mergeMode ? 'merge-mode-active' : ''}`}
     >
       {/* Main Content */}

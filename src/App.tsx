@@ -1,5 +1,6 @@
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthProvider';
+import { GuideProvider } from '@/components/Guide/GuideProvider';
 import './App.css';
 
 // Import components
@@ -56,6 +57,7 @@ function App() {
     <WebUploadAnnouncer />
     {/* Usage analytics for Admin → Usage: signed-in accounts only, renders nothing. */}
     <UsageTracker />
+    <GuideProvider>
     <Routes>
       {/* Public routes */}
       <Route path="/login" element={<LoginPage />} />
@@ -235,6 +237,7 @@ function App() {
       {/* Redirect any unknown routes to home */}
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
+    </GuideProvider>
     </>
   );
 }

@@ -1,16 +1,19 @@
 import React from 'react';
 import { Button } from '@/components/ui/button';
+import { useGuide } from '@/components/Guide/GuideProvider';
 
 export const SidebarFooter: React.FC = () => {
+  const { openCenter } = useGuide();
   return (
     <div className="p-6 border-t border-gray-200 flex-shrink-0">
       <div className="flex flex-col gap-2">
         <Button
           variant="outline"
-          onClick={() => window.open('https://sate.agency/guideline', '_blank')}
+          onClick={openCenter}
+          data-tour="guidelines"
           className="w-full text-sm bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100 hover:border-gray-300"
         >
-          Guidelines video
+          Guidelines
         </Button>
         
         <Button

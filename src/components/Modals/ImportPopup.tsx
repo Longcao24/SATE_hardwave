@@ -245,6 +245,7 @@ const ImportPopup: React.FC<ImportPopupProps> = ({
                   ? 'border-green-400 bg-green-50'
                   : 'border-gray-300 bg-gray-50 hover:border-gray-400'
               }`}
+              data-tour="dropzone"
               onDrop={handleDrop}
               onDragOver={handleDragOver}
               onDragLeave={handleDragLeave}

@@ -745,6 +745,7 @@ const RightSidebar: React.FC<RightSidebarProps> = ({
   return (
     <div 
       data-usage-mask
+      data-tour="analysis-panel"
       style={{ width: `${actualWidth}px` }}
       className={`bg-white border-l border-gray-200 flex flex-col h-full transition-all duration-200 overflow-hidden ${
         visible ? 'translate-x-0' : 'translate-x-full'

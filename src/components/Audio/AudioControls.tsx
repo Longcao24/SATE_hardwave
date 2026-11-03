@@ -144,7 +144,7 @@ const AudioControls: React.FC<AudioControlsProps> = ({
   };
 
   return (
-    <div className="sticky bottom-0 bg-white border-t border-gray-200">
+    <div data-tour="audio-player" className="sticky bottom-0 bg-white border-t border-gray-200">
       {/* Top Row - Time and Progress Bar with full width */}
       <div className="px-6 py-3">
         <div className="flex items-center gap-4 mb-2">

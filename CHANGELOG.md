@@ -8,6 +8,23 @@ Version rules: `npm version patch --no-git-tag-version` for fixes, `minor` for n
 change that needs users to relearn something. The version shows in the sidebar badge and at
 `https://sate-hardware.vercel.app/version.json`. Each release is tagged `web-<version>` in git.
 
+## 1.6.7 — 2026-11-03
+
+**For clinicians**
+- **New interactive "Getting started" guide** (replaces the old "Show Guide" slides). A small checklist in the corner
+  with six hands-on tries on the real screen — a click or two each, no typing: open a report, listen to a word, look
+  at an annotation, try edit mode, open the SATE Report, start an upload. The guide rings the right button, waits
+  for you to do it, says “Nice — that’s it!” and ticks the task.
+- It opens by itself **once**, the first time a new account signs in; afterwards it is under **Guidelines** (sidebar
+  and Dashboard), together with the video guide.
+
+**Technical**
+- `components/Guide/` (GuideProvider overlay + GuideChecklist + tours.tsx); steps find targets by `data-tour`,
+  `title` or visible text and advance on a click, a route, or a polled condition (audio playing, popup open, edit
+  mode on). Report tasks open a report first when none is open. First-sign-in flag in the account's
+  `user_metadata.sate_onboarding_done` (holds across browsers); only accounts created from 2026-11-03 get it
+  automatically. The old `FirstTimeGuide` is removed. Tested end to end on a new local account (6/6).
+
 ## 1.6.6 — 2026-11-03
 
 **For admins**

@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useAuth } from '@/contexts/AuthProvider';
 import { useRecordings } from '@/hooks/useRecordings';
 import CreateRecordingPopup from '../../Recording/CreateRecordingPopup';
-import FirstTimeGuide from '../../Common/FirstTimeGuide';
+import { useGuide } from '../../Guide/GuideProvider';
 import ImportPopup from '../../Modals/ImportPopup';
 
 // Import Dashboard components
@@ -30,13 +30,13 @@ import type { DashboardProps } from './types';
 const SHOW_RECENT_PATIENT_ACTIVITY: boolean = false;
 
 const Dashboard: React.FC<DashboardProps> = ({ onImport, onUseSampleData }) => {
-  const { user, hasSeenGuide, markGuideAsSeen } = useAuth();
+  const { user } = useAuth();
+  const { openCenter } = useGuide();
   const { recordings, isLoading } = useRecordings();
   const { patients, patientStats, dashboardSummary, loadingPatients } = useDashboardData();
   
   const [timeFilter] = useState<'all' | 'week' | 'month'>('all');
   const [showCreateRecordingPopup, setShowCreateRecordingPopup] = useState(false);
-  const [showFirstTimeGuide, setShowFirstTimeGuide] = useState(false);
   const [showImportPopup, setShowImportPopup] = useState(false);
   const [importPatientId, setImportPatientId] = useState<string | undefined>(undefined);
   // Assigning a patient used to be reachable only from the sidebar's overflow menu, while the
@@ -46,21 +46,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onImport, onUseSampleData }) => {
   const navigate = useNavigate();
 
   // Show first-time guide for new users
-  useEffect(() => {
-    if (!isLoading && !loadingPatients && user && !hasSeenGuide) {
-      // Show guide if user hasn't seen it and has no patients
-      const shouldShowGuide = !patients || patients.length === 0;
-      setShowFirstTimeGuide(shouldShowGuide);
-    }
-  }, [isLoading, loadingPatients, user, hasSeenGuide, patients]);
 
-  const handleGuideClose = () => {
-    setShowFirstTimeGuide(false);
-    // Only mark as seen if it was automatically shown (not manually opened)
-    if (!hasSeenGuide) {
-      markGuideAsSeen();
-    }
-  };
 
   // Handle import flow from CreateRecordingPopup
   const handleImportFromCreate = (patientId?: string) => {
@@ -90,7 +76,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onImport, onUseSampleData }) => {
     <div className="flex-1 bg-gray-50 overflow-auto">
       <div className="max-w-7xl mx-auto p-8">
         {/* Header */}
-        <DashboardHeader onShowGuide={() => setShowFirstTimeGuide(true)} />
+        <DashboardHeader onShowGuide={openCenter} />
 
         {/* Quick Actions */}
         <QuickActions
@@ -339,13 +325,6 @@ const Dashboard: React.FC<DashboardProps> = ({ onImport, onUseSampleData }) => {
         onImportAudio={handleImportFromCreate}
       />
 
-      {/* First Time Guide */}
-      <FirstTimeGuide
-        isOpen={showFirstTimeGuide}
-        onClose={handleGuideClose}
-        onImportAudio={handleImportFromCreate}
-        onTrySample={onUseSampleData}
-      />
 
       {/* Import Popup */}
       <ImportPopup

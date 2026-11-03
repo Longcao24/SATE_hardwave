@@ -901,6 +901,8 @@ const TranscriptSegment: React.FC<TranscriptSegmentProps> = ({
                 return (
                   <React.Fragment key={wordIndex}>
                     <span
+                      // Only a word with timing is a "word" for the guide: clicking one without (a filler like "um") plays nothing.
+                      data-tour={annotations.length > 0 ? "word-annotated" : word.start != null ? "word" : undefined}
                       className={`${styles.word} ${
                         annotations.length > 0 ? styles.annotated : ""
                       } ${isActive ? styles.active : ""} ${
