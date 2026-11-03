@@ -8,6 +8,24 @@ Version rules: `npm version patch --no-git-tag-version` for fixes, `minor` for n
 change that needs users to relearn something. The version shows in the sidebar badge and at
 `https://sate-hardware.vercel.app/version.json`. Each release is tagged `web-<version>` in git.
 
+## 1.6.4 — 2026-11-03
+
+**For clinicians**
+- Choosing a file to upload now checks it first, in the browser, before anything is sent:
+  - **video files are refused** — `.mp4`, `.mov`, `.m4v`, `.avi`, `.mkv`, and any file that contains a picture
+    whatever its name (a video renamed `.mp3` too). Please upload the audio recording.
+  - a file with **no audio track at all** (a silent screen recording) is refused: there is nothing to transcribe.
+  - still accepted: **WAV, MP3, M4A (iPhone recordings), FLAC, OGG, AAC, WebM audio**.
+- A recording that HAS sound but no speech is still uploaded — only transcription can tell that (it then says
+  "No speech detected").
+
+**Technical**
+- `services/DataService/audioFileCheck.ts` reads the container's track list (MP4/MOV: moov → hdlr `soun`/`vide`,
+  also at the end of the file; WebM/MKV: TrackType) — a few KB, never the whole file; anything it cannot read is
+  allowed and cf-processor's `NO_AUDIO` check remains the second line. Tested on 10 files (m4a both layouts, mp3, wav,
+  webm audio allowed; mp4, mov, video-only webm, a video renamed .mp3 and the real s-5e048220 file refused).
+  Refusals are counted in analytics (`upload:refused-video`, `upload:refused-no-audio`).
+
 ## 1.6.3 — 2026-11-03
 
 **For clinicians**

@@ -1,3 +1,5 @@
+import { checkAudioFile } from '@/services/DataService/audioFileCheck';
+import { trackAction } from '@/services/usage/tracker';
 import React, { useRef, useState, useEffect } from 'react';
 import { Upload, FileAudio, X, Loader2, Users } from 'lucide-react';
 import { Button } from '../ui/button';
@@ -66,7 +68,7 @@ const ImportPopup: React.FC<ImportPopupProps> = ({
     }
   };
 
-  const handleFileSelect = (file: File) => {
+  const handleFileSelect = async (file: File) => {
     // Validate file type
     const validTypes = [
       'audio/wav', 'audio/wave', 'audio/x-wav',
@@ -97,7 +99,17 @@ const ImportPopup: React.FC<ImportPopupProps> = ({
       alert('File is empty. Please select a valid audio file.');
       return;
     }
-    
+
+    // Read the file's own track list (a few KB, not the whole file): a video, or a file with no audio track at all,
+    // is refused HERE instead of uploading and failing on the server (register.mp3 = a silent screen recording).
+    // Whether the audio contains SPEECH cannot be known before transcription — that is still the server's job.
+    const verdict = await checkAudioFile(file);
+    if (!verdict.ok) {
+      trackAction(verdict.reason === 'video' ? 'upload:refused-video' : 'upload:refused-no-audio');
+      alert(verdict.message);
+      return;
+    }
+
     setSelectedFile(file);
   };
 
