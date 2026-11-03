@@ -304,14 +304,23 @@ function stopRecorder(r: Replay) {
   try { stop?.(); } catch { /* ignore */ }
 }
 
+/**
+ * Owner's decision (2026-11-03): screen recordings show the data UNMASKED — patient names, transcripts, notes,
+ * report names, file names (users signed consent). Set from the server switch FLAG_REPLAY_TEXT (/v1/config
+ * `replay_text`), so it can be turned back to masked with one analytics deploy. Passwords and secrets stay masked
+ * either way, and [data-usage-block] (one-time codes, invite codes), audio, video and iframes stay blocked.
+ */
+let replayFullData = false;
+
 /** Inputs whose value must never be recorded: patient areas, passwords and other secrets. Unknown → masked. */
 const SECRET_HINT = /pass|secret|token|api.?key|otp|one.?time|invite|claim|code/i;
 function maskInput(el?: HTMLElement | null): boolean {
   try {
     if (!el || typeof el.closest !== 'function') return true;
-    if (el.closest('[data-usage-mask]')) return true;
+    if (!replayFullData && el.closest('[data-usage-mask]')) return true;
     const type = (el.getAttribute('type') || '').toLowerCase();
-    if (type === 'password' || type === 'hidden' || type === 'file') return true;
+    if (type === 'password' || type === 'hidden') return true;
+    if (type === 'file' && !replayFullData) return true;
     const hints = ['autocomplete', 'name', 'id', 'placeholder', 'aria-label'].map((a) => el.getAttribute(a) || '').join(' ');
     return SECRET_HINT.test(hints);
   } catch { return true; }
@@ -334,7 +343,7 @@ function startRecorder(s: State, r: Replay) {
       emit(e) {
         if (r.dead) return;
         try {
-          scrubReplayEvent(e as unknown as Parameters<typeof scrubReplayEvent>[0], isMaskedId);
+          scrubReplayEvent(e as unknown as Parameters<typeof scrubReplayEvent>[0], isMaskedId, replayFullData);
           const str = JSON.stringify(e);
           r.strs.push(str);
           r.bytes += str.length;
@@ -352,7 +361,8 @@ function startRecorder(s: State, r: Replay) {
         password: true, file: true,
       } as Record<string, boolean>,
       maskInputFn: (text: string, el?: HTMLElement) => (maskInput(el) ? '*'.repeat(text.length) : text),
-      maskTextSelector: '[data-usage-mask], [data-usage-mask] *',
+      // Full-data mode masks no text (rrweb masks nothing when the selector matches nothing).
+      maskTextSelector: replayFullData ? '[data-usage-mask-never]' : '[data-usage-mask], [data-usage-mask] *',
       // Media is blocked outright as well as by attribute: a recording's audio is clinical data.
       // iframe: the SATE Report's print frame holds the whole report + transcript, and rrweb serializes a
       // same-origin frame's document where no [data-usage-mask] of the parent page can reach (audit 2026-11-02).
@@ -451,6 +461,7 @@ export function startUsage(uid: string) {
     void loadAnalyticsConfig().then((cfg) => {
       // Signed out (or switched account) while the config was loading: start nothing for this one.
       if (wanted !== uid || !cfg.tracking) return;
+      replayFullData = cfg.replayText;
       startNow(uid, cfg.replay);
     }).catch(() => { /* tracking is optional */ });
   } catch { /* called from an effect: an analytics error must never reach the error boundary */ }

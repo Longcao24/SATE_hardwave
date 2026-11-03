@@ -28,16 +28,20 @@ async function get<T>(path: string): Promise<T> {
  * The Worker's kill switches. Asked once per page load; anything but a clear yes is a no — a tab that
  * cannot reach the Worker must not start recording a clinician's screen on a guess.
  */
-let configP: Promise<{ tracking: boolean; replay: boolean }> | null = null;
-export function loadAnalyticsConfig(): Promise<{ tracking: boolean; replay: boolean }> {
+export interface AnalyticsConfig { tracking: boolean; replay: boolean; /** Replays show data unmasked (FLAG_REPLAY_TEXT). */ replayText: boolean }
+let configP: Promise<AnalyticsConfig> | null = null;
+export function loadAnalyticsConfig(): Promise<AnalyticsConfig> {
   // Not AbortSignal.timeout(): it does not exist before Safari 16, and the synchronous TypeError
   // escaped into a React effect and replaced the whole app with the error screen (audit 2026-11-02).
   const ctl = new AbortController();
   setTimeout(() => ctl.abort(), 5000);
   configP ||= fetch(`${ANALYTICS_URL}/v1/config`, { signal: ctl.signal })
     .then((r) => (r.ok ? r.json() : null))
-    .then((c) => ({ tracking: c?.tracking === true, replay: c?.tracking === true && c?.replay === true }))
-    .catch(() => ({ tracking: false, replay: false }));
+    .then((c) => {
+      const replay = c?.tracking === true && c?.replay === true;
+      return { tracking: c?.tracking === true, replay, replayText: replay && c?.replay_text === true };
+    })
+    .catch(() => ({ tracking: false, replay: false, replayText: false }));
   return configP;
 }
 

@@ -171,18 +171,18 @@ interface SerializedNode {
 }
 
 /** Scrub one serialized rrweb node tree in place. `masked`: an ancestor carries data-usage-mask. */
-export function scrubSerialized(node: SerializedNode | null | undefined, masked: boolean): void {
+export function scrubSerialized(node: SerializedNode | null | undefined, masked: boolean, full = false): void {
   if (!node) return;
   let m = masked;
   const attrs = node.attributes;
   if (attrs) {
-    if ('data-usage-mask' in attrs) m = true;
+    if ('data-usage-mask' in attrs && !full) m = true;
     for (const k of Object.keys(attrs)) {
       if (m && DESCRIPTIVE_ATTRS.includes(k)) delete attrs[k];
       else attrs[k] = scrubAttr(k, attrs[k]);
     }
   }
-  for (const c of node.childNodes ?? []) scrubSerialized(c, m);
+  for (const c of node.childNodes ?? []) scrubSerialized(c, m, full);
 }
 
 interface RrwebLike {
@@ -216,19 +216,19 @@ export function scrubHref(href: unknown): string {
  * (type 3, source 0) adds nodes under a parent that already exists, so `isMaskedId` asks the live
  * DOM whether that parent is masked.
  */
-export function scrubReplayEvent(e: RrwebLike, isMaskedId: (id: number) => boolean): void {
+export function scrubReplayEvent(e: RrwebLike, isMaskedId: (id: number) => boolean, full = false): void {
   if (e.type === 4 && e.data) { e.data.href = scrubHref(e.data.href); return; }
-  if (e.type === 2 && e.data?.node) { scrubSerialized(e.data.node, false); return; }
+  if (e.type === 2 && e.data?.node) { scrubSerialized(e.data.node, false, full); return; }
   // Input events (source 5): a masked or file input's text never leaves the browser, whatever rrweb decided.
   if (e.type === 3 && e.data?.source === 5) {
     const d = e.data as { id?: number; text?: unknown };
-    if (typeof d.text === 'string' && (d.id == null || isMaskedId(d.id) || /fakepath/i.test(d.text))) d.text = '*'.repeat(Math.min(d.text.length, 32));
+    if (!full && typeof d.text === 'string' && (d.id == null || isMaskedId(d.id) || /fakepath/i.test(d.text))) d.text = '*'.repeat(Math.min(d.text.length, 32));
     return;
   }
   if (e.type !== 3 || e.data?.source !== 0) return;
-  for (const a of e.data.adds ?? []) scrubSerialized(a.node, isMaskedId(a.parentId));
+  for (const a of e.data.adds ?? []) scrubSerialized(a.node, !full && isMaskedId(a.parentId), full);
   for (const a of e.data.attributes ?? []) {
-    const masked = isMaskedId(a.id) || 'data-usage-mask' in a.attributes;
+    const masked = !full && (isMaskedId(a.id) || 'data-usage-mask' in a.attributes);
     for (const k of Object.keys(a.attributes)) {
       if (masked && DESCRIPTIVE_ATTRS.includes(k)) a.attributes[k] = null;
       else a.attributes[k] = scrubAttr(k, a.attributes[k]);

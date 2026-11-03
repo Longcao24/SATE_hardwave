@@ -8,6 +8,20 @@ Version rules: `npm version patch --no-git-tag-version` for fixes, `minor` for n
 change that needs users to relearn something. The version shows in the sidebar badge and at
 `https://sate-hardware.vercel.app/version.json`. Each release is tagged `web-<version>` in git.
 
+## 1.6.6 — 2026-11-03
+
+**For admins**
+- **Screen recordings (Admin → Usage → Recordings) are on and show the data in full** — patient names, transcripts,
+  notes, report and file names — as users consented. Passwords and other secrets are still hidden, and audio/video
+  are not recorded. Every time an admin opens a recording it is logged.
+
+**Technical**
+- The tracker follows the server switch `FLAG_REPLAY_TEXT` (`/v1/config` → `replay_text`): `1` = no text masking, no
+  `data-usage-mask` input masking, file names kept; passwords / hidden / secret-hint inputs and `[data-usage-block]`
+  stay masked/blocked. `0` = the previous masking (option B), with no web release. Needs sate-analytics `f242e20c`+
+  (D1 migration `0003_replay_views`). Verified on the sandbox: a recording of /patients contains the names (0 masked
+  runs vs hundreds before). Analytics tests 71/71.
+
 ## 1.6.5 — 2026-11-03
 
 **For clinicians**
