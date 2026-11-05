@@ -358,7 +358,7 @@ export function AdminPage() {
         {error && <div className="mb-4 rounded-lg bg-red-50 text-red-700 text-sm p-3">{error}</div>}
 
         {tab === 'dashboard' && (
-          <AdminDashboard range={dashRange} onRange={setDashRange} onGo={setTab}
+          <AdminDashboard range={dashRange} onRange={setDashRange} onGo={setTab} onPerson={(uid) => setParams({ tab: 'usage', user: uid })}
             recordersOnline={totals.online} recordersTotal={devices.length} />
         )}
 

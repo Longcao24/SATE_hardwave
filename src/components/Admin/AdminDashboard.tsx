@@ -1,15 +1,19 @@
 // Admin → Dashboard (the Admin page's main tab). One window at a time — Today / 7 days / 30 days / All time —
 // from device-api GET /admin/dashboard (v43.12), plus the live system state (AI service, queue, open problems)
 // from the same /admin/processing the Processing tab reads. Read-only: nothing here changes anything.
-// Counts and series only — no account names, file names or transcripts.
+// Counts and series only — no file names or transcripts. The one list of accounts is "Online now" (emails
+// of who is using the web app this minute, from the analytics Worker), which the Accounts tab shows anyway.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity, AlertTriangle, CheckCircle2, Clock, Cpu, FileAudio, FileText, Hourglass, Loader2, PencilLine,
-  ShieldCheck, UserPlus, Users, ChevronRight,
+  ShieldCheck, UserPlus, Users, ChevronRight, Radio,
 } from 'lucide-react';
 import { deviceApiService } from '@/services/device/deviceApiService';
 import type { AdminDashboard as Dash, AdminProcessing } from '@/services/device/deviceTypes';
+import { analyticsApi } from '@/services/usage/analyticsApi';
+import type { OnlineNow } from '@/services/usage/types';
+import { pageName } from '@/components/Admin/Usage/format';
 
 export type DashRange = 'today' | '7d' | '30d' | 'all';
 export const DASH_RANGES: { id: DashRange; label: string }[] = [
@@ -36,8 +40,9 @@ const ago = (iso: string) => {
 
 type Go = (tab: 'accounts' | 'processing' | 'usage' | 'recorders') => void;
 
-export function AdminDashboard({ range, onRange, onGo, recordersOnline, recordersTotal }: {
-  range: DashRange; onRange: (r: DashRange) => void; onGo: Go; recordersOnline: number; recordersTotal: number;
+export function AdminDashboard({ range, onRange, onGo, onPerson, recordersOnline, recordersTotal }: {
+  range: DashRange; onRange: (r: DashRange) => void; onGo: Go; onPerson: (uid: string) => void;
+  recordersOnline: number; recordersTotal: number;
 }) {
   const [d, setD] = useState<Dash | null>(null);
   const [proc, setProc] = useState<AdminProcessing | null>(null);
@@ -68,6 +73,25 @@ export function AdminDashboard({ range, onRange, onGo, recordersOnline, recorder
     return () => window.clearInterval(t);
   }, [load]);
 
+  // Who is on the web app now: its own 30 s poll (the rest refreshes every minute). A failure only
+  // hides the card — analytics is optional and must never take the dashboard down with it.
+  const [online, setOnline] = useState<OnlineNow | null>(null);
+  const [onlineErr, setOnlineErr] = useState(false);
+  useEffect(() => {
+    let live = true;
+    let latest = 0;   // the interval and visibilitychange can overlap: only the newest answer is shown
+    const poll = () => {
+      if (document.hidden) return;
+      const my = ++latest;
+      analyticsApi.online().then((o) => { if (live && my === latest) { setOnline(o); setOnlineErr(false); } })
+        .catch(() => { if (live && my === latest) setOnlineErr(true); });
+    };
+    poll();
+    const t = window.setInterval(poll, 30_000);
+    document.addEventListener('visibilitychange', poll);
+    return () => { live = false; window.clearInterval(t); document.removeEventListener('visibilitychange', poll); };
+  }, []);
+
   const rangeLabel = DASH_RANGES.find((r) => r.id === range)!.label.toLowerCase();
   const inWindow = range === 'all' ? 'all time' : range === 'today' ? 'today' : `last ${rangeLabel}`;
 
@@ -89,6 +113,7 @@ export function AdminDashboard({ range, onRange, onGo, recordersOnline, recorder
 
       {/* Live system state — always "now", whatever the window. */}
       <LiveStrip proc={proc} onGo={onGo} recordersOnline={recordersOnline} recordersTotal={recordersTotal} />
+      <OnlineCard online={online} failed={onlineErr} onPerson={onPerson} />
 
       {err && <div className="rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm p-3">{err}</div>}
 
@@ -203,6 +228,50 @@ function LiveStrip({ proc, onGo, recordersOnline, recordersTotal }: { proc: Admi
         {item(<Cpu className="w-4 h-4" />, 'Recorders', rec, 'recorders')}
       </div>
     </div>
+  );
+}
+
+/** People using the web app in the last few minutes; each opens that account's Usage page. */
+function OnlineCard({ online, failed, onPerson }: { online: OnlineNow | null; failed: boolean; onPerson: (uid: string) => void }) {
+  if (!online) {
+    return failed
+      ? <div className="text-xs text-gray-400">Online now: not available (usage analytics did not answer).</div>
+      : null;
+  }
+  if (online.tracking === false) {
+    return <div className="text-xs text-gray-400">Online now: usage tracking is switched off, so nobody is being counted.</div>;
+  }
+  const people = online.online;
+  // Ages against the Worker's own clock (generated_at), not this browser's. last_at is the start of a minute.
+  const age = (iso: string) => Math.max(0, Date.parse(online.generated_at) - Date.parse(iso));
+  return (
+    <section className="rounded-xl border border-gray-200 bg-white p-3.5" aria-label="People online now">
+      <div className="flex items-center gap-2">
+        <span className="relative flex w-2.5 h-2.5" aria-hidden="true">
+          {people.length > 0 && <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60 animate-ping" />}
+          <span className={`relative inline-flex w-2.5 h-2.5 rounded-full ${people.length ? 'bg-emerald-500' : 'bg-gray-300'}`} />
+        </span>
+        <Radio className="w-4 h-4 text-gray-500" aria-hidden="true" />
+        <span className="font-semibold text-gray-900 text-sm">
+          {people.length === 0 ? 'Nobody online' : `${people.length} ${people.length === 1 ? 'person' : 'people'} online`}
+        </span>
+        <span className="text-xs text-gray-400">web app · active in the last {online.window_min} min{failed ? ' · last update failed' : ''}</span>
+      </div>
+      {people.length > 0 && (
+        <ul className="mt-2.5 flex flex-wrap gap-2">
+          {people.map((p) => (
+            <li key={p.user_id} className="min-w-0">
+              <button onClick={() => onPerson(p.user_id)} title="Open this account's usage"
+                className="max-w-full inline-flex items-center gap-2 rounded-lg border border-gray-200 px-2.5 py-1.5 text-left hover:border-violet-300 transition-colors">
+                <span className="min-w-0 text-sm text-gray-800 truncate">{p.email || p.user_id.slice(0, 8)}</span>
+                <span className="text-[11px] rounded bg-gray-100 text-gray-600 px-1.5 shrink-0">{pageName(p.page)}</span>
+                <span className="text-[11px] text-gray-400 shrink-0">{age(p.last_at) < 120_000 ? 'now' : `${Math.round(age(p.last_at) / 60_000)} min ago`}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 

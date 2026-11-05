@@ -4,7 +4,7 @@
 // answering any /v1/admin route.
 
 import { supabase } from '@/lib/supabase';
-import type { ReplayList, UsageEventsPage, UsageOverview, UsageReport } from './types';
+import type { OnlineNow, ReplayList, UsageEventsPage, UsageOverview, UsageReport } from './types';
 
 // Only the production web host talks to the production Worker. Every other host — a Vercel Preview,
 // localhost — gets the sandbox Worker (its own D1 + R2), so trying a build never writes into the
@@ -16,12 +16,19 @@ export const ANALYTICS_URL: string =
     ? 'https://sate-analytics.longcao.workers.dev'
     : 'https://sate-analytics-sandbox.longcao.workers.dev');
 
-async function get<T>(path: string): Promise<T> {
+async function get<T>(path: string, timeoutMs?: number): Promise<T> {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) throw new Error('Not signed in');
-  const r = await fetch(`${ANALYTICS_URL}${path}`, { headers: { Authorization: `Bearer ${session.access_token}` } });
-  if (!r.ok) throw new Error(`Analytics HTTP ${r.status}: ${(await r.text().catch(() => '')).slice(0, 200)}`);
-  return r.json() as Promise<T>;
+  // AbortController + setTimeout, not AbortSignal.timeout() (missing before Safari 16 — see below).
+  const ctl = timeoutMs ? new AbortController() : null;
+  const timer = ctl ? setTimeout(() => ctl.abort(), timeoutMs) : null;
+  try {
+    const r = await fetch(`${ANALYTICS_URL}${path}`, { headers: { Authorization: `Bearer ${session.access_token}` }, signal: ctl?.signal });
+    if (!r.ok) throw new Error(`Analytics HTTP ${r.status}: ${(await r.text().catch(() => '')).slice(0, 200)}`);
+    return await (r.json() as Promise<T>);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 /**
@@ -47,6 +54,8 @@ export function loadAnalyticsConfig(): Promise<AnalyticsConfig> {
 
 export const analyticsApi = {
   overview: (days: number) => get<UsageOverview>(`/v1/admin/overview?days=${days}`),
+  /** Who is using the web app right now (posted events in the last few minutes). */
+  online: () => get<OnlineNow>('/v1/admin/online', 10_000),
   user: (uid: string, days: number) => get<UsageReport>(`/v1/admin/users/${encodeURIComponent(uid)}?days=${days}`),
   events: (uid: string, opts: { before?: string; kind?: string; limit?: number } = {}) => {
     const q = new URLSearchParams();

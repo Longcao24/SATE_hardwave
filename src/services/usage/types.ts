@@ -76,3 +76,7 @@ export interface ReplaySummary {
   chunks: number; bytes: number; pages: string[]; clicks: number; errors: number;
 }
 export interface ReplayList { replays: ReplaySummary[]; next_before: string | null }
+
+/** GET /v1/admin/online — accounts using the web app in the last `window_min` minutes (Worker clock). */
+export interface OnlineUser { user_id: string; email: string | null; last_at: string; page: string | null }
+export interface OnlineNow { generated_at: string; window_min: number; /** false = tracking switched off, list means nothing. */ tracking?: boolean; online: OnlineUser[] }
