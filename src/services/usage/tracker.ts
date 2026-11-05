@@ -56,7 +56,7 @@ const CHECKOUT_MS = 20 * 60_000;
 
 type RecordFn = typeof import('rrweb')['record'];
 
-interface Chunk { seq: number; body: ArrayBuffer; page: string }
+interface Chunk { seq: number; body: ArrayBuffer; page: string; /** When hide() last re-posted it with keepalive. */ kaAt?: number }
 
 interface Replay {
   /** rrweb's record(), once its chunk has loaded. */
@@ -74,6 +74,8 @@ interface Replay {
   dead: boolean;
   /** One error event per tab for a refused oversized chunk, not one per chunk. */
   warnedTooLarge: boolean;
+  /** The tab's first full snapshot has been handed to the sender (see the emit handler). */
+  firstSent: boolean;
 }
 
 interface State {
@@ -347,7 +349,16 @@ function startRecorder(s: State, r: Replay) {
           const str = JSON.stringify(e);
           r.strs.push(str);
           r.bytes += str.length;
+          // The tab's FIRST full snapshot (rrweb type 2) goes out now, not at the next 10 s flush. A tab
+          // closed within seconds used to lose it: a snapshot is ~100+ KB gzipped, over the closing flush's
+          // keepalive budget, so the visit had no recording at all (2026-11-05). This NARROWS the window to
+          // the snapshot's own upload time (~1 s) — it cannot close it: a body that size cannot be sent with
+          // keepalive, so a tab closed mid-upload still loses it. setTimeout so the rest of this synchronous
+          // emit burst (meta, snapshot, stylesheets) lands in the same chunk.
+          const first = !r.firstSent && (e as { type?: number }).type === 2;
+          if (first) r.firstSent = true;
           if (r.bytes >= REPLAY_FLUSH_BYTES) void replayFlush(s, r);
+          else if (first) setTimeout(() => { if (!r.dead) void replayFlush(s, r); }, 0);
         } catch { /* one unserializable event is not worth breaking the app over */ }
       },
       // Every input goes through maskInputFn (rrweb only calls it for masked types, hence true):
@@ -399,7 +410,7 @@ function startReplay(s: State) {
   if (typeof CompressionStream === 'undefined') return;   // chunks must be gzip; an old browser just has no replay
   const r: Replay = {
     record: null, stop: null, strs: [], bytes: 0, seq: 0, lastFlush: Date.now(), queue: [],
-    sending: false, failures: 0, retryAt: 0, dead: false, warnedTooLarge: false,
+    sending: false, failures: 0, retryAt: 0, dead: false, warnedTooLarge: false, firstSent: false,
   };
   s.replay = r;
   // Dynamic import: rrweb is ~200 KB and nothing the user sees waits for it.
@@ -440,13 +451,41 @@ function tick(s: State) {
   }
 }
 
+/**
+ * Chunks already cut but not yet acknowledged (in flight, or waiting out a backoff) are re-posted with
+ * keepalive while they fit the budget: a normal fetch in flight is cancelled when the tab closes, and
+ * nothing else would ever resend it. Oldest first — playback needs the early chunks (the first one holds
+ * the full snapshot). Sending one twice is harmless: the Worker answers a repeated (tab, seq) with OK.
+ */
+function resendQueuedKeepalive(s: State, r: Replay, budget: Budget) {
+  const tk = s.token;
+  if (!tk) return;
+  const now = Date.now();
+  for (const c of [...r.queue]) {
+    // One close fires hide() twice (visibilitychange, then pagehide): a chunk re-posted moments ago is not
+    // sent again — a duplicate would eat the shared in-flight keepalive quota the new tail chunk needs.
+    if (c.kaAt && now - c.kaAt < 5_000) continue;
+    if (c.body.byteLength > budget.left) continue;
+    budget.left -= c.body.byteLength;
+    c.kaAt = now;
+    try {
+      postChunk(s, c, tk, true).then((res) => {
+        if (settled(r, c, res.status)) { const i = r.queue.indexOf(c); if (i >= 0) r.queue.splice(i, 1); }
+      }, () => { /* still queued: the normal sender retries if the tab lives on */ });
+    } catch { budget.left += c.body.byteLength; }
+  }
+}
+
 /** The tab is hiding (or closing): stop recording, then spend the keepalive budget, events first. */
 function hide(s: State) {
   const r = s.replay;
   if (r?.stop) stopRecorder(r);
   const budget: Budget = { left: KEEPALIVE_MAX };
   flushKeepalive(s, budget);
-  if (r && !r.dead) void replayFlush(s, r, budget);
+  if (r && !r.dead) {
+    resendQueuedKeepalive(s, r, budget);
+    void replayFlush(s, r, budget);
+  }
 }
 
 /**

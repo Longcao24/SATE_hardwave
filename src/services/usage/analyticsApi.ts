@@ -77,16 +77,18 @@ export const analyticsApi = {
    * The Worker answers in pages — a long visit is thousands of chunks, more than one request may
    * read — each saying where the next starts (`next_seq`); this follows them to the end.
    */
-  replayEvents: async (tabId: string): Promise<{ tab_id: string; events: unknown[] }> => {
+  replayEvents: async (tabId: string): Promise<{ tab_id: string; user_id: string | null; events: unknown[] }> => {
     const events: unknown[] = [];
+    let owner: string | null = null;
     let from: number | null = 0;
     for (let page = 0; from != null && page < 200; page++) {
       const p: { events: unknown[]; next_seq?: number | null } =
         await get(`/v1/admin/replays/${encodeURIComponent(tabId)}/events?from_seq=${from}`);
       // A loop, not push(...p.events): a page can hold more events than the call stack has arguments.
+      if (page === 0) { const u = (p as unknown as { user_id?: unknown }).user_id; owner = typeof u === 'string' ? u : null; }
       for (const e of p.events) events.push(e);
       from = typeof p.next_seq === 'number' && p.next_seq > from ? p.next_seq : null;
     }
-    return { tab_id: tabId, events };
+    return { tab_id: tabId, user_id: owner, events };
   },
 };

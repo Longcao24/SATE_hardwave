@@ -8,7 +8,24 @@ Version rules: `npm version patch --no-git-tag-version` for fixes, `minor` for n
 change that needs users to relearn something. The version shows in the sidebar badge and at
 `https://sate-hardware.vercel.app/version.json`. Each release is tagged `web-<version>` in git.
 
-## 1.7.0 — 2026-11-05
+## 1.7.1 — 2026-11-05
+
+**For admins**
+- **Screen recordings are grouped per visit.** Reloads, a second tab or an emailed link used to make several short
+  recordings a minute apart; now page loads of the same person less than 30 minutes apart are one row ("4 parts")
+  and play back to back. Tabs open at the same time stay separate rows. If a part cannot be played, the player says
+  how many.
+- **Short visits now get a recording.** A tab closed after a couple of seconds used to have none; the first screen is
+  now sent within about a second of opening.
+
+**Technical**
+- `services/usage/replayGroups.ts`: groups only parts that END before the next starts (gap 0–30 min), ≤20 parts,
+  ≤3 h recorded; `replay=` URL param takes comma-joined tab ids (old single-id links still work). The player fetches
+  each part (each opening still audited in `replay_views`), skips a part with no full snapshot or whose `user_id`
+  (now in the analytics replay-events page) is not the account shown, and counts skipped parts.
+- `tracker.ts`: the tab's first full snapshot is flushed at once instead of at the 10 s tick; `hide()` re-posts
+  queued / in-flight replay chunks with keepalive within the 60 KB budget (the Worker dedups a repeated seq).
+
 
 (1.6.7 was never released on its own; its guide ships here.)
 

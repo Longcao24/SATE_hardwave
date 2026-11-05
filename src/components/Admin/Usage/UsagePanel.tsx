@@ -11,18 +11,21 @@ import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { BarChart3, PlayCircle, RefreshCw } from 'lucide-react';
 import type { AdminUser } from '@/services/device/deviceTypes';
 import { analyticsApi } from '@/services/usage/analyticsApi';
-import type { ReplaySummary, UsageOverview as Overview, UsageReport } from '@/services/usage/types';
+import type { UsageOverview as Overview, UsageReport } from '@/services/usage/types';
 import { ago } from './format';
 import { DAY_OPTIONS, ErrorBox, Segmented, Spinner, friendlyError } from './ui';
 import { UsageOverview } from './UsageOverview';
 import { UsagePerson } from './UsagePerson';
 import { ReplayList, ReplayPlayer } from './UsageReplays';
+import { REPLAY_PARAM_SEP, parseReplayParam, type ReplayGroup } from '@/services/usage/replayGroups';
 
 export function UsagePanel({ users }: { users: AdminUser[] }) {
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const uid = params.get('user');
   const replay = params.get('replay');
+  // One tab id, or several joined by commas (a grouped visit — see replayGroups.ts).
+  const replayIds = parseReplayParam(replay);
   const reportId = params.get('report');
   const view = params.get('view') === 'recordings' ? 'recordings' : 'overview';
   // Every history entry WE push carries state.usageNav. In-app Back goes back in history only from such
@@ -82,10 +85,10 @@ export function UsagePanel({ users }: { users: AdminUser[] }) {
 
   const emailOf = (id?: string | null) => (id ? users.find((u) => u.id === id)?.email : null) || null;
 
-  if (replay) {
+  if (replayIds.length) {
     return (
-      <ReplayPlayer tabId={replay}
-        visit={report?.user_id === uid ? report?.visits.find((v) => v.tab_id === replay) : null}
+      <ReplayPlayer tabIds={replayIds} userId={uid}
+        visits={report?.user_id === uid ? report?.visits.filter((v) => replayIds.includes(v.tab_id)) : null}
         tz={report?.tz} email={report?.email || emailOf(uid)}
         onBack={() => back(['replay'])} />
     );
@@ -127,7 +130,7 @@ export function UsagePanel({ users }: { users: AdminUser[] }) {
 
       {view === 'recordings' && (
         // Opening from the all-accounts list also opens that account, so the player gets its steps.
-        <ReplayList onPlay={(r: ReplaySummary) => setQ({ user: r.user_id, replay: r.tab_id })} />
+        <ReplayList onPlay={(g: ReplayGroup) => setQ({ user: g.user_id, replay: g.tab_ids.join(REPLAY_PARAM_SEP) })} />
       )}
 
       {view === 'overview' && (

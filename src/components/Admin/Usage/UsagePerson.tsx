@@ -8,10 +8,11 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, ArrowLeft, CalendarDays, ChevronDown, ChevronRight, Clock, FileText, Monitor, Play, RefreshCw, Save, Upload } from 'lucide-react';
 import { analyticsApi } from '@/services/usage/analyticsApi';
-import type { ReplaySummary, UsageEvent, UsageKind, UsageReport, UsageVisit } from '@/services/usage/types';
+import type { UsageEvent, UsageKind, UsageReport, UsageVisit } from '@/services/usage/types';
 import { ago, dayLabel, fmtMin, fmtSpan, spanSec, zoned } from './format';
 import { DAY_OPTIONS, ErrorBox, KindBadge, Kpi, PageLabel, Section, Segmented, ShareBar, Spinner, friendlyError, stepText } from './ui';
 import { ReplayList } from './UsageReplays';
+import { REPLAY_PARAM_SEP, type ReplayGroup } from '@/services/usage/replayGroups';
 import { UsageReports } from './UsageReports';
 
 type PTab = 'activity' | 'visits' | 'events' | 'recordings' | 'reports';
@@ -106,7 +107,7 @@ export function UsagePerson({ uid, email, report, error, loading, days, setDays,
       {hasUsage && report && shownTab === 'activity' && <Activity report={report} />}
       {hasUsage && report && shownTab === 'visits' && <Visits report={report} onPlay={onPlay} />}
       {hasUsage && report && shownTab === 'events' && <EventLog uid={uid} tz={report.tz} />}
-      {hasUsage && report && shownTab === 'recordings' && <ReplayList uid={uid} tz={report.tz} onPlay={(r: ReplaySummary) => onPlay(r.tab_id)} />}
+      {hasUsage && report && shownTab === 'recordings' && <ReplayList uid={uid} tz={report.tz} onPlay={(g: ReplayGroup) => onPlay(g.tab_ids.join(REPLAY_PARAM_SEP))} />}
       {(report || error) && shownTab === 'reports' && (
         <UsageReports uid={uid} email={report?.email || email || null} openId={openReport}
           onOpen={onOpenReport} onClose={onCloseReport} onCount={setReportCount} />
