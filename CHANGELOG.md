@@ -8,7 +8,14 @@ Version rules: `npm version patch --no-git-tag-version` for fixes, `minor` for n
 change that needs users to relearn something. The version shows in the sidebar badge and at
 `https://sate-hardware.vercel.app/version.json`. Each release is tagged `web-<version>` in git.
 
-## 1.6.7 — 2026-11-03
+## 1.7.0 — 2026-11-05
+
+(1.6.7 was never released on its own; its guide ships here.)
+
+**For admins**
+- **"People online" on the Admin Dashboard**, under *Right now*: who is using the web app at this moment (active
+  in the last 3 minutes), which page they are on, and when they last did something. It refreshes every 30 seconds;
+  click a person to open their Usage page. Phone apps are not counted.
 
 **For clinicians**
 - **New interactive "Getting started" guide** (replaces the old "Show Guide" slides). A small checklist in the corner
@@ -19,6 +26,9 @@ change that needs users to relearn something. The version shows in the sidebar b
   and Dashboard), together with the video guide.
 
 **Technical**
+- Online now: analytics Worker `GET /v1/admin/online` (admin-only; `rate` 'ev' windows on the Worker's clock, so a
+  wrong client clock cannot keep someone online), polled by `OnlineCard` in `AdminDashboard.tsx` with a 10 s timeout;
+  says "tracking is off" when `FLAG_TRACKING=0`. Worker a85578df.
 - `components/Guide/` (GuideProvider overlay + GuideChecklist + tours.tsx); steps find targets by `data-tour`,
   `title` or visible text and advance on a click, a route, or a polled condition (audio playing, popup open, edit
   mode on). Report tasks open a report first when none is open. First-sign-in flag in the account's
