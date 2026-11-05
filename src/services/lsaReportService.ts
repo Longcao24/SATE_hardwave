@@ -302,8 +302,72 @@ export async function loadStoredLsaReport(recordingId: string): Promise<StoredLs
     console.warn('Could not load the saved SATE report:', error.message);
     return null;
   }
-  const stored = (data as { lsa_report?: StoredLsaReport | null } | null)?.lsa_report;
-  return stored && stored.response ? stored : null;
+  return coerceStoredLsaReport((data as { lsa_report?: unknown } | null)?.lsa_report);
+}
+
+/**
+ * `recordings.lsa_report` is written by the recording's owner (RLS) and read in other people's sessions
+ * (Oversight), so it is untrusted input: anything not shaped like a report becomes null, and every field the
+ * UI reads is forced to the type the UI expects — a wrong type used to throw during render and take the whole
+ * page down (audit 2026-11-04 H1 follow-up). Values are only coerced here; escaping is the renderer's job.
+ */
+export function coerceStoredLsaReport(raw: unknown): StoredLsaReport | null {
+  const obj = (v: unknown): Record<string, unknown> | null =>
+    v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+  const str = (v: unknown): string => (typeof v === 'string' ? v : v == null ? '' : String(v));
+  const strs = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x) => x != null).map(str) : []);
+  const top = obj(raw);
+  const response = obj(top?.response);
+  const sample = obj(top?.sample);
+  if (!top || !response || !sample) return null;
+  const analysis = obj(response.analysis) || {};
+  const domains = (Array.isArray(analysis.domains) ? analysis.domains : [])
+    // A non-object entry becomes an empty domain rather than being dropped: edits are keyed by index.
+    .map((v) => { const d = obj(v) || {}; return { ...d, domain: str(d.domain), observation: str(d.observation), status: str(d.status) }; });
+  const counts = obj(response.derived_counts) || {};
+  const edits = obj(top.edits);
+  const editDomains = obj(edits?.domains);
+  const norms = obj(top.norms);
+  const by = obj(top.generated_by);
+  return {
+    ...(top as object),
+    generated_at: str(top.generated_at),
+    sample: {
+      age: str(sample.age), task: str(sample.task), speaker: str(sample.speaker),
+      speaker_code: str(sample.speaker_code), language: str(sample.language),
+    },
+    transcript_lines: strs(top.transcript_lines),
+    transcript_hash: str(top.transcript_hash),
+    norms: norms
+      ? { ...norms, age_window_months: Array.isArray(norms.age_window_months) ? norms.age_window_months : undefined } as LsaNormsContext
+      : null,
+    edits: edits ? {
+      domains: editDomains ? Object.fromEntries(Object.entries(editDomains).map(([k, v]) => {
+        const d = obj(v) || {};
+        return [k, {
+          observation: d.observation == null ? undefined : str(d.observation),
+          status: d.status == null ? undefined : str(d.status),
+        }];
+      })) : undefined,
+      limitations: edits.limitations == null ? undefined : strs(edits.limitations),
+      summary: edits.summary == null ? undefined : str(edits.summary),
+    } : undefined,
+    generated_by: by ? { email: by.email == null ? null : str(by.email), role: str(by.role), at: str(by.at) } : undefined,
+    response: {
+      ...(response as object),
+      analysis: {
+        ...analysis,
+        domains: domains as unknown as LsaDomain[],
+        limitations: strs(analysis.limitations),
+        summary: str(analysis.summary),
+        reference_concerns: strs(analysis.reference_concerns),
+      },
+      metrics_table: (Array.isArray(response.metrics_table) ? response.metrics_table : [])
+        .map(obj).filter(Boolean) as unknown as LsaMetricRow[],
+      derived_counts: { ...counts, error_code_counts: obj(counts.error_code_counts) || {} } as LsaDerivedCounts,
+      warnings: strs(response.warnings),
+    } as StoredLsaReport['response'],
+  } as StoredLsaReport;
 }
 
 export async function saveStoredLsaReport(recordingId: string, report: StoredLsaReport): Promise<void> {

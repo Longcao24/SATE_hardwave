@@ -1,4 +1,5 @@
 import React from 'react';
+import DOMPurify from 'dompurify';
 import {
   X, FileText, FileType, Sparkles, Loader2, AlertTriangle,
   Pencil, Undo2, Check,
@@ -12,6 +13,7 @@ import {
   transcriptFingerprint,
   baseLimitations,
   mergeEdits,
+  coerceStoredLsaReport,
   LsaReportNotStoredError,
   type StoredLsaReport,
   type LsaMetricRow,
@@ -56,8 +58,22 @@ const DOMAIN_STATUSES = [
   'STRENGTH', 'AGE-APPROPRIATE', 'MONITOR', 'CONCERN', 'INSUFFICIENT DATA',
 ] as const;
 
-const esc = (s: string) =>
-  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+// 🛑 SECURITY (audit 2026-11-04 H1): `recordings.lsa_report` is writable by the recording's
+// owner (RLS) and is rendered as HTML in OTHER people's sessions (Oversight: admins, managers).
+// So EVERY value from the stored report is untrusted: escape it (any type — a field declared a
+// number can arrive as a string), and the finished HTML is also run through DOMPurify
+// (`safeHtml`) before it reaches the page, the print frame or the Word file.
+const esc = (s: unknown) =>
+  String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+/** A colour from a fixed table, never from the report (an inherited key like "constructor" is not one). */
+const pick = (table: Record<string, string>, key: unknown, fallback: string) =>
+  typeof key === 'string' && Object.prototype.hasOwnProperty.call(table, key) ? table[key] : fallback;
+
+/** Defence in depth over the escaping: only markup the report itself uses survives. */
+export const safeHtml = (html: string, editable = false) =>
+  DOMPurify.sanitize(html, editable ? { ADD_ATTR: ['contenteditable'] } : {});
 
 // The service writes **emphasis** in its prose; render it rather than printing asterisks.
 // A line break the reviewer typed prints as one; richFromDom() reads all three back.
@@ -159,7 +175,7 @@ function metricsTableHtml(rows: LsaMetricRow[]): string {
     const ref = m.td_mean != null
       ? `${num(m.td_mean)}${m.td_sd != null ? ` (${num(m.td_sd)})` : ''}`
       : '—';
-    const bar = m.z != null
+    const bar = typeof m.z === 'number' && Number.isFinite(m.z)
       ? barHtml(m.z, reversed)
       : `<span style="font-size:11px;color:${MUT};font-style:italic;">no reference values supplied</span>`;
     return `
@@ -168,7 +184,7 @@ function metricsTableHtml(rows: LsaMetricRow[]): string {
       <td style="padding:7px 10px;border-bottom:1px solid ${HAIR};text-align:right;font-variant-numeric:tabular-nums;">${esc(m.value_str || (m.value != null ? String(m.value) : '—'))}</td>
       <td style="padding:7px 10px;border-bottom:1px solid ${HAIR};text-align:right;color:${MUT};font-variant-numeric:tabular-nums;">${esc(ref)}</td>
       <td style="padding:7px 14px;border-bottom:1px solid ${HAIR};width:34%;">${bar}</td>
-      <td style="padding:7px 10px;border-bottom:1px solid ${HAIR};color:${METRIC_FG[m.status] || INK};font-weight:600;white-space:nowrap;">${esc(m.status)}${m.z != null ? `<span style="color:${MUT};font-weight:400;"> (z ${m.z >= 0 ? '+' : '−'}${Math.abs(m.z).toFixed(2)})</span>` : ''}</td>
+      <td style="padding:7px 10px;border-bottom:1px solid ${HAIR};color:${pick(METRIC_FG, m.status, INK)};font-weight:600;white-space:nowrap;">${esc(m.status)}${typeof m.z === 'number' && Number.isFinite(m.z) ? `<span style="color:${MUT};font-weight:400;"> (z ${m.z >= 0 ? '+' : '−'}${Math.abs(m.z).toFixed(2)})</span>` : ''}</td>
     </tr>`;
   }).join('');
   const ticks = ['−3', '−2', '−1', '0', '1', '2', '3'].map((t) => `<span>${t}</span>`).join('');
@@ -239,14 +255,14 @@ const h3 = (t: string) =>
 // reference group is not interpretable, so this prints wherever the bars print.
 function normsNoteHtml(n?: LsaNormsContext | null): string {
   if (!n) return '';
-  const ageWindow = n.age_window_months
-    ? `ages ${n.age_window_months[0]}\u2013${n.age_window_months[1]} months`
+  const ageWindow = Array.isArray(n.age_window_months)
+    ? `ages ${int(n.age_window_months[0])}\u2013${int(n.age_window_months[1])} months`
     : 'the requested age window';
   return (
     `<p style="font-size:11px;color:${MUT};font-style:italic;margin:8px 0 0;line-height:1.5;">` +
     `Reference values: ${esc(n.source)} ${esc(n.clinical)} ${esc(n.task)} samples ` +
-    `(${esc(n.language)}), ${esc(ageWindow)} \u2014 n = ${n.n_samples} samples from ` +
-    `${n.n_corpora} corpora. Metrics with no published reference for this age are marked NO REF.</p>`
+    `(${esc(n.language)}), ${esc(ageWindow)} \u2014 n = ${int(n.n_samples)} samples from ` +
+    `${int(n.n_corpora)} corpora. Metrics with no published reference for this age are marked NO REF.</p>`
   );
 }
 
@@ -261,7 +277,7 @@ const ROOT_STYLE = `font-family:Georgia,'Times New Roman',serif;color:${INK};max
  * the report it produces. Only the attributes differ: `contenteditable` + `data-field` on
  * the prose, and the status pill becomes a <select> drawn as that pill.
  */
-function buildReportBody(stored: StoredLsaReport, edit?: ReportDraft): string {
+export function buildReportBody(stored: StoredLsaReport, edit?: ReportDraft): string {
   const r = stored.response;
   const meta = {
     speaker: stored.sample.speaker,
@@ -269,9 +285,9 @@ function buildReportBody(stored: StoredLsaReport, edit?: ReportDraft): string {
     age: stored.sample.age,
     task: stored.sample.task,
     language: stored.sample.language,
-    date: stored.generated_at.slice(0, 10),
+    date: String(stored.generated_at ?? '').slice(0, 10),
   };
-  const transcriptLines = stored.transcript_lines;
+  const transcriptLines: unknown[] = Array.isArray(stored.transcript_lines) ? stored.transcript_lines : [];
   const c = r.derived_counts || {};
   const header = [
     { label: 'Speaker', value: `${meta.speaker} (${meta.speakerCode})` },
@@ -314,13 +330,13 @@ function buildReportBody(stored: StoredLsaReport, edit?: ReportDraft): string {
 // did would make the two differ). The Status column is sized for the longest verdict.
 const PILL = 'display:inline-block;padding:2px 8px;border-radius:5px;font-size:11px;font-weight:600;white-space:nowrap;';
   const statusCell = (status: string, i: number) => {
-    if (!edit) return `<span style="${PILL}background:${DOMAIN_BG[status] || '#eceff2'};color:${INK};">${esc(status)}</span>`;
+    if (!edit) return `<span style="${PILL}background:${pick(DOMAIN_BG, status, '#eceff2')};color:${INK};">${esc(status)}</span>`;
     const options = [...DOMAIN_STATUSES, ...(DOMAIN_STATUSES.includes(status as typeof DOMAIN_STATUSES[number]) ? [] : [status])]
       .filter(Boolean)
       .map((v) => `<option value="${esc(v)}"${v === status ? ' selected' : ''}>${esc(v)}</option>`).join('');
     return `<select data-field="status-${i}" aria-label="Status" style="${PILL}max-width:100%;border:0;margin:0;` +
       `font-family:inherit;line-height:inherit;appearance:none;-webkit-appearance:none;cursor:pointer;field-sizing:content;` +
-      `background:${DOMAIN_BG[status] || '#eceff2'};color:${INK};">${options}</select>`;
+      `background:${pick(DOMAIN_BG, status, '#eceff2')};color:${INK};">${options}</select>`;
   };
   const assessmentRows = domains.map((d, i) => `
     <tr>
@@ -613,8 +629,9 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
       setUseNorms(!!saved.norms);
     };
     if (readOnly) {
-      // Same acceptance rule as loadStoredLsaReport, plus `sample`, which apply() reads.
-      if (initialReport?.response && initialReport.sample) apply(initialReport);
+      // Same rule as loadStoredLsaReport: untrusted (another account's row), so coerced to the shape the UI reads.
+      const coerced = coerceStoredLsaReport(initialReport);
+      if (coerced) apply(coerced);
       return;
     }
     if (!recordingId) return;
@@ -669,7 +686,7 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
 
   const openEditor = (start: ReportDraft) => {
     if (!report) return;
-    setEditHtml(buildReportBody(report, start));
+    setEditHtml(safeHtml(buildReportBody(report, start), true));
     setEditKey((k) => k + 1);
     setDraft(start);
     setDraftStart('');
@@ -709,7 +726,7 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
     if (!editing || !root) return;
     const onEdit = (e: Event) => {
       // The status <select> is drawn as the pill, so its colour follows the choice.
-      if (e.target instanceof HTMLSelectElement) e.target.style.background = DOMAIN_BG[e.target.value] || '#eceff2';
+      if (e.target instanceof HTMLSelectElement) e.target.style.background = pick(DOMAIN_BG, e.target.value, '#eceff2');
       setDraft(readDraftRef.current());
     };
     root.addEventListener('input', onEdit);
@@ -924,7 +941,8 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
       if (saveReport) {
         try {
           const saved = await saveReport(stored);
-          if (saved) setReport(saved);
+          const coerced = coerceStoredLsaReport(saved);
+          if (coerced) setReport(coerced);
         } catch (e) {
           setSaveWarning(`The report could not be saved: ${String((e as Error)?.message || e).replace(/^\d+ /, '')}`);
         }
@@ -943,7 +961,7 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
     }
   };
 
-  const body = report ? buildReportBody(report) : '';
+  const body = report ? safeHtml(buildReportBody(report)) : '';
 
   const exportPdf = () => {
     if (!body) return;
@@ -992,7 +1010,7 @@ export const SateReportPopup: React.FC<SateReportPopupProps> = ({
               <span className="text-xs text-gray-500 truncate" title={report.generated_at}>
                 {saveWarning ? 'generated' : 'saved'} {new Date(report.generated_at).toLocaleString()}
                 {report.edited_at && ` · edited ${new Date(report.edited_at).toLocaleDateString()}`}
-                {report.generated_by && ` · generated by ${report.generated_by.role} ${report.generated_by.email || ''}`}
+                {report.generated_by && ` · generated by ${String(report.generated_by.role ?? '')} ${String(report.generated_by.email ?? '')}`}
               </span>
             )}
           </div>

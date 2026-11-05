@@ -15,7 +15,7 @@ import { useAudioPlayer } from '@/hooks/useAudioPlayer';
 import { useSidebarManager } from '@/hooks/useSidebarManager';
 import { calculateSpeechAnalysis, getErrorAnnotations, type IssueCounts, type Segment } from '@/services/dataService';
 import { normalizeSegments } from '@/components/Recording/ConversationView/utils/segmentOperations';
-import { mergeEdits, type StoredLsaReport } from '@/services/lsaReportService';
+import { mergeEdits, coerceStoredLsaReport, type StoredLsaReport } from '@/services/lsaReportService';
 import { metricsBySpeaker, metricsCsv } from '@/services/languageMetrics';
 import { oversightService, type OversightRecordingRow } from '@/services/oversightService';
 import { recordingLabel } from '@/services/recordingName';
@@ -62,8 +62,8 @@ export function OversightReportView({ ownerId, ownerEmail, rec, patient, onBack,
 
   const [activeFilters, setActiveFilters] = useState<string[]>([]);
   // The report on screen: what was loaded, or one just generated here (so it shows without a reload).
-  const [lsa, setLsa] = useState<StoredLsaReport | null>((rec.lsa_report as StoredLsaReport) || null);
-  useEffect(() => { setLsa((rec.lsa_report as StoredLsaReport) || null); }, [rec]);
+  const [lsa, setLsa] = useState<StoredLsaReport | null>(coerceStoredLsaReport(rec.lsa_report));
+  useEffect(() => { setLsa(coerceStoredLsaReport(rec.lsa_report)); }, [rec]);
   const [selectedSpeaker, setSelectedSpeaker] = useState<string | undefined>(undefined);
   useEffect(() => { setActiveFilters(availableErrorTypes); }, [availableErrorTypes]);
 
@@ -305,7 +305,7 @@ function ExportMenu({ ownerId, rec, patient, hasLsa }: {
           exported_at: new Date().toISOString(),
           recording: { ...r.recording, label: recordingLabel(r.recording.recording_name || r.recording.file_name), patient: patient ?? null },
           // What the web shows: the model's draft with the reviewer's edits applied.
-          as_shown: r.lsa_report?.response ? mergeEdits(r.lsa_report) : null,
+          as_shown: (() => { const c = coerceStoredLsaReport(r.lsa_report); return c ? mergeEdits(c) : null; })(),
           // Exactly what is stored (draft and edits kept apart), for anyone auditing the review.
           lsa_report: r.lsa_report,
           // The full transcript the report was made from (every utterance with its annotations),
