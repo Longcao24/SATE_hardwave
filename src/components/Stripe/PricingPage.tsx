@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Check, Loader2, ArrowLeft } from 'lucide-react';
 import { SUBSCRIPTION_TIERS, changeSubscriptionPlan, redirectToCheckout } from '@/services/stripeService';
+import type { SatePlan } from '@/services/stripeService';
 import { useStripe } from '@/contexts/StripeProvider';
 import { useAuth } from '@/contexts/AuthProvider';
 import { useNavigate } from 'react-router-dom';
@@ -11,7 +12,7 @@ export const PricingPage: React.FC = () => {
   const navigate = useNavigate();
   const [loadingTier, setLoadingTier] = useState<string | null>(null);
 
-  const handleSubscribe = async (tierId: string, stripePriceId: string) => {
+  const handleSubscribe = async (tierId: string, stripePriceId: string, plan?: SatePlan) => {
     if (!user) {
       navigate('/login');
       return;
@@ -26,7 +27,7 @@ export const PricingPage: React.FC = () => {
       // If user has an active subscription, use the plan change function
       // which will automatically cancel the old one
       if (hasActiveSubscription) {
-        const result = await changeSubscriptionPlan(stripePriceId);
+        const result = await changeSubscriptionPlan(stripePriceId, plan);
         if (result) {
           window.location.href = result.url;
         }
@@ -34,6 +35,7 @@ export const PricingPage: React.FC = () => {
         // First time subscription
         await redirectToCheckout({
           priceId: stripePriceId,
+          plan,
           mode: 'subscription',
           metadata: {
             tier_id: tierId
@@ -137,14 +139,14 @@ export const PricingPage: React.FC = () => {
                   {tier.id === 'free' 
                     ? 'Explore how AI can help you with everyday tasks'
                     : tier.id === 'pro'
-                    ? 'Level up productivity and creativity with expanded access'
-                    : 'Get the best of SATE with the highest level of access'
+                    ? 'Unlimited recordings, billed monthly'
+                    : 'Unlimited recordings, billed once a year'
                   }
                 </p>
 
                 {/* CTA Button */}
                 <button
-                  onClick={() => handleSubscribe(tier.id, tier.stripePriceId)}
+                  onClick={() => handleSubscribe(tier.id, tier.stripePriceId, tier.plan)}
                   disabled={loading || isCurrent || (tier.id === 'free' && hasActiveSubscription)}
                   className={`w-full py-3 px-4 rounded-lg text-sm font-semibold transition-all mb-6 ${
                     isCurrent

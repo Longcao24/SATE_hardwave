@@ -8,6 +8,21 @@ Version rules: `npm version patch --no-git-tag-version` for fixes, `minor` for n
 change that needs users to relearn something. The version shows in the sidebar badge and at
 `https://sate-hardware.vercel.app/version.json`. Each release is tagged `web-<version>` in git.
 
+## 1.7.2 — 2026-11-17
+
+**For everyone**
+- **New plan prices: Monthly $20, Yearly $200.** The pricing page now offers the SATE Plan as Monthly or Yearly
+  (Yearly is two months free). The old Professional ($29) and Enterprise ($99) cards are gone.
+- **Upgrading works again.** Payments now go to SATE's live Stripe account; the Upgrade button opens Stripe's
+  checkout page directly.
+
+**Technical**
+- Stripe account: Auspex Medix LLC (live). Prices `sate_plan_monthly` / `sate_plan_yearly`; the client sends both
+  `plan` (repo create-checkout-session) and the live `priceId` (the deployed one reads it).
+- Checkout redirect uses the session's `url`; `VITE_STRIPE_PUBLISHABLE_KEY` is no longer needed for checkout.
+- Both prices are written as tier_id `pro` by the deployed webhook (what the DB counts as premium); the UI tells
+  Yearly apart by a billing period over 180 days.
+
 ## 1.7.1 — 2026-11-05
 
 **For admins**

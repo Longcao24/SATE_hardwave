@@ -76,7 +76,7 @@ export const StripeProvider: React.FC<StripeProviderProps> = ({ children }) => {
   const currentTier = isLoading 
     ? null 
     : subscription
-      ? SUBSCRIPTION_TIERS.find(tier => tier.id === subscription.tier_id) || SUBSCRIPTION_TIERS[0]
+      ? tierOfSubscription(subscription)
       : SUBSCRIPTION_TIERS[0]; // Default to free tier only after loading
 
   const value: StripeContextType = {
@@ -93,6 +93,16 @@ export const StripeProvider: React.FC<StripeProviderProps> = ({ children }) => {
     </StripeContext.Provider>
   );
 };
+
+// The webhook writes tier_id 'pro' for BOTH SATE Plan prices (that is what the database counts as
+// premium), so a yearly plan is told apart by its billing period. Old 'enterprise' rows read as Yearly.
+function tierOfSubscription(sub: { tier_id: string; current_period_start?: string | null; current_period_end?: string | null }) {
+  const days = sub.current_period_start && sub.current_period_end
+    ? (Date.parse(sub.current_period_end) - Date.parse(sub.current_period_start)) / 86400000
+    : 0;
+  const id = sub.tier_id === 'enterprise' || (sub.tier_id === 'pro' && days > 180) ? 'pro_yearly' : sub.tier_id;
+  return SUBSCRIPTION_TIERS.find(tier => tier.id === id) || SUBSCRIPTION_TIERS[0];
+}
 
 export const useStripe = (): StripeContextType => {
   const context = useContext(StripeContext);

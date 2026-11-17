@@ -20,14 +20,27 @@ export const getStripe = () => {
 // Types for Stripe integration
 export interface CreateCheckoutSessionParams {
   priceId: string;
+  /** 'monthly' | 'yearly': the server resolves it by Stripe lookup key (create-checkout-session in the repo). */
+  plan?: SatePlan;
   successUrl?: string;
   cancelUrl?: string;
   mode?: 'payment' | 'subscription';
   metadata?: Record<string, string>;
 }
 
+// The SATE Plan, billed by Stripe account Auspex Medix LLC (live since 2026-11-17).
+// The checkout sends BOTH: the deployed create-checkout-session reads priceId, the repo one reads plan
+// (lookup keys sate_plan_monthly / sate_plan_yearly). Both prices write tier_id 'pro' through the webhook,
+// which is what the database treats as premium.
+export type SatePlan = 'monthly' | 'yearly';
+export const SATE_PLAN_PRICE_IDS: Record<SatePlan, string> = {
+  monthly: 'price_1Ucrk00fluIK4pHvP6bxqfWK', // $20 / month
+  yearly: 'price_1Ucrk00fluIK4pHvXtEC2Bwp',  // $200 / year
+};
+
 export interface SubscriptionTier {
   id: string;
+  plan?: SatePlan;
   name: string;
   price: number;
   interval: 'month' | 'year';
@@ -72,31 +85,30 @@ export const SUBSCRIPTION_TIERS: SubscriptionTier[] = [
   },
   {
     id: 'pro',
-    name: 'Professional',
-    price: 29,
+    plan: 'monthly',
+    name: 'Monthly',
+    price: 20,
     interval: 'month',
-    stripePriceId: import.meta.env.VITE_STRIPE_PRO_PRICE_ID || '',
+    stripePriceId: SATE_PLAN_PRICE_IDS.monthly,
     features: [
       'Unlimited recordings',
-      'Advanced transcription',
+      'Full-length transcription and analysis',
       'Speaker diarization',
-      'Priority support',
-      'Export reports'
+      'Export reports',
+      'Cancel anytime'
     ]
   },
   {
-    id: 'enterprise',
-    name: 'Enterprise',
-    price: 99,
-    interval: 'month',
-    stripePriceId: import.meta.env.VITE_STRIPE_ENTERPRISE_PRICE_ID || '',
+    id: 'pro_yearly',
+    plan: 'yearly',
+    name: 'Yearly',
+    price: 200,
+    interval: 'year',
+    stripePriceId: SATE_PLAN_PRICE_IDS.yearly,
     features: [
-      'Everything in Pro',
-      'Custom integrations',
-      'Dedicated support',
-      'Advanced analytics',
-      'Team collaboration',
-      'SSO & SAML'
+      'Everything in Monthly',
+      'Two months free ($200 instead of $240)',
+      'Billed once a year'
     ]
   }
 ];
@@ -118,6 +130,7 @@ export const createCheckoutSession = async (
     const { data, error } = await supabase.functions.invoke('create-checkout-session', {
       body: {
         priceId: params.priceId,
+        plan: params.plan,
         successUrl: params.successUrl || `${window.location.origin}/payment/success`,
         cancelUrl: params.cancelUrl || `${window.location.origin}/payment/cancel`,
         mode: params.mode || 'subscription',
@@ -144,24 +157,13 @@ export const createCheckoutSession = async (
 export const redirectToCheckout = async (
   params: CreateCheckoutSessionParams
 ): Promise<void> => {
-  const stripe = await getStripe();
-  if (!stripe) {
-    throw new Error('Stripe is not initialized');
-  }
-
+  // Go to the session's own URL: no publishable key in the build, so the web app can never point at
+  // a different Stripe account (or mode) than the server's secret key.
   const session = await createCheckoutSession(params);
-  if (!session) {
+  if (!session?.url) {
     throw new Error('Failed to create checkout session');
   }
-
-  const { error } = await stripe.redirectToCheckout({
-    sessionId: session.sessionId
-  });
-
-  if (error) {
-    console.error('Error redirecting to checkout:', error);
-    throw error;
-  }
+  window.location.href = session.url;
 };
 
 /**
@@ -388,7 +390,8 @@ export const hasActiveSubscription = async (): Promise<boolean> => {
  * Automatically cancels the old subscription and creates a new one
  */
 export const changeSubscriptionPlan = async (
-  newPriceId: string
+  newPriceId: string,
+  plan?: SatePlan
 ): Promise<{ sessionId: string; url: string } | null> => {
   try {
     const { data: { user } } = await supabase.auth.getUser();
@@ -405,6 +408,7 @@ export const changeSubscriptionPlan = async (
     // checkout. Carry its Stripe id so the webhook cancels exactly this one.
     return await createCheckoutSession({
       priceId: newPriceId,
+      plan,
       successUrl: `${window.location.origin}/payment/success?upgraded=true`,
       cancelUrl: `${window.location.origin}/pricing`,
       mode: 'subscription',
