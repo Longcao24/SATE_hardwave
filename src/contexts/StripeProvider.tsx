@@ -95,13 +95,18 @@ export const StripeProvider: React.FC<StripeProviderProps> = ({ children }) => {
 };
 
 // The webhook writes tier_id 'pro' for BOTH SATE Plan prices (that is what the database counts as
-// premium), so a yearly plan is told apart by its billing period. Old 'enterprise' rows read as Yearly.
+// premium), so a yearly plan is told apart by its billing period. It keeps id 'pro' — every feature
+// gate, badge and guard keys on that id — and only takes the Yearly card's name, price and plan.
+// Old 'enterprise' rows (all canceled today) still read as enterprise.
 function tierOfSubscription(sub: { tier_id: string; current_period_start?: string | null; current_period_end?: string | null }) {
   const days = sub.current_period_start && sub.current_period_end
     ? (Date.parse(sub.current_period_end) - Date.parse(sub.current_period_start)) / 86400000
     : 0;
-  const id = sub.tier_id === 'enterprise' || (sub.tier_id === 'pro' && days > 180) ? 'pro_yearly' : sub.tier_id;
-  return SUBSCRIPTION_TIERS.find(tier => tier.id === id) || SUBSCRIPTION_TIERS[0];
+  if (sub.tier_id === 'pro' && days > 180) {
+    const yearly = SUBSCRIPTION_TIERS.find(tier => tier.plan === 'yearly');
+    if (yearly) return { ...yearly, id: 'pro' };
+  }
+  return SUBSCRIPTION_TIERS.find(tier => tier.id === sub.tier_id) || SUBSCRIPTION_TIERS[0];
 }
 
 export const useStripe = (): StripeContextType => {

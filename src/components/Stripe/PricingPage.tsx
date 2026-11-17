@@ -51,6 +51,9 @@ export const PricingPage: React.FC = () => {
   };
 
   const isCurrentTier = (tierId: string) => {
+    // A Yearly subscriber's tier keeps id 'pro' (see StripeProvider), so paid cards compare by plan.
+    const tier = SUBSCRIPTION_TIERS.find(t => t.id === tierId);
+    if (tier?.plan) return currentTier?.plan === tier.plan;
     return currentTier?.id === tierId;
   };
 
