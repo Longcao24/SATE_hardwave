@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Check, Loader2, ArrowLeft } from 'lucide-react';
-import { SUBSCRIPTION_TIERS, changeSubscriptionPlan, redirectToCheckout } from '@/services/stripeService';
+import { SUBSCRIPTION_TIERS, createCustomerPortalSession, redirectToCheckout } from '@/services/stripeService';
 import type { SatePlan } from '@/services/stripeService';
 import { useStripe } from '@/contexts/StripeProvider';
 import { useAuth } from '@/contexts/AuthProvider';
@@ -26,11 +26,12 @@ export const PricingPage: React.FC = () => {
     try {
       // If user has an active subscription, use the plan change function
       // which will automatically cancel the old one
+      // A paying subscriber switches Monthly <-> Yearly in Stripe's portal, which prorates (a new Checkout made the
+      // webhook cancel the old plan at once with no refund — e2e audit 2026-11-18 #4).
       if (hasActiveSubscription) {
-        const result = await changeSubscriptionPlan(stripePriceId, plan);
-        if (result) {
-          window.location.href = result.url;
-        }
+        const url = await createCustomerPortalSession();
+        if (url) window.location.href = url;
+        else alert('Could not open plan management. Please try again.');
       } else {
         // First time subscription
         await redirectToCheckout({

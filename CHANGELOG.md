@@ -8,6 +8,20 @@ Version rules: `npm version patch --no-git-tag-version` for fixes, `minor` for n
 change that needs users to relearn something. The version shows in the sidebar badge and at
 `https://sate-hardware.vercel.app/version.json`. Each release is tagged `web-<version>` in git.
 
+## 1.7.3 — 2026-11-18
+
+**For everyone**
+- **SATE has a new version at app.sate.agency.** A bar at the top of every page links to it: sign in with the same
+  account, and all your recordings, patients and reports are already there.
+- Bought a SATE Recorder? You can create an account without an invite code, using the email from your order.
+- Switching between Monthly and Yearly now goes through Stripe's plan page, which credits the time you already paid.
+
+**Technical**
+- `NewVersionBanner` (sticky, above WebNoticeBanner). Sign-up "I bought a SATE Recorder" sends no invite code; the auth
+  hook allows an email found in `device_purchases`. PricingPage: a paying subscriber's plan change opens the billing
+  portal (bpc_1UcyaB0fluIK4pHv5AI3n8Fd, prorated) instead of a new Checkout (the webhook cancelled the old plan
+  with no refund). BillingPage hides Manage Subscription for granted (`manual_…`) plans.
+
 ## 1.7.2 — 2026-11-18
 
 **For everyone**

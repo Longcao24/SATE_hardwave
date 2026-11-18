@@ -23,6 +23,7 @@ import { AdminPage } from './components/Admin/AdminPage';
 import OversightPage from './components/Oversight/OversightPage';
 import { WebUploadAnnouncer } from './components/Uploads/WebUploadAnnouncer';
 import { WebNoticeBanner } from './components/Notice/WebNoticeBanner';
+import { NewVersionBanner } from './components/Notice/NewVersionBanner';
 import StandaloneRecordingsPage from './components/Recording/StandaloneRecordingsPage';
 import { UsageTracker } from './components/Usage/UsageTracker';
 
@@ -52,6 +53,7 @@ function App() {
   return (
     <>
     {/* Site-wide notice (e.g. an AI outage), switched on/off in the sate_web_notice table. */}
+    <NewVersionBanner />
     <WebNoticeBanner />
     {/* Watches the user's web uploads on every page and announces "<file> is ready". */}
     <WebUploadAnnouncer />

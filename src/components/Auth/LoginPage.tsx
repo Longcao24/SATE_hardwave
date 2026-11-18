@@ -138,7 +138,7 @@ const LoginPage: React.FC = () => {
     try {
       if (isSignUpMode) {
         // Use the validated invite code
-        if (!validatedInviteCode) {
+        if (validatedInviteCode === null) {
           setAuthError('Invite code validation error. Please refresh and try again.');
           setIsLoading(false);
           return;
@@ -341,6 +341,15 @@ const LoginPage: React.FC = () => {
                 )}
               </Button>
 
+              {/* A recorder buyer needs no invite code: the server lets the order's email sign up (auth hook). */}
+              <button
+                type="button"
+                onClick={() => { setValidatedInviteCode(''); setInviteCodeStep(false); setCodeError(''); }}
+                className="w-full text-sm font-medium text-blue-700 hover:text-blue-800 underline underline-offset-2"
+              >
+                I bought a SATE Recorder (no invite code)
+              </button>
+
               <div className="text-center">
                 <p className="text-sm text-gray-600">
                   Already have an account?{' '}
@@ -472,6 +481,13 @@ const LoginPage: React.FC = () => {
               </div>
             )}
 
+            {isSignUpMode && validatedInviteCode === '' && (
+              <p className="text-sm text-gray-600 bg-gray-50 rounded-md p-3">
+                Use the email from your SATE Recorder order (or the SATE account email you gave at checkout). Your 6 free
+                months are added when you sign in at app.sate.agency.
+              </p>
+            )}
+
             {/* Consent - Sign Up Only. Stored on the account (user_metadata.recording_consent_at); without it the
                 usage recorder keeps on-screen text masked for this account (services/usage/tracker.ts). */}
             {isSignUpMode && (
@@ -523,7 +539,7 @@ const LoginPage: React.FC = () => {
 
           {/* Toggle */}
           <div className="mt-4">
-            {isSignUpMode && validatedInviteCode && (
+            {isSignUpMode && validatedInviteCode !== null && (
               <button
                 type="button"
                 onClick={() => {

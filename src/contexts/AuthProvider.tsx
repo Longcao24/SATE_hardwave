@@ -195,9 +195,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // A quick check first, for a friendly message; the SERVER is what enforces it now (auth hook
     // `hook_before_user_created` refuses a sign-up without a valid code, and the trigger on auth.users spends it
     // in the same transaction — so a confirm-on-another-device or a direct API call can no longer skip or reuse it).
-    const validation = await validateInviteCode(inviteCode);
-    if (!validation.valid) {
-      throw new Error(validation.error || 'Invalid invite code');
+    // An empty code = "I bought a SATE Recorder": the server allows the order's email without one.
+    const code = inviteCode.trim().toUpperCase();
+    if (code) {
+      const validation = await validateInviteCode(code);
+      if (!validation.valid) {
+        throw new Error(validation.error || 'Invalid invite code');
+      }
     }
 
     const { data, error } = await supabase.auth.signUp({
@@ -207,7 +211,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // The confirmation link comes back to THIS app (my/app.sate.agency or Vercel), not the Site URL.
         emailRedirectTo: `${window.location.origin}/login`,
         data: {
-          invite_code: inviteCode.trim().toUpperCase(),
+          ...(code ? { invite_code: code } : {}),
           ...(recordingConsent ? { recording_consent_at: new Date().toISOString() } : {}),
         },
       },

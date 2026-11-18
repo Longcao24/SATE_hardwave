@@ -245,7 +245,8 @@ export const BillingPage: React.FC = () => {
               )}
             </div>
 
-            {subscription && (
+            {/* A granted plan (manual_…: recorder months, a code, a trial) has nothing in Stripe to manage. */}
+            {subscription && !subscription.stripe_subscription_id?.startsWith('manual_') && (
               <Button
                 onClick={handleManageSubscription}
                 disabled={loadingPortal}
