@@ -79,8 +79,8 @@ const ResetPasswordPage: React.FC = () => {
     setError('');
 
     // Validation
-    if (!newPassword || newPassword.length < 6) {
-      setError('Password must be at least 6 characters long');
+    if (!newPassword || newPassword.length < 10) {
+      setError('Password must be at least 10 characters long');
       return;
     }
 
@@ -208,7 +208,7 @@ const ResetPasswordPage: React.FC = () => {
                       </div>
                     </div>
                     <p className="text-xs text-gray-500 mt-1">
-                      Must be at least 6 characters long
+                      Must be at least 10 characters long
                     </p>
                   </div>
 

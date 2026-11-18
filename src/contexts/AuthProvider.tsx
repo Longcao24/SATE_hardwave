@@ -11,7 +11,7 @@ interface AuthContextValue {
   session: Session | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<void>;
-  signUp: (email: string, password: string, inviteCode: string) => Promise<void>;
+  signUp: (email: string, password: string, inviteCode: string, recordingConsent: boolean) => Promise<void>;
   signOut: () => Promise<void>;
   hasSeenGuide: boolean;
   markGuideAsSeen: () => void;
@@ -25,14 +25,6 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 // with the anon key and RLS rejects it — without this the code is never spent
 // and a max_uses=1 code keeps working for every later signup.
 const PENDING_INVITE_KEY = 'sate_pending_invite_code';
-
-const rememberPendingInviteCode = (code: string, userId: string) => {
-  try {
-    localStorage.setItem(PENDING_INVITE_KEY, JSON.stringify({ code, userId }));
-  } catch (error) {
-    console.error('Error storing pending invite code:', error);
-  }
-};
 
 const clearPendingInviteCode = () => {
   try {
@@ -199,27 +191,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (error) throw error;
   };
 
-  const signUp = async (email: string, password: string, inviteCode: string) => {
-    // First, validate the invite code
+  const signUp = async (email: string, password: string, inviteCode: string, recordingConsent: boolean) => {
+    // A quick check first, for a friendly message; the SERVER is what enforces it now (auth hook
+    // `hook_before_user_created` refuses a sign-up without a valid code, and the trigger on auth.users spends it
+    // in the same transaction — so a confirm-on-another-device or a direct API call can no longer skip or reuse it).
     const validation = await validateInviteCode(inviteCode);
     if (!validation.valid) {
       throw new Error(validation.error || 'Invalid invite code');
     }
 
-    // Create the user account
-    const { data, error } = await supabase.auth.signUp({ email, password });
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        // The confirmation link comes back to THIS app (my/app.sate.agency or Vercel), not the Site URL.
+        emailRedirectTo: `${window.location.origin}/login`,
+        data: {
+          invite_code: inviteCode.trim().toUpperCase(),
+          ...(recordingConsent ? { recording_consent_at: new Date().toISOString() } : {}),
+        },
+      },
+    });
     if (error) throw error;
-
-    // If signup successful and user is created, record the invite code usage
-    if (data.user) {
-      // Use the invite code with the newly created user's ID
-      const useResult = await useInviteCode(inviteCode, data.user.id);
-      if (!useResult.success) {
-        // The account already exists, so don't throw and wedge the signup —
-        // park the code and spend it as soon as the user has a session.
-        console.error('Failed to record invite code usage:', useResult.error);
-        rememberPendingInviteCode(inviteCode, data.user.id);
-      }
+    // With email confirmation on, an address that already has an account comes back as a user with NO
+    // identities and no error (Supabase hides which emails exist). Say so instead of "Account created!".
+    if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+      throw new Error('An account with this email already exists. Sign in, or use "Forgot password?".');
     }
   };
 

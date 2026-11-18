@@ -493,14 +493,15 @@ function hide(s: State) {
  * for the same account; a new account = a new tab id.
  */
 let wanted: string | null = null;
-export function startUsage(uid: string) {
+export function startUsage(uid: string, textConsent = false) {
   try {
     if (st?.uid === uid || wanted === uid) return;
     wanted = uid;
     void loadAnalyticsConfig().then((cfg) => {
       // Signed out (or switched account) while the config was loading: start nothing for this one.
       if (wanted !== uid || !cfg.tracking) return;
-      replayFullData = cfg.replayText;
+      // Unmasked text needs BOTH the server switch and this account's consent; otherwise masked (option B).
+      replayFullData = cfg.replayText && textConsent;
       startNow(uid, cfg.replay);
     }).catch(() => { /* tracking is optional */ });
   } catch { /* called from an effect: an analytics error must never reach the error boundary */ }

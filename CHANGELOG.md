@@ -8,15 +8,21 @@ Version rules: `npm version patch --no-git-tag-version` for fixes, `minor` for n
 change that needs users to relearn something. The version shows in the sidebar badge and at
 `https://sate-hardware.vercel.app/version.json`. Each release is tagged `web-<version>` in git.
 
-## 1.7.2 — 2026-11-17
+## 1.7.2 — 2026-11-18
 
 **For everyone**
 - **New plan prices: Monthly $20, Yearly $200.** The pricing page now offers the SATE Plan as Monthly or Yearly
   (Yearly is two months free). The old Professional ($29) and Enterprise ($99) cards are gone.
 - **Upgrading works again.** Payments now go to SATE's live Stripe account; the Upgrade button opens Stripe's
   checkout page directly.
+- **Sign-up fixes:** the confirmation email brings you back here; signing up with an email that already has an
+  account says so; new passwords need at least 10 characters; sign-up asks for consent to usage recording.
 
 **Technical**
+- Sign-up audit 2026-11-18 (same as web 2.0): signUp sends `options.data.invite_code` (+ `recording_consent_at`)
+  and `emailRedirectTo`; the invite code is enforced by the auth hook `hook_before_user_created` and spent by the
+  trigger `spend_signup_invite_code`; unmasked replay text needs consent (or an account older than 2026-11-18).
+- create-checkout-session v18 reads `plan` only (lookup key); the `priceId` the client still sends is ignored.
 - Stripe account: Auspex Medix LLC (live). Prices `sate_plan_monthly` / `sate_plan_yearly`; the client sends both
   `plan` (repo create-checkout-session) and the live `priceId` (the deployed one reads it).
 - Checkout redirect uses the session's `url`; `VITE_STRIPE_PUBLISHABLE_KEY` is no longer needed for checkout.

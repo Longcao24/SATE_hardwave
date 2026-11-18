@@ -31,6 +31,7 @@ const LoginPage: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [authError, setAuthError] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
+  const [consent, setConsent] = useState(false);
   
   // Invite code validation state
   const [inviteCodeStep, setInviteCodeStep] = useState(true); // Start with invite code step
@@ -142,7 +143,17 @@ const LoginPage: React.FC = () => {
           setIsLoading(false);
           return;
         }
-        await signUp(data.email, data.password, validatedInviteCode);
+        if (data.password.length < 10) {
+          setAuthError('Password must be at least 10 characters');
+          setIsLoading(false);
+          return;
+        }
+        if (!consent) {
+          setAuthError('Please accept the terms to create your account.');
+          setIsLoading(false);
+          return;
+        }
+        await signUp(data.email, data.password, validatedInviteCode, consent);
         setSuccessMessage('Account created! Please check your email to confirm your account.');
         // Navigate to login page after successful signup
         setTimeout(() => navigate('/login'), 1500);
@@ -459,6 +470,24 @@ const LoginPage: React.FC = () => {
                   />
                 </div>
               </div>
+            )}
+
+            {/* Consent - Sign Up Only. Stored on the account (user_metadata.recording_consent_at); without it the
+                usage recorder keeps on-screen text masked for this account (services/usage/tracker.ts). */}
+            {isSignUpMode && (
+              <label className="flex items-start gap-3 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={consent}
+                  onChange={e => setConsent(e.target.checked)}
+                  className="mt-1 h-4 w-4 rounded border-gray-300"
+                  disabled={isLoading}
+                />
+                <span>
+                  I agree that SATE may record how I use the app, including what is on screen (patient names,
+                  transcripts and notes), to support and improve the service. Passwords are never recorded.
+                </span>
+              </label>
             )}
 
             {/* Success & Error Messages */}
